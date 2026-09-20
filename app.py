@@ -121,67 +121,73 @@ def _perf_mark(label):
     _perf_marks.append((label, (_now - _perf_last) * 1000.0))
     _perf_last = _now
 
-# Fichiers locaux
-DB_FILE = "transactions.csv"
-CONFIG_FILE = "config_pea.json"
+# ==========================================
+# PERSISTANCE VIA SUPABASE (table app_storage : colonnes key / value(jsonb) / updated_at)
+# ==========================================
+# Remplace l'ancienne persistance locale (transactions.csv + config_pea.json), qui ne
+# survivait pas aux redémarrages de l'app sur Streamlit Community Cloud (disque éphémère).
+# Toutes les données passent maintenant par 2 lignes de la table "app_storage" :
+#   - key="config"       -> value = dict de configuration (comme l'ancien config_pea.json)
+#   - key="transactions" -> value = liste de dicts (une ligne par transaction, comme l'ancien CSV)
+
+@st.cache_resource(show_spinner=False)
+def get_supabase_client():
+    """Client Supabase mis en cache pour toute la session serveur (une seule connexion
+    réutilisée). Les identifiants viennent des "Secrets" de l'app Streamlit Cloud
+    (SUPABASE_URL / SUPABASE_KEY), jamais codés en dur dans le fichier."""
+    from supabase import create_client
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
+
+def _supabase_get_value(key_name, default):
+    """Lit la valeur (colonne jsonb) associée à `key_name` dans app_storage. Ne fait jamais
+    planter l'app : si Supabase est injoignable ou que la ligne n'existe pas encore, renvoie
+    `default` (comportement identique à l'ancien "fichier absent -> valeur par défaut")."""
+    try:
+        sb = get_supabase_client()
+        res = sb.table("app_storage").select("value").eq("key", key_name).execute()
+        if res.data:
+            return res.data[0]["value"]
+    except Exception:
+        pass
+    return default
+
+def _supabase_set_value(key_name, value):
+    """Enregistre (upsert) la valeur associée à `key_name` dans app_storage. Renvoie
+    (True, None) en cas de succès, (False, message_erreur) sinon — même contrat que les
+    anciennes fonctions save_*_csv/save_config, pour ne rien changer côté appelants."""
+    try:
+        sb = get_supabase_client()
+        sb.table("app_storage").upsert({"key": key_name, "value": value}).execute()
+        return True, None
+    except Exception as e:
+        return False, f"Erreur lors de l'enregistrement dans Supabase : {e}"
 
 def save_transactions_csv(df, path=None):
-    """Enregistre le CSV de transactions de façon sûre : écrit d'abord dans un fichier
-    temporaire puis le remplace en une seule opération (os.replace), pour ne jamais laisser
-    un CSV à moitié écrit. Ne fait JAMAIS planter l'app : en cas d'échec (le plus souvent le
-    fichier ouvert dans Excel ou un antivirus qui le verrouille), renvoie un message clair
-    à afficher avec st.error au lieu de laisser remonter une exception non gérée."""
-    target = path or DB_FILE
-    tmp_path = f"{target}.tmp"
+    """Nom conservé pour ne pas avoir à modifier tous les appels existants, mais enregistre
+    désormais les transactions dans Supabase (clé "transactions") plutôt que dans un CSV
+    local. Les dates sont converties en texte ISO et les NaN en None, pour être sérialisables
+    en JSON (format attendu par la colonne jsonb de Supabase)."""
     try:
-        df.to_csv(tmp_path, index=False)
-        os.replace(tmp_path, target)
-        return True, None
-    except PermissionError:
-        return False, (
-            f"Impossible d'enregistrer : le fichier '{os.path.basename(target)}' est probablement "
-            "ouvert dans un autre programme (Excel, un antivirus qui le scanne...). "
-            "Fermez-le puis réessayez."
-        )
+        df_to_save = df.copy()
+        for col in df_to_save.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
+                df_to_save[col] = df_to_save[col].dt.strftime("%Y-%m-%d %H:%M:%S")
+        df_to_save = df_to_save.where(pd.notnull(df_to_save), None)
+        records = df_to_save.to_dict(orient="records")
+        return _supabase_set_value("transactions", records)
     except Exception as e:
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except Exception:
-            pass
         return False, f"Erreur lors de l'enregistrement : {e}"
 
 def load_config():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"broker": "", "yearly_target": 10000, "taux_prelevements_sociaux": 18.6}
+    return _supabase_get_value(
+        "config",
+        {"broker": "", "yearly_target": 10000, "taux_prelevements_sociaux": 18.6}
+    )
 
 def save_config(config_data):
-    """Enregistre la config PEA de façon sûre : écrit dans un fichier temporaire dédié à cette
-    session (suffixe aléatoire) puis le bascule en une seule opération atomique (os.replace),
-    comme pour save_transactions_csv. Corrige une erreur OSError [Errno 22] observée quand
-    deux réécritures de config_pea.json se chevauchaient (ex. plusieurs onglets/sessions du
-    dashboard ouverts en même temps, ou deux champs de config modifiés dans le même rerun) :
-    avec l'ancien 'open(CONFIG_FILE, "w")' direct, deux écritures concurrentes sur le même
-    fichier pouvaient se marcher dessus. Ne fait jamais planter l'app : en cas d'échec,
-    renvoie un message clair au lieu de laisser remonter une exception."""
-    tmp_path = f"{CONFIG_FILE}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
-    try:
-        with open(tmp_path, "w") as f:
-            json.dump(config_data, f)
-        os.replace(tmp_path, CONFIG_FILE)
-        return True, None
-    except Exception as e:
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except Exception:
-            pass
-        return False, f"Erreur lors de l'enregistrement de la configuration : {e}"
+    return _supabase_set_value("config", config_data)
 
 app_config = load_config()
 
@@ -1911,13 +1917,15 @@ def get_benchmark_history(ticker, start_str, end_str):
     except Exception:
         return pd.Series(dtype=float)
 
-@st.cache_data(ttl=None)
-def load_data(_file_signature):
-    # _file_signature (mtime du CSV) sert uniquement de clé de cache : le contenu
-    # renvoyé n'est jamais modifié, seule la relecture disque est évitée tant
-    # que le fichier n'a pas changé, ce qui accélère les reruns liés à l'UI.
-    if os.path.exists(DB_FILE):
-        df = pd.read_csv(DB_FILE)
+@st.cache_data(ttl=None, show_spinner=False)
+def load_data():
+    # Le cache est explicitement vidé (load_data.clear()) juste après chaque sauvegarde
+    # réussie plus bas dans le fichier : inutile donc de passer une "signature" en argument
+    # comme avec l'ancien fichier CSV (mtime) — Supabase ne fournit pas d'équivalent simple,
+    # et ce n'est de toute façon plus nécessaire.
+    records = _supabase_get_value("transactions", [])
+    if records:
+        df = pd.DataFrame(records)
         df["Date_Heure"] = pd.to_datetime(df["Date_Heure"])
         if "Rompu" not in df.columns:
             df["Rompu"] = 0.0
@@ -1927,7 +1935,7 @@ def load_data(_file_signature):
             df["Remboursement_Capital"] = 0.0
         if "Arrondi_Courtier" not in df.columns:
             # Colonne ajoutée après-coup : sert à corriger les écarts d'arrondi du courtier sur
-            # les dividendes (voir k_div_arrondi plus bas). Absente des anciens CSV, donc 0.0
+            # les dividendes (voir k_div_arrondi plus bas). Absente des anciens enregistrements, donc 0.0
             # par défaut pour tout l'historique déjà enregistré (comportement inchangé).
             df["Arrondi_Courtier"] = 0.0
         if "Date_Rompus" not in df.columns:
@@ -1951,8 +1959,7 @@ def load_data(_file_signature):
             ]
         )
 
-_db_file_signature = os.path.getmtime(DB_FILE) if os.path.exists(DB_FILE) else 0
-df_transactions = load_data(_db_file_signature)
+df_transactions = load_data()
 _perf_mark("Lecture des transactions (load_data)")
 
 # ==========================================
@@ -2971,11 +2978,9 @@ def dialog_saisie_operation():
                     ok_save, err_save = save_transactions_csv(df_transactions)
                     if ok_save:
                         # load_data.clear() : indispensable en plus du st.rerun(). load_data()
-                        # est mise en cache par mtime du fichier CSV (_db_file_signature) ; or sur
-                        # certains systèmes de fichiers, la résolution du mtime n'est qu'à la
-                        # seconde près. Deux sauvegardes rapprochées (ou même une seule, selon le
-                        # système) peuvent donc partager exactement le même mtime, et le cache
-                        # renvoie alors l'ancienne version au lieu de relire le fichier — l'appli
+                        # est mise en cache indéfiniment (ttl=None) tant qu'elle n'est pas vidée
+                        # explicitement ; sans ce clear(), le cache renverrait l'ancienne version
+                        # au lieu de relire les données fraîchement enregistrées dans Supabase — l'appli
                         # a l'air de "ne rien faire" alors que le fichier est bien à jour sur disque.
                         load_data.clear()
                         st.toast("✅ Opération enregistrée avec succès !", icon="✅")
