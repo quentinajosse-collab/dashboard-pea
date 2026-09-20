@@ -1,0 +1,8 @@
+streamlit>=1.38
+pandas
+numpy
+reportlab
+yfinance
+plotly
+python-dateutil
+supabase
