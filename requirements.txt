@@ -6,3 +6,4 @@ yfinance
 plotly
 python-dateutil
 supabase
+streamlit-extras
