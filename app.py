@@ -91,36 +91,6 @@ st.set_page_config(
     page_title="Tableau de Bord PEA", page_icon="📈", layout="wide"
 )
 
-# ------------------------------------------------------------------
-# Mode profilage (optionnel) : ajouter ?perf=1 à l'adresse du dashboard (ex.
-# http://localhost:8501/?perf=1) affiche en bas de page le temps passé par chaque grande étape
-# du script (lecture des données, cours, métriques, exports, historique, chaque onglet...).
-# Sans ce paramètre, _perf_mark() ne fait strictement rien.
-# ------------------------------------------------------------------
-try:
-    _PERF_ON = "perf" in st.query_params
-except Exception:
-    _PERF_ON = False
-_perf_marks = []
-_perf_last = time_module.perf_counter()
-
-_perf_notes = []
-
-def _perf_note(text):
-    """Information (sans durée) affichée sous le tableau de profilage, ex. « export PDF : reconstruit »."""
-    if _PERF_ON:
-        _perf_notes.append(text)
-
-def _perf_mark(label):
-    """Attribue à `label` le temps écoulé depuis le précédent appel (donc à appeler à la FIN de
-    l'étape à mesurer)."""
-    global _perf_last
-    if not _PERF_ON:
-        return
-    _now = time_module.perf_counter()
-    _perf_marks.append((label, (_now - _perf_last) * 1000.0))
-    _perf_last = _now
-
 # ==========================================
 # PERSISTANCE VIA SUPABASE (table app_storage : colonnes key / value(jsonb) / updated_at)
 # ==========================================
@@ -130,23 +100,118 @@ def _perf_mark(label):
 #   - key="config"       -> value = dict de configuration (comme l'ancien config_pea.json)
 #   - key="transactions" -> value = liste de dicts (une ligne par transaction, comme l'ancien CSV)
 
-@st.cache_resource(show_spinner=False)
 def get_supabase_client():
-    """Client Supabase mis en cache pour toute la session serveur (une seule connexion
-    réutilisée). Les identifiants viennent des "Secrets" de l'app Streamlit Cloud
-    (SUPABASE_URL / SUPABASE_KEY), jamais codés en dur dans le fichier."""
-    from supabase import create_client
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    """Client Supabase : un par session de navigateur (st.session_state), PAS un cache
+    partagé pour tout le serveur (st.cache_resource) — sinon tous les visiteurs du site
+    partageraient la même connexion/le même compte, ce qui mélangerait leurs données."""
+    if "_sb_client" not in st.session_state:
+        from supabase import create_client
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        st.session_state["_sb_client"] = create_client(url, key)
+    return st.session_state["_sb_client"]
+
+_COOKIE_MAX_AGE = 60 * 60 * 24 * 182  # ~6 mois
+
+def _get_cookie_manager():
+    # Un seul composant "cookies" par session (clé fixe) : le recréer à chaque rerun est
+    # normal en Streamlit, il retrouve le même composant côté navigateur grâce à sa clé.
+    from streamlit_extras.cookie_manager import cookie_manager
+    return cookie_manager()
+
+def _require_login():
+    """Bloque l'accès au dashboard tant que la personne n'est pas connectée. Connexion sans
+    mot de passe : elle reçoit un code à 6 chiffres par email et le saisit ici. Une fois
+    connectée, un cookie navigateur la reconnecte automatiquement lors de ses prochaines
+    visites (pendant 60 jours), sans avoir à redemander un code à chaque fois."""
+    sb = get_supabase_client()
+
+    if st.session_state.get("_sb_user_id"):
+        return  # déjà connecté(e) pour cette session de navigateur
+
+    cookies = _get_cookie_manager()
+    if not cookies.ready():
+        # Le composant n'a pas encore renvoyé les cookies existants du navigateur (ça prend
+        # un tout petit instant au tout premier chargement) : on attend le prochain rerun
+        # automatique plutôt que d'afficher l'écran de connexion par erreur.
+        st.stop()
+
+    if not st.session_state.get("_sb_cookie_login_tried"):
+        st.session_state["_sb_cookie_login_tried"] = True
+        cached_access = cookies.get("sb_access_token")
+        cached_refresh = cookies.get("sb_refresh_token")
+        if cached_access and cached_refresh:
+            try:
+                res = sb.auth.set_session(cached_access, cached_refresh)
+                st.session_state["_sb_user_id"] = res.user.id
+                st.session_state["_sb_user_email"] = res.user.email
+                st.rerun()
+            except Exception:
+                pass  # cookie invalide/expiré : on retombe sur l'écran de connexion normal
+
+    st.title("📈 Tableau de Bord PEA")
+    st.subheader("Connexion")
+    email = st.text_input("Adresse email", key="_login_email")
+
+    if st.button("Recevoir un code de connexion", key="_login_send"):
+        try:
+            sb.auth.sign_in_with_otp({"email": email})
+            st.session_state["_login_otp_sent_to"] = email
+            st.success("Code envoyé — vérifie ta boîte mail (et tes spams).")
+        except Exception as e:
+            st.error(f"Erreur lors de l'envoi : {e}")
+
+    otp_target = st.session_state.get("_login_otp_sent_to")
+    if otp_target:
+        st.caption(f"Code envoyé à {otp_target}")
+        code = st.text_input("Code reçu par email (6 chiffres)", key="_login_code")
+        if st.button("Valider le code", key="_login_verify"):
+            try:
+                res = sb.auth.verify_otp({"email": otp_target, "token": code, "type": "email"})
+                sb.auth.set_session(res.session.access_token, res.session.refresh_token)
+                st.session_state["_sb_user_id"] = res.user.id
+                st.session_state["_sb_user_email"] = res.user.email
+                cookies.set("sb_access_token", res.session.access_token, max_age=_COOKIE_MAX_AGE)
+                cookies.set("sb_refresh_token", res.session.refresh_token, max_age=_COOKIE_MAX_AGE)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Code invalide ou expiré : {e}")
+
+    st.stop()
+
+def _logout_button():
+    with st.sidebar:
+        st.caption(f"Connecté : {st.session_state.get('_sb_user_email', '')}")
+        if st.button("Se déconnecter"):
+            for k in ["_sb_client", "_sb_user_id", "_sb_user_email", "_login_otp_sent_to",
+                      "_sb_cookie_login_tried"]:
+                st.session_state.pop(k, None)
+            try:
+                cookies = _get_cookie_manager()
+                cookies.set("sb_access_token", "", max_age=0)
+                cookies.set("sb_refresh_token", "", max_age=0)
+            except Exception:
+                pass
+            st.rerun()
+
+_require_login()
+_logout_button()
+_current_user_id = st.session_state["_sb_user_id"]
 
 def _supabase_get_value(key_name, default):
-    """Lit la valeur (colonne jsonb) associée à `key_name` dans app_storage. Ne fait jamais
-    planter l'app : si Supabase est injoignable ou que la ligne n'existe pas encore, renvoie
-    `default` (comportement identique à l'ancien "fichier absent -> valeur par défaut")."""
+    """Lit la valeur (colonne jsonb) associée à `key_name` POUR L'UTILISATEUR CONNECTÉ dans
+    app_storage. Ne fait jamais planter l'app : si Supabase est injoignable ou que la ligne
+    n'existe pas encore, renvoie `default` (comportement identique à l'ancien "fichier absent
+    -> valeur par défaut")."""
     try:
         sb = get_supabase_client()
-        res = sb.table("app_storage").select("value").eq("key", key_name).execute()
+        res = (
+            sb.table("app_storage")
+            .select("value")
+            .eq("key", key_name)
+            .eq("user_id", _current_user_id)
+            .execute()
+        )
         if res.data:
             return res.data[0]["value"]
     except Exception:
@@ -154,12 +219,15 @@ def _supabase_get_value(key_name, default):
     return default
 
 def _supabase_set_value(key_name, value):
-    """Enregistre (upsert) la valeur associée à `key_name` dans app_storage. Renvoie
-    (True, None) en cas de succès, (False, message_erreur) sinon — même contrat que les
-    anciennes fonctions save_*_csv/save_config, pour ne rien changer côté appelants."""
+    """Enregistre (upsert) la valeur associée à `key_name` POUR L'UTILISATEUR CONNECTÉ dans
+    app_storage. Renvoie (True, None) en cas de succès, (False, message_erreur) sinon — même
+    contrat que les anciennes fonctions save_*_csv/save_config, pour ne rien changer côté
+    appelants."""
     try:
         sb = get_supabase_client()
-        sb.table("app_storage").upsert({"key": key_name, "value": value}).execute()
+        sb.table("app_storage").upsert(
+            {"user_id": _current_user_id, "key": key_name, "value": value}
+        ).execute()
         return True, None
     except Exception as e:
         return False, f"Erreur lors de l'enregistrement dans Supabase : {e}"
@@ -1150,12 +1218,10 @@ def _memo_export(kind, signature, builder):
     slot = store.get(kind)
     if (signature is not None and slot is not None and slot["sig"] == signature
             and (now - slot["ts"]) < _EXPORT_MEMO_MAX_AGE):
-        _perf_note(f"export {kind.upper()} : servi depuis la mémoire")
         return slot["data"], slot["stamp"]
     data = builder()
     stamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
     store[kind] = {"sig": signature, "ts": now, "data": data, "stamp": stamp}
-    _perf_note(f"export {kind.upper()} : reconstruit")
     return data, stamp
 
 def _streamlit_version_at_least(major, minor):
@@ -1181,7 +1247,6 @@ def _export_payload(kind, signature_parts, builder):
     callable sans argument qui fabrique les octets du fichier (et n'utilise ni st ni la session,
     car Streamlit l'exécute hors du script lors d'un téléchargement différé)."""
     if _DEFERRED_DOWNLOAD:
-        _perf_note(f"export {kind.upper()} : généré au clic (téléchargement différé)")
         return builder, datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
     return _memo_export(kind, _export_signature(*signature_parts), builder)
 
@@ -1960,7 +2025,6 @@ def load_data():
         )
 
 df_transactions = load_data()
-_perf_mark("Lecture des transactions (load_data)")
 
 # ==========================================
 # PRÉCHARGEMENT PARALLÈLE DES DONNÉES DE MARCHÉ
@@ -1996,31 +2060,19 @@ def _prefetch_market_data(tickers, start_date_str=None, extra_live_tickers=(), g
     # d'appels partent tous en même temps et se recouvrent, ce qui réduit le temps d'attente
     # total au démarrage à froid (cache expiré) au lieu de l'additionner.
     n_calls = (len(tickers) * (3 if start_date_str else 2) + len(extra_live)) or 1
-    _timings = {}   # mesures (mode ?perf=1 uniquement) : durées cumulées des requêtes par catégorie
-
-    def _timed(kind, fn, *args):
-        if not _PERF_ON:
-            return fn(*args)
-        _t0 = time_module.perf_counter()
-        try:
-            return fn(*args)
-        finally:
-            _timings.setdefault(kind, []).append(time_module.perf_counter() - _t0)
-
-    _wall0 = time_module.perf_counter()
     _n_workers = min(_PREFETCH_MAX_WORKERS, n_calls)
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=_n_workers)
     _jobs = []   # (catégorie, clé, future)
     try:
         for t in tickers:
-            _jobs.append(("live", t, executor.submit(_timed, "cours en direct", _g_live, t)))
+            _jobs.append(("live", t, executor.submit(_g_live, t)))
         for t in extra_live:
-            _jobs.append(("live", t, executor.submit(_timed, "cours en direct (watchlist)", _g_live, t)))
+            _jobs.append(("live", t, executor.submit(_g_live, t)))
         for t in tickers:
-            _jobs.append(("info", t, executor.submit(_timed, "secteur/pays", _g_info, t)))
+            _jobs.append(("info", t, executor.submit(_g_info, t)))
         if start_date_str:
             for t in tickers:
-                _jobs.append(("hist", (t, start_date_str), executor.submit(_timed, "historique", _g_hist, t, start_date_str)))
+                _jobs.append(("hist", (t, start_date_str), executor.submit(_g_hist, t, start_date_str)))
         concurrent.futures.wait([j[2] for j in _jobs], timeout=timeout)
     finally:
         # sans délai maximal : on attend la fin de tous les appels, comme avant (with executor:)
@@ -2028,10 +2080,6 @@ def _prefetch_market_data(tickers, start_date_str=None, extra_live_tickers=(), g
     for kind, key, fut in _jobs:
         if kind in ("live", "hist") and fut.done() and not fut.cancelled() and fut.exception() is None:
             results[kind][key] = fut.result()
-    if _PERF_ON:
-        _perf_note(f"préchargement réseau : {len(tickers)} valeurs + {len(extra_live)} de la watchlist, {_n_workers} threads, {time_module.perf_counter() - _wall0:.1f} s réelles")
-        for _kind, _durs in _timings.items():
-            _perf_note(f"· {_kind} : {len(_durs)} appels (dont déjà en cache), {sum(_durs):.1f} s cumulées, le plus lent {max(_durs):.1f} s")
     return results
 
 _tickers_a_precharger = (
@@ -2084,7 +2132,6 @@ if (_tickers_a_precharger or _wl_tickers_alertes) and (_now_ts - _last_prefetch_
 
 _swr_epoch_at_start = _swr.epoch if _swr is not None else 0
 if _swr is not None and _swr.serve_stale:
-    _perf_note("cours : affichage immédiat depuis l'instantané, actualisation en arrière-plan")
     @st.fragment(run_every=2)
     def _swr_banner():
         _s = _swr_state()
@@ -2095,7 +2142,6 @@ if _swr is not None and _swr.serve_stale:
         else:
             st.rerun()   # actualisation terminée : relance toute l'application avec les cours frais
     _swr_banner()
-_perf_mark("Préchargement des cours (réseau, si cache expiré)")
 
 # ==========================================
 # 2. MOTEUR DE CALCUL DES POSITIONS & PERF
@@ -2535,7 +2581,6 @@ elif st.session_state["_swr_seen_epoch_metrics"] != _epoch_now:
 
 with st.spinner("⏳ Calcul des indicateurs du portefeuille (cours en direct)..."):
     df_port, tot_invested, tot_value_actions, tot_fees, tot_dividends, tot_realized_pnl, tot_cost_basis_global = compute_portfolio_metrics(df_transactions)
-_perf_mark("Métriques du portefeuille (compute_portfolio_metrics)")
 
 # Pré-calculs pour le formulaire "Nouvelle opération" : la liste des actions possédées/de tout
 # l'historique, et les dictionnaires nom -> ticker / nom -> quantité, sont utilisés à CHAQUE
@@ -3120,13 +3165,17 @@ def dialog_simulation_operation():
                                       placeholder="0", key="k_whatif_qte", label_visibility="collapsed")
         qte_wi = qte_wi if qte_wi is not None else 0.0
         prix_defaut_wi = float(pos_existante["Prix Actuel (€)"]) if (pos_existante is not None and float(pos_existante["Prix Actuel (€)"]) > 0) else None
+        # Pour un achat, on saisit un prix d'achat (le libellé "estimé" n'avait pas lieu d'être
+        # puisque c'est le prix auquel on compte réellement acheter) ; pour une vente, le libellé
+        # d'origine est conservé.
+        _prix_label_base_wi = "Prix d'achat (€)" if type_wi == "Achat" else "Prix de vente (€)"
         _prix_label_wi = (
-            f"Prix unitaire estimé (€) (PRU actuel : {fmt_eur(float(pos_existante['PRU Net (€)']))})"
-            if pos_existante is not None else "Prix unitaire estimé (€)"
+            f"{_prix_label_base_wi} (PRU actuel : {fmt_eur(float(pos_existante['PRU Net (€)']))})"
+            if pos_existante is not None else _prix_label_base_wi
         )
         _field_label(_prix_label_wi)
         with _req_field("req_whatif_prix", "k_whatif_prix", default=prix_defaut_wi, track=None):
-            prix_wi = st.number_input("Prix unitaire estimé (€)", min_value=0.0, step=0.0001, format="%.4f",
+            prix_wi = st.number_input(_prix_label_base_wi, min_value=0.0, step=0.0001, format="%.4f",
                                        value=prix_defaut_wi, placeholder="0,0000", key="k_whatif_prix", label_visibility="collapsed")
         prix_wi = prix_wi if prix_wi is not None else 0.0
 
@@ -3274,11 +3323,15 @@ def dialog_simulation_operation():
             d_gainlat, c_gainlat = _delta_eur(gain_latent_apres - gain_latent_avant)
             d_poids, c_poids = _delta_pct(poids_apres - poids_avant)
 
-            _render_before_after([
+            _cartes_ligne1_wi = [
                 ("💰 Poche espèces", fmt_eur(cash_avant), fmt_eur(cash_apres), d_cash, c_cash),
                 ("📦 Quantité détenue", f"{qte_avant:g}", f"{qte_apres:g}", d_qte_str, d_qte_color),
-                ("🎯 PRU net", fmt_eur(pru_avant), fmt_eur(pru_apres), d_pru, c_pru),
-            ])
+            ]
+            if type_wi == "Achat":
+                # Le PRU net n'évolue jamais lors d'une simple vente (seule la quantité détenue
+                # change) : la carte n'a donc de sens à afficher que côté achat.
+                _cartes_ligne1_wi.append(("🎯 PRU net", fmt_eur(pru_avant), fmt_eur(pru_apres), d_pru, c_pru))
+            _render_before_after(_cartes_ligne1_wi)
             st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
             _render_before_after([
                 ("📊 Valeur de la ligne", fmt_eur(valeur_pos_avant), fmt_eur(valeur_pos_apres), d_valpos, c_valpos),
@@ -4006,7 +4059,6 @@ with col_toggles:
             key="export_data_pdf_btn"
         )
 
-_perf_mark("En-tête + exports XML/PDF")
 
 # "Nouvelle opération" et "Simulation" regroupés dans une seule carte, désormais FIXÉE en bas de
 # l'écran (voir la règle CSS ".st-key-sticky_ops_bar" tout en haut du fichier) : toujours
@@ -4126,7 +4178,6 @@ for (_tick_wl, _nom_wl, _px_wl, _zn_wl, _ec_wl) in _wl_alertes_visibles:
 # (et non un après chacun) : les mettre bout à bout créait deux barres vides collées l'une à
 # l'autre, sans rien entre elles, dès que les deux types d'alerte étaient présents en même
 # temps — d'où les "2 barres vides" repérées entre l'alerte et la Vue d'ensemble.
-_perf_mark("Barre d'opérations + alertes TTF/watchlist")
 if "_swr_seen_epoch_history" not in st.session_state:
     st.session_state["_swr_seen_epoch_history"] = _epoch_now
 elif st.session_state["_swr_seen_epoch_history"] != _epoch_now:
@@ -4134,7 +4185,6 @@ elif st.session_state["_swr_seen_epoch_history"] != _epoch_now:
     get_portfolio_history_cached.clear()
     st.session_state["_swr_seen_epoch_history"] = _epoch_now
 history_df_global = get_portfolio_history(df_transactions)
-_perf_mark("Historique du portefeuille (get_portfolio_history)")
 poche_especes = 0.0
 apports_totaux = df_transactions[df_transactions["Type"] == "APPORT"]["Quantité"].sum() - df_transactions[df_transactions["Type"] == "RETRAIT"]["Quantité"].sum()
 
@@ -4243,7 +4293,6 @@ if history_df_global is not None and not history_df_global.empty:
 if _ttf_anomalies_visibles or _wl_alertes_visibles:
     st.markdown("---")
 
-_perf_mark("Indicateurs de synthèse (perf. jour/mois/année)")
 # ==========================================
 # CRÉATION DES ONGLETS NATIFS (st.tabs)
 # ==========================================
@@ -4353,7 +4402,6 @@ if _TABS_LAZY:
 # ------------------------------------------
 # ONGLÊT 1 : VUE D'ENSEMBLE & OBJECTIF
 # ------------------------------------------
-_perf_mark("Création des onglets (st.tabs)")
 if _tab_open(tab_overview):
     with tab_overview:
         with st.expander("📊 Vue d'ensemble du Portefeuille", expanded=True):
@@ -4552,7 +4600,6 @@ if _tab_open(tab_overview):
 # ------------------------------------------
 # ONGLÊT 2 : POSITIONS & TRANSACTIONS
 # ------------------------------------------
-_perf_mark("Onglet Vue d'ensemble")
 if _tab_open(tab_positions):
     with tab_positions:
         df_active = df_port[df_port["Quantité"] > 0.0001] if not df_port.empty else pd.DataFrame()
@@ -5027,7 +5074,6 @@ if _tab_open(tab_positions):
 # ------------------------------------------
 # ONGLÊT : CLASSEMENTS
 # ------------------------------------------
-_perf_mark("Onglet Positions & Transactions")
 if _tab_open(tab_classements):
     with tab_classements:
         # Filtre de période commun à tout l'onglet Classements (ventes réalisées, journées, mois,
@@ -5555,7 +5601,6 @@ if _tab_open(tab_classements):
 # ------------------------------------------
 # ONGLÊT : SAISONNALITÉ DES PLUS-VALUES ACTÉES
 # ------------------------------------------
-_perf_mark("Onglet Classements")
 if _tab_open(tab_saisonnalite):
     with tab_saisonnalite:
         @_cache_render
@@ -5809,7 +5854,6 @@ if _tab_open(tab_saisonnalite):
 # ------------------------------------------
 # ONGLÊT 3 : PERFORMANCES & INDICES
 # ------------------------------------------
-_perf_mark("Onglet Saisonnalité")
 if _tab_open(tab_perf):
     with tab_perf:
         with st.expander("📈 Graphique de Performance Comparée (%)", expanded=True):
@@ -6317,7 +6361,6 @@ if _tab_open(tab_perf):
 # ------------------------------------------
 # ONGLÊT 4 : DIVIDENDES & CARTOGRAPHIE
 # ------------------------------------------
-_perf_mark("Onglet Performances & Indices")
 if _tab_open(tab_dividends):
     with tab_dividends:
         @_cache_render
@@ -6649,7 +6692,6 @@ if _tab_open(tab_dividends):
 # ------------------------------------------
 # ONGLÊT 5 : HISTORIQUE & SIMULATEUR
 # ------------------------------------------
-_perf_mark("Onglet Dividendes & Cartographie")
 if _tab_open(tab_history):
     with tab_history:
         @_cache_render
@@ -6784,7 +6826,6 @@ if _tab_open(tab_history):
                                 df_q_res.style.apply(style_entire_row_gradient, axis=None),
                                 use_container_width=True,
                             )
-                            _perf_mark("Historique › tableau quotidien (calcul + mise en forme + envoi)")
                         else:
                             st.info("Pas encore assez d'historique pour établir ce tableau.")
 
@@ -6840,7 +6881,6 @@ if _tab_open(tab_history):
                             df_m_res.style.apply(style_entire_row_gradient, axis=None),
                             use_container_width=True,
                         )
-                        _perf_mark("Historique › tableau mensuel")
 
             with st.expander("📅 Historique des performances annuelles", expanded=True):
                 if not df_transactions.empty:
@@ -6899,14 +6939,12 @@ if _tab_open(tab_history):
                             df_y_res.style.apply(style_entire_row_gradient, axis=None),
                             use_container_width=True,
                         )
-                        _perf_mark("Historique › tableau annuel")
         _rendu_onglet_historique(df_transactions, tot_invested, bool(st.session_state.get("hide_amounts_toggle", False)), datetime.now().strftime("%Y-%m-%d"), _epoch_now)
 
 
 # ------------------------------------------
 # ONGLÊT 6 : FRAIS (Cartographie dédiée)
 # ------------------------------------------
-_perf_mark("Onglet Historique")
 if _tab_open(tab_fees):
     with tab_fees:
         with st.expander("🔍 Section Frais & Cartographie", expanded=True):
@@ -6951,7 +6989,6 @@ def _watchlist_save(items):
         st.warning(err)
     return ok
 
-_perf_mark("Onglet Frais")
 if _tab_open(tab_watchlist):
     with tab_watchlist:
         _SENTINEL_NOUVEAU_WL = "➕ Ajouter un nouveau nom..."
@@ -7319,7 +7356,6 @@ if _tab_open(tab_watchlist):
 # ------------------------------------------
 # ONGLÊT 7 : SIMULATEUR DE RETRAIT
 # ------------------------------------------
-_perf_mark("Onglet Watchlist")
 if _tab_open(tab_simulateur):
     with tab_simulateur:
         PLAFOND_PEA_VERSEMENTS = 150000.0
@@ -7779,23 +7815,3 @@ if _tab_open(tab_simulateur):
                     """,
                         unsafe_allow_html=True
                     )
-
-_perf_mark("Onglet Simulateurs")
-if _PERF_ON:
-    with st.expander("⏱️ Profil de performance (mode ?perf=1)", expanded=True):
-        st.caption(
-            "Temps d'exécution du script côté serveur, par étape (l'affichage dans le navigateur "
-            "vient en plus). Retirez ?perf=1 de l'adresse pour désactiver."
-        )
-        _perf_df = pd.DataFrame(_perf_marks, columns=["Étape", "Durée (ms)"])
-        _perf_total = _perf_df["Durée (ms)"].sum()
-        _perf_df["Part (%)"] = (_perf_df["Durée (ms)"] / _perf_total * 100) if _perf_total > 0 else 0.0
-        _perf_df["Durée (ms)"] = _perf_df["Durée (ms)"].round(0).astype(int)
-        _perf_df["Part (%)"] = _perf_df["Part (%)"].round(1)
-        st.dataframe(_perf_df, hide_index=True, use_container_width=True)
-        st.markdown(f"**Total du script : {_perf_total / 1000:.2f} s**")
-        _perf_info = [f"Streamlit {getattr(st, '__version__', '?')}", f"pandas {pd.__version__}",
-                      "téléchargement différé des exports : " + ("OUI" if _DEFERRED_DOWNLOAD else "non"),
-                      "affichage immédiat des cours (instantané) : " + ("OUI" if _SWR_ENABLED else "non") + (" — instantané présent" if (_SWR_ENABLED and _swr_state().snapshot is not None) else ""),
-                      "onglets à chargement paresseux : " + ("OUI" if _TABS_LAZY else "non (version de Streamlit trop ancienne)")]
-        st.caption(" · ".join(_perf_info + _perf_notes))
