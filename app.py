@@ -4058,6 +4058,67 @@ with col_toggles:
             mime="application/pdf",
             key="export_data_pdf_btn"
         )
+    with st.container(key="export_csv_btn_wrap"):
+        # Export CSV brut des transactions (mêmes colonnes que la base interne) : utile pour
+        # une sauvegarde, une édition dans Excel, ou pour transférer ses données vers un autre
+        # compte. Contrairement aux exports XML/PDF (mise en forme), celui-ci n'est pas mémoïsé
+        # (_export_payload) : to_csv sur le DataFrame déjà en mémoire est quasi instantané.
+        st.download_button(
+            label="📄 Exporter les données (CSV)",
+            data=df_transactions.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"ExportCSV_{_export_xml_stamp}.csv",
+            mime="text/csv",
+            key="export_data_csv_btn",
+        )
+
+    _TRANSAC_COLUMNS = [
+        "Date_Heure", "Type", "Nom", "Ticker",
+        "Quantité", "Prix Unitaire (€)", "Commission (€)",
+        "TTF (€)", "Frais Totaux (€)", "Rompu", "Retenue_Source_Etrangere",
+        "Remboursement_Capital", "Arrondi_Courtier", "Date_Rompus",
+    ]
+    with st.expander("📥 Importer des transactions (CSV)", expanded=False):
+        st.caption(
+            "Le fichier importé doit avoir exactement les mêmes colonnes que l'export CSV "
+            "ci-dessus."
+        )
+        _csv_uploaded = st.file_uploader(
+            "Importer un CSV de transactions", type=["csv"], key="import_csv_uploader"
+        )
+        if _csv_uploaded is not None:
+            try:
+                df_csv_import = pd.read_csv(_csv_uploaded)
+                _missing_cols = [c for c in _TRANSAC_COLUMNS if c not in df_csv_import.columns]
+                if _missing_cols:
+                    st.error(f"Colonnes manquantes dans le fichier : {', '.join(_missing_cols)}")
+                else:
+                    df_csv_import = df_csv_import[_TRANSAC_COLUMNS].copy()
+                    df_csv_import["Date_Heure"] = pd.to_datetime(df_csv_import["Date_Heure"])
+                    df_csv_import["Date_Rompus"] = pd.to_datetime(
+                        df_csv_import["Date_Rompus"], errors="coerce"
+                    )
+                    st.write(f"{len(df_csv_import)} lignes détectées dans le fichier.")
+                    _import_mode = st.radio(
+                        "Que faire de ces lignes ?",
+                        ["Ajouter à mes transactions existantes", "Remplacer entièrement mes transactions"],
+                        key="import_csv_mode",
+                    )
+                    if st.button("Confirmer l'import", key="import_csv_confirm", type="primary"):
+                        if _import_mode.startswith("Ajouter"):
+                            df_transactions_new = pd.concat(
+                                [df_transactions, df_csv_import], ignore_index=True
+                            )
+                        else:
+                            df_transactions_new = df_csv_import
+                        ok_save, err_save = save_transactions_csv(df_transactions_new)
+                        if ok_save:
+                            load_data.clear()
+                            st.success(f"{len(df_csv_import)} transactions importées.")
+                            st.rerun()
+                        else:
+                            st.error(err_save)
+            except Exception as e:
+                st.error(f"Erreur lors de la lecture du fichier : {e}")
 
 
 # "Nouvelle opération" et "Simulation" regroupés dans une seule carte, désormais FIXÉE en bas de
