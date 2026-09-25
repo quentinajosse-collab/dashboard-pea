@@ -111,43 +111,36 @@ def get_supabase_client():
         st.session_state["_sb_client"] = create_client(url, key)
     return st.session_state["_sb_client"]
 
-_COOKIE_MAX_AGE = 60 * 60 * 24 * 182  # ~6 mois
-
-def _get_cookie_manager():
-    # Un seul composant "cookies" par session (clé fixe) : le recréer à chaque rerun est
-    # normal en Streamlit, il retrouve le même composant côté navigateur grâce à sa clé.
-    from streamlit_extras.cookie_manager import cookie_manager
-    return cookie_manager()
+_REMEMBER_QUERY_PARAM = "rt"  # nom du paramètre d'URL qui garde le jeton de connexion
 
 def _require_login():
     """Bloque l'accès au dashboard tant que la personne n'est pas connectée. Connexion sans
     mot de passe : elle reçoit un code à 6 chiffres par email et le saisit ici. Une fois
-    connectée, un cookie navigateur la reconnecte automatiquement lors de ses prochaines
-    visites (pendant 60 jours), sans avoir à redemander un code à chaque fois."""
+    connectée, un jeton est ajouté à l'adresse (URL) de la page : tant qu'elle garde/rouvre
+    cette même adresse (onglet resté ouvert, page rafraîchie, ou lien mis en favori), elle est
+    reconnectée automatiquement sans redemander de code. Ce jeton est personnel : il ne faut
+    jamais partager l'adresse de la page UNE FOIS CONNECTÉ(E) avec quelqu'un d'autre."""
     sb = get_supabase_client()
 
     if st.session_state.get("_sb_user_id"):
         return  # déjà connecté(e) pour cette session de navigateur
 
-    cookies = _get_cookie_manager()
-    if not cookies.ready():
-        # Le composant n'a pas encore renvoyé les cookies existants du navigateur (ça prend
-        # un tout petit instant au tout premier chargement) : on attend le prochain rerun
-        # automatique plutôt que d'afficher l'écran de connexion par erreur.
-        st.stop()
-
-    if not st.session_state.get("_sb_cookie_login_tried"):
-        st.session_state["_sb_cookie_login_tried"] = True
-        cached_access = cookies.get("sb_access_token")
-        cached_refresh = cookies.get("sb_refresh_token")
-        if cached_access and cached_refresh:
+    if not st.session_state.get("_sb_remember_login_tried"):
+        st.session_state["_sb_remember_login_tried"] = True
+        _cached_refresh = st.query_params.get(_REMEMBER_QUERY_PARAM)
+        if _cached_refresh:
             try:
-                res = sb.auth.set_session(cached_access, cached_refresh)
+                res = sb.auth.refresh_session(_cached_refresh)
                 st.session_state["_sb_user_id"] = res.user.id
                 st.session_state["_sb_user_email"] = res.user.email
+                # Le refresh token change à chaque utilisation (rotation) : on met l'URL à
+                # jour avec le nouveau, sinon la prochaine reconnexion échouerait.
+                st.query_params[_REMEMBER_QUERY_PARAM] = res.session.refresh_token
                 st.rerun()
             except Exception:
-                pass  # cookie invalide/expiré : on retombe sur l'écran de connexion normal
+                # Jeton invalide/expiré : on retire le paramètre et on retombe sur l'écran
+                # de connexion normal, sans faire planter l'app.
+                st.query_params.pop(_REMEMBER_QUERY_PARAM, None)
 
     st.title("📈 Tableau de Bord PEA")
     st.subheader("Connexion")
@@ -171,8 +164,7 @@ def _require_login():
                 sb.auth.set_session(res.session.access_token, res.session.refresh_token)
                 st.session_state["_sb_user_id"] = res.user.id
                 st.session_state["_sb_user_email"] = res.user.email
-                cookies.set("sb_access_token", res.session.access_token, max_age=_COOKIE_MAX_AGE)
-                cookies.set("sb_refresh_token", res.session.refresh_token, max_age=_COOKIE_MAX_AGE)
+                st.query_params[_REMEMBER_QUERY_PARAM] = res.session.refresh_token
                 st.rerun()
             except Exception as e:
                 st.error(f"Code invalide ou expiré : {e}")
@@ -184,14 +176,9 @@ def _logout_button():
         st.caption(f"Connecté : {st.session_state.get('_sb_user_email', '')}")
         if st.button("Se déconnecter"):
             for k in ["_sb_client", "_sb_user_id", "_sb_user_email", "_login_otp_sent_to",
-                      "_sb_cookie_login_tried"]:
+                      "_sb_remember_login_tried"]:
                 st.session_state.pop(k, None)
-            try:
-                cookies = _get_cookie_manager()
-                cookies.set("sb_access_token", "", max_age=0)
-                cookies.set("sb_refresh_token", "", max_age=0)
-            except Exception:
-                pass
+            st.query_params.pop(_REMEMBER_QUERY_PARAM, None)
             st.rerun()
 
 _require_login()
