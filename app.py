@@ -22,6 +22,9 @@ import plotly.graph_objects as go
 import plotly.colors as pcolors
 import locale
 from dateutil.relativedelta import relativedelta
+import hashlib
+import urllib.parse
+import doc_import as di  # lecture des avis d'opéré / relevés (fichier doc_import.py à côté de ce script)
 
 # Compatibilité st.dialog (renommé depuis st.experimental_dialog selon les versions de Streamlit)
 _dialog_decorator = getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None)
@@ -103,71 +106,149 @@ st.set_page_config(
 def get_supabase_client():
     """Client Supabase : un par session de navigateur (st.session_state), PAS un cache
     partagé pour tout le serveur (st.cache_resource) — sinon tous les visiteurs du site
-    partageraient la même connexion/le même compte, ce qui mélangerait leurs données."""
+    partageraient la même connexion/le même compte, ce qui mélangerait leurs données.
+
+    auto_refresh_token=False : sans cela, la bibliothèque renouvelle le jeton en arrière-plan
+    (thread) et Supabase ROTE alors le refresh token — l'ancien devient invalide. Le cookie du
+    navigateur, lui, garderait l'ancien jeton : à la visite suivante, la reconnexion automatique
+    échouait et le code par e-mail était redemandé. Ici, le renouvellement n'a lieu que dans
+    _sync_auth_cookies(), qui réécrit immédiatement le cookie avec les nouveaux jetons."""
     if "_sb_client" not in st.session_state:
         from supabase import create_client
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
-        st.session_state["_sb_client"] = create_client(url, key)
+        options = None
+        try:
+            try:
+                from supabase import ClientOptions
+            except ImportError:
+                from supabase.lib.client_options import ClientOptions
+            options = ClientOptions(auto_refresh_token=False, persist_session=False)
+        except Exception:
+            options = None  # version inattendue : on retombe sur le comportement par défaut
+        st.session_state["_sb_client"] = create_client(url, key, options=options) if options else create_client(url, key)
     return st.session_state["_sb_client"]
 
-_REMEMBER_QUERY_PARAM = "rt"  # nom du paramètre d'URL qui garde le jeton de connexion
+_COOKIE_MAX_AGE = 60 * 60 * 24 * 182  # ~6 mois
+
+def _write_auth_cookies(access, refresh, max_age=_COOKIE_MAX_AGE):
+    """Écrit (ou efface, avec max_age=0) les cookies de session dans le navigateur, via un petit
+    script exécuté dans le navigateur. IMPORTANT : ne jamais appeler st.rerun() juste après —
+    le script n'a alors pas le temps de s'exécuter et le cookie n'est jamais écrit (c'était la
+    cause probable de la reconnexion demandée à chaque visite)."""
+    import streamlit.components.v1 as components
+    a, r = json.dumps(access or ""), json.dumps(refresh or "")
+    components.html(
+        f"""<script>
+        (function() {{
+          try {{
+            var doc = window.parent.document;
+            var secure = (window.parent.location.protocol === 'https:') ? '; Secure' : '';
+            function setCookie(n, v, age) {{
+              doc.cookie = n + '=' + encodeURIComponent(v) + '; Max-Age=' + age + '; Path=/; SameSite=Lax' + secure;
+            }}
+            setCookie('sb_access_token', {a}, {int(max_age)});
+            setCookie('sb_refresh_token', {r}, {int(max_age)});
+          }} catch (e) {{}}
+        }})();
+        </script>""",
+        height=0,
+    )
+
+def _read_auth_cookies():
+    """Lit les cookies envoyés par le navigateur avec la requête (st.context.cookies, Streamlit
+    >= 1.37) : disponible immédiatement, sans attendre un composant (plus de course au démarrage).
+    Retourne None seulement si on doit attendre l'ancien composant (Streamlit plus ancien)."""
+    ctx = getattr(st, "context", None)
+    cookies = getattr(ctx, "cookies", None) if ctx is not None else None
+    if cookies is not None:
+        def _get(name):
+            v = cookies.get(name)
+            return urllib.parse.unquote(v).strip('"') if v else ""
+        return {"sb_access_token": _get("sb_access_token"), "sb_refresh_token": _get("sb_refresh_token")}
+    # Repli pour Streamlit < 1.37 : ancien composant
+    from streamlit_extras.cookie_manager import cookie_manager
+    cm = cookie_manager()
+    if not cm.ready():
+        return None
+    return {"sb_access_token": cm.get("sb_access_token") or "", "sb_refresh_token": cm.get("sb_refresh_token") or ""}
+
+def _sync_auth_cookies(sb):
+    """À chaque exécution : (1) obtient la session à jour (get_session renouvelle le jeton s'il est
+    expiré) ; (2) si les jetons ont changé depuis ce que détient le navigateur, réécrit les cookies.
+    C'est ce qui garde le cookie valide malgré la rotation des refresh tokens de Supabase."""
+    try:
+        sess = sb.auth.get_session()
+    except Exception:
+        return
+    if not sess:
+        return
+    current = (sess.access_token, sess.refresh_token)
+    if st.session_state.get("_sb_cookie_written") != current:
+        _write_auth_cookies(*current)
+        st.session_state["_sb_cookie_written"] = current
 
 def _require_login():
     """Bloque l'accès au dashboard tant que la personne n'est pas connectée. Connexion sans
-    mot de passe : elle reçoit un code à 6 chiffres par email et le saisit ici. Une fois
-    connectée, un jeton est ajouté à l'adresse (URL) de la page : tant qu'elle garde/rouvre
-    cette même adresse (onglet resté ouvert, page rafraîchie, ou lien mis en favori), elle est
-    reconnectée automatiquement sans redemander de code. Ce jeton est personnel : il ne faut
-    jamais partager l'adresse de la page UNE FOIS CONNECTÉ(E) avec quelqu'un d'autre."""
+    mot de passe : code à 6 chiffres reçu par e-mail. Ensuite, un cookie (~6 mois) reconnecte
+    automatiquement aux visites suivantes, y compris après un simple rafraîchissement de la page."""
     sb = get_supabase_client()
 
     if st.session_state.get("_sb_user_id"):
+        _sync_auth_cookies(sb)
         return  # déjà connecté(e) pour cette session de navigateur
 
-    if not st.session_state.get("_sb_remember_login_tried"):
-        st.session_state["_sb_remember_login_tried"] = True
-        _cached_refresh = st.query_params.get(_REMEMBER_QUERY_PARAM)
-        if _cached_refresh:
+    cookies = _read_auth_cookies()
+    if cookies is None:
+        st.stop()  # ancien composant pas encore prêt : prochain rerun automatique
+
+    if not st.session_state.get("_sb_cookie_login_tried"):
+        st.session_state["_sb_cookie_login_tried"] = True
+        acc, ref = cookies.get("sb_access_token"), cookies.get("sb_refresh_token")
+        if ref:
             try:
-                res = sb.auth.refresh_session(_cached_refresh)
+                res = sb.auth.set_session(acc or "", ref)
                 st.session_state["_sb_user_id"] = res.user.id
                 st.session_state["_sb_user_email"] = res.user.email
-                # Le refresh token change à chaque utilisation (rotation) : on met l'URL à
-                # jour avec le nouveau, sinon la prochaine reconnexion échouerait.
-                st.query_params[_REMEMBER_QUERY_PARAM] = res.session.refresh_token
-                st.rerun()
+                st.session_state["_sb_cookie_written"] = (acc, ref)  # ce que le navigateur détient déjà
+                _sync_auth_cookies(sb)  # si le jeton a été renouvelé : réécrit le cookie
+                return
             except Exception:
-                # Jeton invalide/expiré : on retire le paramètre et on retombe sur l'écran
-                # de connexion normal, sans faire planter l'app.
-                st.query_params.pop(_REMEMBER_QUERY_PARAM, None)
+                _write_auth_cookies("", "", 0)  # cookie périmé/invalide : on le supprime proprement
 
-    st.title("📈 Tableau de Bord PEA")
-    st.subheader("Connexion")
-    email = st.text_input("Adresse email", key="_login_email")
+    login_box = st.empty()
+    with login_box.container():
+        st.title("📈 Tableau de Bord PEA")
+        st.subheader("Connexion")
+        email = st.text_input("Adresse email", key="_login_email")
 
-    if st.button("Recevoir un code de connexion", key="_login_send"):
-        try:
-            sb.auth.sign_in_with_otp({"email": email})
-            st.session_state["_login_otp_sent_to"] = email
-            st.success("Code envoyé — vérifie ta boîte mail (et tes spams).")
-        except Exception as e:
-            st.error(f"Erreur lors de l'envoi : {e}")
-
-    otp_target = st.session_state.get("_login_otp_sent_to")
-    if otp_target:
-        st.caption(f"Code envoyé à {otp_target}")
-        code = st.text_input("Code reçu par email (6 chiffres)", key="_login_code")
-        if st.button("Valider le code", key="_login_verify"):
+        if st.button("Recevoir un code de connexion", key="_login_send"):
             try:
-                res = sb.auth.verify_otp({"email": otp_target, "token": code, "type": "email"})
-                sb.auth.set_session(res.session.access_token, res.session.refresh_token)
-                st.session_state["_sb_user_id"] = res.user.id
-                st.session_state["_sb_user_email"] = res.user.email
-                st.query_params[_REMEMBER_QUERY_PARAM] = res.session.refresh_token
-                st.rerun()
+                sb.auth.sign_in_with_otp({"email": email})
+                st.session_state["_login_otp_sent_to"] = email
+                st.success("Code envoyé — vérifie ta boîte mail (et tes spams).")
             except Exception as e:
-                st.error(f"Code invalide ou expiré : {e}")
+                st.error(f"Erreur lors de l'envoi : {e}")
+
+        otp_target = st.session_state.get("_login_otp_sent_to")
+        verified = False
+        if otp_target:
+            st.caption(f"Code envoyé à {otp_target}")
+            code = st.text_input("Code reçu par email (6 chiffres)", key="_login_code")
+            if st.button("Valider le code", key="_login_verify"):
+                try:
+                    res = sb.auth.verify_otp({"email": otp_target, "token": code, "type": "email"})
+                    sb.auth.set_session(res.session.access_token, res.session.refresh_token)
+                    st.session_state["_sb_user_id"] = res.user.id
+                    st.session_state["_sb_user_email"] = res.user.email
+                    verified = True
+                except Exception as e:
+                    st.error(f"Code invalide ou expiré : {e}")
+
+    if verified:
+        login_box.empty()          # retire l'écran de connexion
+        _sync_auth_cookies(sb)     # écrit les cookies SANS st.rerun() derrière
+        return                     # la suite du script (dashboard) s'exécute dans ce même passage
 
     st.stop()
 
@@ -176,9 +257,12 @@ def _logout_button():
         st.caption(f"Connecté : {st.session_state.get('_sb_user_email', '')}")
         if st.button("Se déconnecter"):
             for k in ["_sb_client", "_sb_user_id", "_sb_user_email", "_login_otp_sent_to",
-                      "_sb_remember_login_tried"]:
+                      "_sb_cookie_login_tried", "_sb_cookie_written"]:
                 st.session_state.pop(k, None)
-            st.query_params.pop(_REMEMBER_QUERY_PARAM, None)
+            _write_auth_cookies("", "", 0)
+            st.session_state["_sb_cookie_login_tried"] = True  # ne pas se reconnecter avec l'ancien cookie ce coup-ci
+            import time as _t
+            _t.sleep(0.6)  # laisse le script du navigateur effacer les cookies avant le rerun
             st.rerun()
 
 _require_login()
@@ -2644,13 +2728,176 @@ def _field_label(text, help_text=None):
         )
     st.markdown(f'<div class="op-card-title" style="margin-top: 10px;">{text}{help_html}</div>', unsafe_allow_html=True)
 
+# ==========================================
+# IMPORT DE DOCUMENTS DU COURTIER (pré-remplissage du formulaire "Nouvelle opération")
+# ==========================================
+_SENTINEL_NOUVEAU = "➕ Ajouter un nouveau nom..."
+
+# Clés des widgets du formulaire, remises à zéro avant chaque pré-remplissage pour ne pas garder
+# les valeurs d'un import précédent (valeur par défaut : None, sauf champs texte : "").
+_IMPORT_TEXT_KEYS = ["k_achat_nom_new", "k_achat_ticker_new", "k_vente_nom_new", "k_vente_ticker_new",
+                     "k_div_nom_new", "k_div_ticker_new", "k_split_nom_new", "k_split_ticker_new"]
+_IMPORT_OTHER_KEYS = ["k_achat_nom", "k_achat_qty", "k_achat_prix", "k_achat_comm", "k_achat_ttf",
+                      "k_vente_nom", "k_vente_qty", "k_vente_prix", "k_vente_comm",
+                      "k_apport_montant", "k_retrait_montant",
+                      "k_div_nom", "k_div_qty_new", "k_div_qty_vide", "k_div_montant", "k_div_retenue",
+                      "k_div_remb", "k_div_arrondi",
+                      "k_split_nom", "k_split_facteur_new", "k_split_facteur_vide", "k_split_rompu",
+                      "k_split_rompu_date", "k_date_simple", "k_date_full", "k_heure_full"]
+
+def _anthropic_key():
+    try:
+        return st.secrets.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        return ""
+
+def _import_build_updates(op, all_actions, owned):
+    """Traduit une opération lue dans un document en valeurs de widgets du formulaire.
+    Retourne (dict {clé_widget: valeur}, nom_connu_ou_None)."""
+    u = {k: "" for k in _IMPORT_TEXT_KEYS}
+    u.update({k: None for k in _IMPORT_OTHER_KEYS})
+    u["k_op_type"] = op.type
+    alias = ((app_config or {}).get("import_aliases") or {}).get(di._norm(op.name))
+    known = {"name": None}
+
+    def choose(options, key_sel, key_new, key_tick_new):
+        pool = list(options)
+        name = alias["nom"] if (alias and alias.get("nom") in pool) else di.match_name(op.name, pool)[0]
+        if name:
+            u[key_sel] = name
+            known["name"] = name
+        else:
+            u[key_sel] = _SENTINEL_NOUVEAU
+            u[key_new] = (alias or {}).get("nom") or op.name
+            if alias and alias.get("ticker"):
+                u[key_tick_new] = alias["ticker"]
+        return known["name"]
+
+    if op.type == "ACHAT":
+        choose(all_actions, "k_achat_nom", "k_achat_nom_new", "k_achat_ticker_new")
+        u["k_achat_qty"], u["k_achat_prix"] = float(op.quantity), float(op.price)
+        u["k_achat_comm"] = float(op.commission or 0.0)
+        u["k_achat_ttf"] = float(op.ttf) if op.ttf else None
+        u["k_date_full"], u["k_heure_full"] = op.date, op.time
+    elif op.type == "VENTE":
+        choose(owned, "k_vente_nom", "k_vente_nom_new", "k_vente_ticker_new")
+        u["k_vente_qty"], u["k_vente_prix"] = float(op.quantity), float(op.price)
+        u["k_vente_comm"] = float((op.commission or 0.0) + (op.ttf or 0.0))
+        u["k_date_full"], u["k_heure_full"] = op.date, op.time
+    elif op.type == "DIVIDENDE":
+        name = choose(owned, "k_div_nom", "k_div_nom_new", "k_div_ticker_new")
+        if op.quantity is not None:
+            u[f"k_div_qty__{name}" if name else "k_div_qty_new"] = float(op.quantity)
+        u["k_div_montant"] = float(op.amount or 0.0)
+        u["k_div_retenue"] = float(op.withholding) if op.withholding else None
+        u["k_div_remb"] = float(op.capital_repayment) if op.capital_repayment else None
+        u["k_date_simple"] = op.date
+    elif op.type == "SPLIT":
+        name = choose(owned, "k_split_nom", "k_split_nom_new", "k_split_ticker_new")
+        if op.factor is not None:
+            u["k_split_facteur" if name else "k_split_facteur_new"] = float(op.factor)
+        u["k_date_simple"] = op.date
+    elif op.type == "APPORT":
+        u["k_apport_montant"], u["k_date_simple"] = float(op.amount), op.date
+    elif op.type == "RETRAIT":
+        u["k_retrait_montant"], u["k_date_simple"] = float(op.amount), op.date
+    return u, known["name"]
+
+def _import_apply(updates, pointer):
+    """Callback du bouton « Pré-remplir » : s'exécute AVANT le rerun, donc avant la création des
+    widgets — seul moment où Streamlit autorise à modifier leur valeur."""
+    for k, v in updates.items():
+        st.session_state[k] = v
+    st.session_state["_imp_current"] = pointer
+
+def _import_mark_done(op_type, final_name, final_ticker):
+    """Appelé après l'enregistrement réussi d'une opération : coche l'opération importée et mémorise
+    l'association « libellé du courtier → nom/ticker choisis » pour les prochains imports."""
+    cur = st.session_state.pop("_imp_current", None)
+    last = st.session_state.get("_imp_last")
+    if not cur or not last or last["id"] != cur["doc"] or cur["type"] != op_type:
+        return
+    last["done"].add(cur["idx"])
+    if op_type in ("ACHAT", "VENTE", "DIVIDENDE", "SPLIT") and final_name and cur.get("broker_name"):
+        try:
+            aliases = app_config.setdefault("import_aliases", {})
+            aliases[di._norm(cur["broker_name"])] = {"nom": final_name, "ticker": final_ticker or ""}
+            save_config(app_config)
+        except Exception:
+            pass
+
+def _import_render_section():
+    """Encart « Importer un document » tout en haut du formulaire."""
+    last = st.session_state.get("_imp_last")
+    with st.expander("📎 Importer un document (avis d'opéré, dividendes, virement, split…)", expanded=bool(last)):
+        up = st.file_uploader("Document PDF du courtier", type=["pdf"], key="k_import_file",
+                              label_visibility="collapsed")
+        if up is not None:
+            data = up.getvalue()
+            doc_id = hashlib.sha1(data).hexdigest()
+            if not last or last["id"] != doc_id:
+                with st.spinner("Lecture du document…"):
+                    res = di.parse_document(data)
+                last = {"id": doc_id, "name": up.name, "data": data, "res": res, "done": set()}
+                st.session_state["_imp_last"] = last
+        if not last:
+            st.caption("Reconnu automatiquement : avis d'opéré, relevé de coupons/dividendes, avis d'opération "
+                       "sur titres (attribution gratuite), virements d'un relevé espèces (Boursorama). "
+                       "Autres courtiers : analyse par IA si une clé ANTHROPIC_API_KEY est configurée.")
+            return
+
+        res = last["res"]
+        c1, c2 = st.columns([4, 1])
+        c1.caption(f"📄 {last['name']} — {res.doc_label}" + (" · analyse IA" if res.method == "ia" else ""))
+        if c2.button("Oublier", key="k_import_forget", use_container_width=True):
+            st.session_state.pop("_imp_last", None)
+            st.session_state.pop("_imp_current", None)
+            _rerun_scoped()
+        for w in res.warnings:
+            st.info(w)
+
+        if not res.ops:
+            key = _anthropic_key()
+            if key and res.method != "ia":
+                if st.button("🧠 Analyser avec l'IA", key="k_import_llm", use_container_width=True,
+                             help="Envoie le texte du document (données personnelles retirées au mieux) à l'API Anthropic."):
+                    with st.spinner("Analyse en cours…"):
+                        last["res"] = di.parse_with_llm(last["data"], key, file_name=last["name"])
+                    _rerun_scoped()
+            elif not key:
+                st.caption("Pour les documents d'autres courtiers : ajoutez ANTHROPIC_API_KEY dans les secrets Streamlit.")
+            return
+
+        ops = res.ops
+        pending = [i for i in range(len(ops)) if i not in last["done"]]
+        idx = st.selectbox(
+            f"{len(ops)} opération(s) détectée(s)", list(range(len(ops))),
+            index=pending[0] if pending else 0,
+            format_func=lambda i: ("✅ " if i in last["done"] else "") + (ops[i].label or ops[i].type),
+            key=f"k_import_idx__{last['id'][:8]}",
+        )
+        op = ops[idx]
+        updates, known_name = _import_build_updates(op, _all_actions_historique_precalc, _actions_possedees_precalc)
+        dup = di.find_duplicate(op, df_transactions, known_name)
+        if dup:
+            st.warning(f"⚠️ Une opération très proche est déjà enregistrée : {dup}.")
+        if idx in last["done"]:
+            st.caption("✅ Déjà saisie depuis ce document.")
+        for n in op.notes:
+            st.caption("• " + n)
+        st.button("✨ Pré-remplir le formulaire", key="k_import_apply", type="primary", use_container_width=True,
+                  on_click=_import_apply,
+                  args=(updates, {"doc": last["id"], "idx": idx, "type": op.type, "broker_name": op.name}))
+
 @dialog_wrapper("📝 Nouvelle opération")
 def dialog_saisie_operation():
     global df_transactions
+    _import_render_section()
     st.caption("Sélectionnez un type d'opération pour afficher le formulaire correspondant.")
     op_type = st.selectbox(
         "Type d'opération", 
         ["ACHAT", "APPORT", "RETRAIT", "VENTE", "DIVIDENDE", "SPLIT"],
+        key="k_op_type",
         index=None,
         placeholder="Choisissez un type d'opération...",
         format_func=lambda x: _OP_TYPE_LABELS.get(x, x),
@@ -2680,8 +2927,6 @@ def dialog_saisie_operation():
         # différente selon ACHAT/VENTE/DIVIDENDE/SPLIT et selon "nouveau" ou "existant") ;
         # sert juste avant l'enregistrement à vérifier que rien d'obligatoire ne manque.
         required_fields = []
-
-        _SENTINEL_NOUVEAU = "➕ Ajouter un nouveau nom..."
 
         if op_type == "ACHAT":
             _field_label("Nom de l'action / ETF")
@@ -2826,8 +3071,10 @@ def dialog_saisie_operation():
                                             label_visibility="collapsed").upper().strip()
                 _field_label("Quantité")
                 k_qty = f"k_div_qty__{nom_action}"
+                if k_qty not in st.session_state:
+                    st.session_state[k_qty] = float(default_qty)
                 with _req_field("req_div_qty", k_qty, default=float(default_qty)):
-                    shares = st.number_input("Quantité", min_value=0.0, step=1.0, value=float(default_qty), format="%.0f",
+                    shares = st.number_input("Quantité", min_value=0.0, step=1.0, format="%.0f",
                                               key=k_qty, label_visibility="collapsed")
             else:
                 nom_action, ticker = "", ""
@@ -2906,8 +3153,10 @@ def dialog_saisie_operation():
                     ticker = st.text_input("Ticker", value=default_tick, key=k_tick,
                                             label_visibility="collapsed").upper().strip()
                 _field_label("Facteur de Split/Regroupement")
+                if "k_split_facteur" not in st.session_state or st.session_state["k_split_facteur"] is None:
+                    st.session_state["k_split_facteur"] = float(default_qty)
                 with _req_field("req_split_facteur", "k_split_facteur", track=required_fields):
-                    facteur_split = st.number_input("Facteur de Split/Regroupement", min_value=0.0001, step=0.01, value=float(default_qty), format="%.4f",
+                    facteur_split = st.number_input("Facteur de Split/Regroupement", min_value=0.0001, step=0.01, format="%.4f",
                                                      key="k_split_facteur", label_visibility="collapsed")
             else:
                 nom_action, ticker = "", ""
@@ -3015,6 +3264,7 @@ def dialog_saisie_operation():
                         # au lieu de relire les données fraîchement enregistrées dans Supabase — l'appli
                         # a l'air de "ne rien faire" alors que le fichier est bien à jour sur disque.
                         load_data.clear()
+                        _import_mark_done(op_type, s_nom, s_tick)
                         st.toast("✅ Opération enregistrée avec succès !", icon="✅")
                         st.rerun()
                     else:
