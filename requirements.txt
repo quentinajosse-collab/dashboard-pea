@@ -6,3 +6,5 @@ yfinance
 plotly
 python-dateutil
 supabase
+pdfplumber
+anthropic
