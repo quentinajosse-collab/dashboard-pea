@@ -108,6 +108,14 @@ st.set_page_config(
 #   - key="config"       -> value = dict de configuration (comme l'ancien config_pea.json)
 #   - key="transactions" -> value = liste de dicts (une ligne par transaction, comme l'ancien CSV)
 
+def _personal_mode():
+    """Mode perso : activé uniquement si les secrets de l'app contiennent PERSONAL_USER_ID
+    ET SUPABASE_SERVICE_KEY (donc uniquement sur votre déploiement privé, jamais sur le public)."""
+    try:
+        return bool(st.secrets.get("PERSONAL_USER_ID")) and bool(st.secrets.get("SUPABASE_SERVICE_KEY"))
+    except Exception:
+        return False
+
 def get_supabase_client():
     """Client Supabase : un par session de navigateur (st.session_state), PAS un cache
     partagé pour tout le serveur (st.cache_resource) — sinon tous les visiteurs du site
@@ -121,7 +129,8 @@ def get_supabase_client():
     if "_sb_client" not in st.session_state:
         from supabase import create_client
         url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
+        # Mode perso : clé service_role (accès direct, sans connexion). Sinon : clé publique habituelle.
+        key = st.secrets["SUPABASE_SERVICE_KEY"] if _personal_mode() else st.secrets["SUPABASE_KEY"]
         options = None
         try:
             try:
@@ -270,8 +279,16 @@ def _logout_button():
             _t.sleep(0.6)  # laisse le script du navigateur effacer les cookies avant le rerun
             st.rerun()
 
-_require_login()
-_logout_button()
+if _personal_mode():
+    # Lien perso : pas de connexion, mais un code d'accès dans l'URL (?k=...) pour que le lien ne soit pas ouvert à tous
+    if st.query_params.get("k") != st.secrets.get("PERSONAL_ACCESS_KEY"):
+        st.error("Accès refusé.")
+        st.stop()
+    st.session_state["_sb_user_id"] = st.secrets["PERSONAL_USER_ID"]
+    st.session_state["_sb_user_email"] = "(mode perso)"
+else:
+    _require_login()
+    _logout_button()
 _current_user_id = st.session_state["_sb_user_id"]
 
 def _supabase_get_value(key_name, default):
