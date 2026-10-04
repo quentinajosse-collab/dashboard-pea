@@ -23,6 +23,7 @@ import plotly.colors as pcolors
 import locale
 from dateutil.relativedelta import relativedelta
 import hashlib
+import inspect
 import urllib.parse
 try:
     import doc_import as di  # lecture des avis d'opéré / relevés (fichier doc_import.py à côté de ce script)
@@ -34,7 +35,12 @@ except Exception as _e:  # module absent ou dépendance manquante : l'appli dém
 # Compatibilité st.dialog (renommé depuis st.experimental_dialog selon les versions de Streamlit)
 _dialog_decorator = getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None)
 
-def dialog_wrapper(title, width="small"):
+try:
+    _DIALOG_SUPPORTS_DISMISS = _dialog_decorator is not None and "on_dismiss" in inspect.signature(_dialog_decorator).parameters
+except Exception:
+    _DIALOG_SUPPORTS_DISMISS = False
+
+def dialog_wrapper(title, width="small", on_dismiss=None):
     """Ouvre une fenêtre modale (st.dialog / st.experimental_dialog selon la version
     de Streamlit installée). Si aucune des deux n'est disponible (version trop ancienne),
     on retombe simplement sur un affichage inline avec un message d'information.
@@ -42,8 +48,12 @@ def dialog_wrapper(title, width="small"):
     version de Streamlit installée ne connaît pas encore ce paramètre, il est simplement
     ignoré (fenêtre à la taille par défaut) plutôt que de faire planter toute l'application."""
     if _dialog_decorator is not None:
+        kwargs = {"width": width}
+        # on_dismiss (Streamlit récent) : permet de savoir quand l'utilisateur ferme la fenêtre avec la croix
+        if on_dismiss is not None and _DIALOG_SUPPORTS_DISMISS:
+            kwargs["on_dismiss"] = on_dismiss
         try:
-            return _dialog_decorator(title, width=width)
+            return _dialog_decorator(title, **kwargs)
         except TypeError:
             return _dialog_decorator(title)
 
@@ -361,7 +371,7 @@ if not app_config.get("user_name"):
     def _dialog_premier_lancement():
         st.markdown("Avant d'afficher votre dashboard, quelques informations rapides :")
         with st.form("form_premier_lancement"):
-            _fl_nom = st.text_input("Quel est votre nom ?", placeholder="Ex : Quentin")
+            _fl_nom = st.text_input("Quel est votre nom ?", placeholder="Ex : Marie")
             _fl_courtier = st.text_input("Quel est votre courtier ?", placeholder="Ex : Boursorama, Trade Republic...")
             if st.form_submit_button("Valider", type="primary", use_container_width=True):
                 if not _fl_nom.strip():
@@ -1697,7 +1707,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
     # Notre propre apply_chart_theme() gère déjà tout le style, ce thème n'est donc pas nécessaire.
     st.plotly_chart(fig, use_container_width=True, theme=None, key=f"{key_prefix}_heatmap_monthly")
 
-_FAILED_TICKERS = {"ALACT", "ALESK.PA"}
+_FAILED_TICKERS = set()  # se remplit automatiquement avec les tickers dont le cours est introuvable
 
 @st.cache_data(ttl=600)
 def _get_live_price_real(ticker):
@@ -2835,11 +2845,18 @@ def _import_apply(updates, pointer):
 def _import_mark_done(op_type, final_name, final_ticker):
     """Appelé après l'enregistrement réussi d'une opération : coche l'opération importée et mémorise
     l'association « libellé du courtier → nom/ticker choisis » pour les prochains imports."""
+    st.session_state["_imp_has_pending"] = False
     cur = st.session_state.pop("_imp_current", None)
     last = st.session_state.get("_imp_last")
     if not cur or not last or last["id"] != cur["doc"] or cur["type"] != op_type:
         return
     last["done"].add(cur["idx"])
+    # Reste-t-il des opérations à saisir dans ce document ? Si oui, la fenêtre reste ouverte et
+    # la liste se positionne sur la suivante.
+    _restantes = [i for i in range(len(last["res"].ops)) if i not in last["done"]]
+    if _restantes:
+        st.session_state["_imp_has_pending"] = True
+        st.session_state["_imp_next_idx"] = (last["id"][:8], _restantes[0])
     if op_type in ("ACHAT", "VENTE", "DIVIDENDE", "SPLIT") and final_name and cur.get("broker_name"):
         try:
             aliases = app_config.setdefault("import_aliases", {})
@@ -2895,6 +2912,9 @@ def _import_render_section():
 
         ops = res.ops
         pending = [i for i in range(len(ops)) if i not in last["done"]]
+        _nxt = st.session_state.pop("_imp_next_idx", None)
+        if _nxt and _nxt[0] == last["id"][:8]:
+            st.session_state[f"k_import_idx__{_nxt[0]}"] = _nxt[1]
         idx = st.selectbox(
             f"{len(ops)} opération(s) détectée(s)", list(range(len(ops))),
             index=pending[0] if pending else 0,
@@ -2914,7 +2934,11 @@ def _import_render_section():
                   on_click=_import_apply,
                   args=(updates, {"doc": last["id"], "idx": idx, "type": op.type, "broker_name": op.name}))
 
-@dialog_wrapper("📝 Nouvelle opération")
+def _op_dialog_closed():
+    """Appelé quand l'utilisateur ferme la fenêtre « Nouvelle opération » avec la croix."""
+    st.session_state["_op_dialog_open"] = False
+
+@dialog_wrapper("📝 Nouvelle opération", on_dismiss=_op_dialog_closed)
 def dialog_saisie_operation():
     global df_transactions
     _import_render_section()
@@ -3290,6 +3314,10 @@ def dialog_saisie_operation():
                         # a l'air de "ne rien faire" alors que le fichier est bien à jour sur disque.
                         load_data.clear()
                         _import_mark_done(op_type, s_nom, s_tick)
+                        # La fenêtre se referme après l'enregistrement, sauf s'il reste des opérations
+                        # à saisir dans le document importé (ex. relevé de dividendes à plusieurs lignes).
+                        if not st.session_state.get("_imp_has_pending"):
+                            st.session_state["_op_dialog_open"] = False
                         st.toast("✅ Opération enregistrée avec succès !", icon="✅")
                         st.rerun()
                     else:
@@ -4195,7 +4223,8 @@ def get_portfolio_history(df):
 # ==========================================
 # 4. INTERFACE PRINCIPALE
 # ==========================================
-st.title(f"📊 Tableau de Bord PEA - {app_config.get('user_name', 'Quentin')}")
+_titre_nom = (app_config.get("user_name") or "").strip()
+st.title("📊 Tableau de Bord PEA" + (f" - {_titre_nom}" if _titre_nom else ""))
 
 if not df_transactions.empty:
     pea_opening_dt = df_transactions["Date_Heure"].min()
@@ -4392,14 +4421,26 @@ def _ops_bar_fragment():
     col_new_op, col_sim_op = st.columns(2, gap="small")
     with col_new_op:
         with st.container(key="new_op_btn_wrap"):
-            if st.button("➕ Nouvelle opération", type="primary", key="add_op_main_btn", use_container_width=True):
-                with st.spinner("⏳ Ouverture du formulaire..."):
-                    dialog_saisie_operation()
+            _new_clicked = st.button("➕ Nouvelle opération", type="primary", key="add_op_main_btn", use_container_width=True)
     with col_sim_op:
         with st.container(key="sim_op_btn_wrap"):
-            if st.button("🧪 Simulation nouvelle opération", key="sim_op_main_btn", use_container_width=True):
-                with st.spinner("⏳ Ouverture du simulateur..."):
-                    dialog_simulation_operation()
+            _sim_clicked = st.button("🧪 Simulation nouvelle opération", key="sim_op_main_btn", use_container_width=True)
+
+    # Une seule fenêtre à la fois. La fenêtre « Nouvelle opération » est mémorisée comme « ouverte »
+    # (st.session_state["_op_dialog_open"]) et ré-ouverte à chaque rechargement du script, tant que
+    # l'utilisateur ne l'a pas fermée lui-même (croix) ou enregistré l'opération. Ainsi, quitter
+    # l'onglet sur téléphone puis revenir ne la ferme plus.
+    if _sim_clicked:
+        st.session_state["_op_dialog_open"] = False
+        with st.spinner("⏳ Ouverture du simulateur..."):
+            dialog_simulation_operation()
+    elif _new_clicked:
+        if _DIALOG_SUPPORTS_DISMISS:
+            st.session_state["_op_dialog_open"] = True
+        with st.spinner("⏳ Ouverture du formulaire..."):
+            dialog_saisie_operation()
+    elif st.session_state.get("_op_dialog_open") and _DIALOG_SUPPORTS_DISMISS:
+        dialog_saisie_operation()
 
 with st.container(key="sticky_ops_bar", border=True):
     _ops_bar_fragment()
