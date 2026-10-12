@@ -25,6 +25,7 @@ from dateutil.relativedelta import relativedelta
 import hashlib
 import inspect
 import urllib.parse
+from html import escape as _esc
 try:
     import doc_import as di  # lecture des avis d'opéré / relevés (fichier doc_import.py à côté de ce script)
     _IMPORT_ERR = None
@@ -789,34 +790,53 @@ st.markdown(
     div[data-testid="stMetricDelta"] { font-size: 0.8rem !important; font-weight: 700 !important; }
     div[data-testid="stMetricLabel"] p { font-weight: 600; letter-spacing: 0.01em; }
 
-    /* Défilement horizontal des rangées de cartes HTML (même hors mobile, si l'écran est trop étroit) */
-    .h-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    /* Cartes HTML en grille : jamais tronquées, jamais de défilement horizontal. */
+    .pea-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin: 10px 0 6px 0; }
+    .pea-stat { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 14px; text-align: center; }
+    .pea-stat .k { font-size: 0.72rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.04em; }
+    .pea-stat .v { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-top: 2px; }
+    .pea-pills { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 6px 0; }
+    .pea-pill { display: flex; justify-content: space-between; align-items: center; gap: 10px; border-radius: 10px;
+                padding: 7px 14px; font-size: 0.85rem; }
+    .pea-pill b { font-weight: 800; white-space: nowrap; }
+    .pea-head { text-align: center; padding: 6px 0 2px 0; }
+    .pea-head .k { font-size: 0.78rem; color: #64748b; font-weight: 600; }
+    .pea-head .v { font-size: 2.3rem; font-weight: 800; color: #0f172a; line-height: 1.15; }
+    .pea-head .s { font-size: 0.85rem; color: #64748b; margin-top: 2px; }
+    /* Cartes annuelles cliquables (Dividendes / Frais) : au clic (ou au survol), une infobulle
+       s'affiche AU-DESSUS de la carte, comme sur les cartographies mensuelles. */
+    .pea-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; margin-top: 6px; }
+    .pea-card { position: relative; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 8px;
+                text-align: center; cursor: pointer; outline: none; box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+                -webkit-tap-highlight-color: transparent; }
+    .pea-card .k { font-size: 0.72rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.04em; }
+    .pea-card .v { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-top: 2px; }
+    .pea-tip { display: none; position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 50; background: #0f172a; color: #ffffff;
+               border-radius: 8px; padding: 8px 12px; font-size: 0.78rem; line-height: 1.5; text-align: left; white-space: nowrap;
+               box-shadow: 0 6px 18px rgba(15,23,42,0.30); pointer-events: none; }
+    .pea-card:hover .pea-tip, .pea-card:focus .pea-tip { display: block; }
+    @media (min-width: 641px) { .pea-card:last-child .pea-tip { left: auto; right: 0; } }
 
     /* ===== Affichage téléphone ===== */
     @media (max-width: 640px) {
         .main .block-container, [data-testid="stMainBlockContainer"] {
             padding-left: 0.75rem !important; padding-right: 0.75rem !important;
         }
-        /* Une SECTION (expander contenant des colonnes) = UN SEUL bloc glissable horizontalement :
-           tout le contenu (toutes les rangées, graphiques compris) est large de 720 px et se
-           décale ensemble au glissement, au lieu que chaque rangée défile séparément. */
-        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])):not(:has([class*="st-key-stack_"])) [data-testid="stExpanderDetails"],
-        div[class*="st-key-slide_"] {
-            overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin; padding-bottom: 6px;
+        /* Plus aucun glissement horizontal : toute rangée de colonnes passe à la ligne, 2 colonnes par
+           ligne (une colonne seule occupe toute la largeur). Les rangées « compact_cols » (champs de
+           saisie) et la barre fixe du bas gardent leurs propres règles, plus spécifiques. */
+        [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 0.6rem !important; }
+        [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            flex: 1 1 calc(50% - 0.6rem) !important; min-width: calc(50% - 0.6rem) !important; width: auto !important;
         }
-        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])):not(:has([class*="st-key-stack_"])) [data-testid="stExpanderDetails"] > *,
-        div[class*="st-key-slide_"] > * {
-            min-width: 520px;
-        }
-        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])):not(:has([class*="st-key-stack_"])) [data-testid="stHorizontalBlock"],
-        div[class*="st-key-slide_"] [data-testid="stHorizontalBlock"] {
-            flex-wrap: nowrap !important; gap: 0.6rem !important;
-        }
-        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])):not(:has([class*="st-key-stack_"])) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
-        div[class*="st-key-slide_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-            min-width: 0 !important;
-        }
-        /* Rangées de filtres : champs réduits, côte à côte (2 par ligne) au lieu d'une pile verticale */
+        .pea-stats { grid-template-columns: 1fr; }
+        .pea-head .v { font-size: 1.9rem; }
+        .pea-wl .hm { display: none; }
+        .pea-wl th, .pea-wl td { padding: 5px 3px !important; font-size: 0.7rem !important; white-space: normal !important; }
+        .pea-cards { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .pea-card:nth-child(3n+2) .pea-tip { left: 50%; transform: translateX(-50%); }
+        .pea-card:nth-child(3n) .pea-tip { left: auto; right: 0; }
+        /* Rangées de champs : réduits, côte à côte (2 par ligne) */
         div[class*="st-key-compact_cols"] [data-testid="stHorizontalBlock"] {
             flex-wrap: nowrap !important; gap: 0.5rem !important;
         }
@@ -828,15 +848,6 @@ st.markdown(
         div[class*="st-key-compact_cols"] label p { font-size: 0.74rem !important; }
         div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div { font-size: 1.2rem !important; }
         .stTabs [data-baseweb="tab"] { padding: 0 10px; font-size: 0.85rem; }
-        /* Simulateurs : colonnes empilées (valeurs modifiables en haut, graphiques en dessous) */
-        div[class*="st-key-stack_"] [data-testid="stHorizontalBlock"] {
-            flex-direction: column !important; flex-wrap: nowrap !important; gap: 0.9rem !important;
-        }
-        div[class*="st-key-stack_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
-            width: 100% !important; min-width: 100% !important; flex: 1 1 100% !important;
-        }
-        .h-scroll { flex-wrap: nowrap !important; padding-bottom: 6px; }
-        .h-scroll > div { flex: 0 0 auto !important; min-width: 150px !important; }
         /* À droite : ~15 % de la largeur laissés libres pour le bouton rouge « Manage app » et la
            pastille de profil que Streamlit Community Cloud affiche par-dessus l'app (ils sont dans la
            page parente, impossibles à masquer depuis ici) — les boutons ne passent plus dessous. */
@@ -1017,6 +1028,54 @@ _SCRUB_JS = r"""
 """
 
 
+# Infobulle des cartographies (graphiques marqués layout.meta == "pea-tip-top") : posée AU-DESSUS de la case
+# touchée (centrée sur elle) pour que le doigt ne la cache pas. Si la case est sur la première ligne
+# (pas de place au-dessus dans le graphique), elle passe en dessous.
+_TIP_JS = r"""
+(function () {
+  var P = window.parent;
+  if (!P || P.__peaTip1) return;
+  P.__peaTip1 = true;
+  var code = '(' + function () {
+    function plotOf(el) { return el && el.closest ? el.closest('.js-plotly-plot') : null; }
+    function place(gd, pt) {
+      var hl = gd.querySelector('.hoverlayer .hovertext');
+      var svg = gd.querySelector('.main-svg');
+      if (!hl || !svg || !gd._fullLayout) return;
+      var xa = gd._fullLayout.xaxis, ya = gd._fullLayout.yaxis;
+      var s = svg.getBoundingClientRect();
+      var cx = s.left + xa._offset + xa.d2p(pt.x);
+      var cy = s.top + ya._offset + ya.d2p(pt.y);
+      var ch = Math.abs(ya.d2p(1) - ya.d2p(0));
+      var r = hl.getBoundingClientRect();
+      var left = Math.min(Math.max(cx - r.width / 2, s.left + 4), s.right - r.width - 4);
+      var top = cy - ch / 2 - r.height - 8;
+      if (top < s.top + 2) top = cy + ch / 2 + 8;
+      var m = /translate\(\s*([-\d.e]+)[ ,]+([-\d.e]+)\s*\)/.exec(hl.getAttribute('transform') || '');
+      if (!m) return;
+      hl.setAttribute('transform', 'translate(' + (parseFloat(m[1]) + left - r.left) + ',' + (parseFloat(m[2]) + top - r.top) + ')');
+    }
+    function arm(e) {
+      var gd = plotOf(e.target);
+      if (!gd || gd.__peaTipOn || !gd.layout || gd.layout.meta !== 'pea-tip-top' || !gd.on) return;
+      gd.__peaTipOn = true;
+      gd.on('plotly_hover', function (ev) {
+        var pt = ev && ev.points && ev.points[0];
+        if (!pt) return;
+        setTimeout(function () { place(gd, pt); }, 0);
+        requestAnimationFrame(function () { place(gd, pt); });
+      });
+    }
+    window.addEventListener('mouseover', arm, { capture: true, passive: true });
+    window.addEventListener('touchstart', arm, { capture: true, passive: true });
+  } + ')();';
+  var s = P.document.createElement('script');
+  s.textContent = code;
+  P.document.head.appendChild(s);
+})();
+"""
+
+
 def _plotly_chart(fig, **kwargs):
     """st.plotly_chart sans barre d'outils ni zoom : le graphique ne peut pas être déformé ou déplacé.
     Doigt maintenu puis glissé = l'infobulle suit le doigt sur tout le graphique (y compris sous la
@@ -1032,11 +1091,11 @@ def _plotly_chart(fig, **kwargs):
     fig.update_yaxes(fixedrange=True)
     cfg.update({"scrollZoom": False, "doubleClick": False, "displayModeBar": False, "displaylogo": False})
     # Injection (une seule fois par session) du script « doigt maintenu → l'infobulle suit le doigt ».
-    if not st.session_state.get("_pea_scrub_injected2"):
-        st.session_state["_pea_scrub_injected2"] = True
+    if not st.session_state.get("_pea_scrub_injected3"):
+        st.session_state["_pea_scrub_injected3"] = True
         try:
             import streamlit.components.v1 as _components
-            _components.html("<script>" + _SCRUB_JS + "</script>", height=0)
+            _components.html("<script>" + _SCRUB_JS + _TIP_JS + "</script>", height=0)
         except Exception:
             pass
     return st.plotly_chart(fig, config=cfg, **kwargs)
@@ -1730,71 +1789,47 @@ def get_quantile_level_styles(vals_arr):
             styles.append(f'background-color: {reds_bg[lvl]}; color: {reds_txt[lvl]}; font-weight: 600;')
     return styles
 
-def _fmt_breakdown_tooltip(lines):
-    """Assemble une liste de lignes 'X : Y €' en texte multi-ligne utilisable comme
-    attribut HTML title (tooltip natif du navigateur au survol)."""
-    return "\n".join(lines)
+def _pea_tip_html(titre, total_txt, lines, accent_color):
+    """Infobulle HTML (affichée au clic/survol de la carte, au-dessus d'elle) : titre, total, puis le
+    détail de la composition (« Dividende : … », « Rompu : … », « Commission : … »)."""
+    rows = "".join(f"<div>{_esc(l)}</div>" for l in lines)
+    return (f'<div class="pea-tip"><b style="color:{accent_color};">{_esc(str(titre))}</b>'
+            f'<div>Total : <b>{_esc(total_txt)}</b></div>{rows}</div>')
 
 def render_total_card(label, montant, accent_color, detail_source=None, detail_value_col=None, detail_kind=None):
-    """Affiche un total général sous la même forme de carte stylée que les cartes annuelles
-    de render_yearly_amounts (au lieu d'un st.metric brut), pour une cohérence visuelle entre
-    le total et le détail par année affiché juste en dessous.
-
-    Si detail_source/detail_value_col/detail_kind sont fournis, la carte affiche elle aussi, au
-    survol de la souris, le détail de sa composition (mêmes tooltips que les cartes annuelles
-    ci-dessous, mais calculés sur l'ensemble des années plutôt que sur une seule)."""
-    title_attr = ""
+    """Total général sous la même forme de carte que les cartes annuelles ; un clic (ou le survol)
+    affiche le détail de sa composition sur l'ensemble des années."""
+    tip = ""
     if detail_source is not None and detail_kind is not None:
-        breakdown_lines = _breakdown_lines_for_kind(detail_source, detail_kind, detail_value_col)
-        if breakdown_lines:
-            tooltip_txt = _fmt_breakdown_tooltip(breakdown_lines).replace('"', "'")
-            title_attr = f' title="{tooltip_txt}"'
+        lines = _breakdown_lines_for_kind(detail_source, detail_kind, detail_value_col)
+        if lines:
+            tip = _pea_tip_html("Total général", fmt_eur(montant), lines, accent_color)
     st.markdown(
-        (
-            f'<div{title_attr} style="background:#ffffff; border:1px solid #e2e8f0; border-left:6px solid {accent_color}; '
-            f'border-radius:10px; padding:14px 18px; margin-bottom:4px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);{" cursor: help;" if title_attr else ""}">'
-            f'<div style="font-size:0.74rem; color:#64748b; text-transform:uppercase; font-weight:700; '
-            f'letter-spacing:0.04em;">{label}</div>'
-            f'<div style="font-size:1.55rem; font-weight:800; color:#0f172a; margin-top:3px;">{fmt_eur(montant)}</div>'
-            '</div>'
-        ),
+        f'<div class="pea-card" tabindex="0" style="border-left:6px solid {accent_color}; padding:14px 18px; text-align:left; '
+        f'margin-bottom:4px;">'
+        f'<div class="k">{label}</div>'
+        f'<div style="font-size:1.55rem; font-weight:800; color:#0f172a; margin-top:3px;">{fmt_eur(montant)}</div>{tip}</div>',
         unsafe_allow_html=True
     )
 
 def render_yearly_amounts(yearly_series, accent_color, detail_source=None, detail_value_col=None, detail_kind=None):
-    """Affiche un total par année sous forme de petites cartes claires (au lieu d'une ligne de
-    texte séparée par des '|'), triées de l'année la plus récente à la plus ancienne.
-
-    Si detail_source/detail_value_col/detail_kind sont fournis, chaque carte affiche au survol
-    de la souris (tooltip natif du navigateur, via l'attribut title) le détail de la
-    composition du montant de l'année ("Dont Courtage : ..., Dont TTF : ...", etc.)."""
-    # NB : le HTML est construit ENTIÈREMENT sur une seule ligne par carte (aucune indentation
-    # ni retour à la ligne à l'intérieur du bloc). Streamlit/Markdown interprète tout texte
-    # indenté de 4 espaces ou plus comme un bloc de code et l'affiche tel quel au lieu de le
-    # rendre en HTML : c'est ce qui causait l'affichage du code brut au lieu des cartes
-    # (bug visible sur les onglets Dividendes et Frais).
-    cards_html = ""
+    """Un total par année sous forme de petites cartes (la plus récente d'abord). Un clic (ou le survol)
+    sur une carte affiche, au-dessus d'elle, l'année, le total et la provenance du montant."""
+    # NB : HTML construit sur une seule ligne par carte (pas d'indentation de 4 espaces ni de ligne vide :
+    # Markdown l'afficherait comme du code).
+    cards = []
     for an, montant in sorted(yearly_series.items(), key=lambda x: x[0], reverse=True):
-        title_attr = ""
+        tip = ""
         if detail_source is not None and detail_kind is not None and "Date_Heure" in detail_source.columns:
-            df_an_detail = detail_source[detail_source["Date_Heure"].dt.year == an]
-            breakdown_lines = _breakdown_lines_for_kind(df_an_detail, detail_kind, detail_value_col)
-            if breakdown_lines:
-                tooltip_txt = _fmt_breakdown_tooltip(breakdown_lines).replace('"', "'")
-                title_attr = f' title="{tooltip_txt}"'
-        cards_html += (
-            f'<div{title_attr} style="background:#ffffff; border:1px solid #e2e8f0; border-left:4px solid {accent_color}; '
-            f'border-radius:10px; padding:10px 16px; min-width:110px; text-align:center; cursor: help; '
-            f'box-shadow: 0 1px 2px rgba(0,0,0,0.03);">'
-            f'<div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; '
-            f'letter-spacing:0.04em;">{an}</div>'
-            f'<div style="font-size:1.05rem; font-weight:700; color:#0f172a; margin-top:2px;">{fmt_eur(montant)}</div>'
-            f'</div>'
+            df_an = detail_source[detail_source["Date_Heure"].dt.year == an]
+            lines = _breakdown_lines_for_kind(df_an, detail_kind, detail_value_col)
+            if lines:
+                tip = _pea_tip_html(an, fmt_eur(montant), lines, accent_color)
+        cards.append(
+            f'<div class="pea-card" tabindex="0" style="border-left:4px solid {accent_color};">'
+            f'<div class="k">{an}</div><div class="v">{fmt_eur(montant)}</div>{tip}</div>'
         )
-    st.markdown(
-        f'<div class="h-scroll" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:6px;">{cards_html}</div>',
-        unsafe_allow_html=True
-    )
+    st.markdown(f'<div class="pea-cards">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 def _breakdown_lines_for_kind(df_subset, kind, value_col=None):
     """Construit les lignes de détail ('Commission : xx €', ...) pour un sous-ensemble de
@@ -1830,7 +1865,7 @@ def _fmt_cell_heat(v):
         return f"{v:.0f}"
     return f"{v:.1f}".replace(".", ",")
 
-def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, unit_label="€", date_ouverture=None, breakdown_kind=None):
+def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, date_ouverture=None, breakdown_kind=None):
     """Cartographie mensuelle : une ligne par année (la plus récente en haut), un mois par colonne,
     montant compact écrit dans chaque case, dégradé blanc -> couleur d'accent, légende horizontale
     sous le graphique. Axes numériques (0..11 / 0..n-1) avec libellés personnalisés : cases carrées-ish,
@@ -1922,6 +1957,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
             tickfont=dict(size=11), automargin=False,
         ),
     )
+    fig.update_layout(meta="pea-tip-top")  # infobulle posée au-dessus de la case (voir _TIP_JS)
     apply_chart_theme(fig)
     _plotly_chart(fig, use_container_width=True, theme=None, key=f"{key_prefix}_heatmap_monthly")
 
@@ -1943,7 +1979,7 @@ _ALLOC_HTML = r"""
   html, body { margin: 0; padding: 0; background: transparent; }
   #root { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center;
           font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); padding: 4px 2px; }
-  #wrap { position: relative; width: 250px; flex: 0 0 250px; margin-top: 46px; }
+  #wrap { position: relative; width: 250px; flex: 0 0 250px; margin-top: 6px; }
   svg { width: 250px; height: 250px; display: block; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
   .slice.dim { opacity: .28; }
@@ -2033,7 +2069,7 @@ _ALLOC_HTML = r"""
     var mid = (ang[i][0] + ang[i][1]) / 2, p = pt(R + 4, mid), box = svg.getBoundingClientRect(), sc = box.width / 250;
     tip.innerHTML = '<b></b><br>' + d.v + ' · ' + d.pt + ' %'; tip.querySelector('b').textContent = d.n;
     var x = p[0] * sc, y = p[1] * sc;
-    tip.style.left = Math.min(Math.max(x, 60), box.width - 60) + 'px'; tip.style.top = Math.max(y, 30) + 'px';
+    tip.style.left = Math.min(Math.max(x, 60), box.width - 60) + 'px'; tip.style.top = Math.max(y, 46) + 'px';
     tip.className = 'on';
   }
   document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (sel >= 0) select(-1); });
@@ -2122,43 +2158,18 @@ def _render_allocation(df_active, cash):
             .replace("__TOTAL__", json.dumps(fmt_eur(total_centre), ensure_ascii=False)))
     # Hauteur « pire cas » (anneau au-dessus de la légende, écran étroit) ; le script la réduit
     # automatiquement à la hauteur réelle dès que le composant est affiché.
-    components.html(page, height=290 + 34 * len(rows))
+    components.html(page, height=260 + 34 * len(rows))
 
 
-def _estimer_date_atteinte(cumul_jour, cible):
-    """Estimation par régression linéaire sur l'historique quotidien des apports nets cumulés : date à
-    laquelle `cible` serait atteinte au rythme moyen constaté (à titre indicatif)."""
-    if cible is None or cible <= 0:
-        return "—"
-    dernier = float(cumul_jour.iloc[-1])
-    if dernier >= cible:
-        return "Déjà atteint"
-    if len(cumul_jour) < 30:
-        return "— (historique trop court)"
-    pente, _ = np.polyfit(np.arange(len(cumul_jour), dtype=float), cumul_jour.to_numpy(dtype=float), 1)
-    if pente <= 0:
-        return "— (rythme nul)"
-    jours = (cible - dernier) / pente
-    if jours > 365 * 60:
-        return "—"
-    d = pd.Timestamp.today().normalize() + pd.Timedelta(days=float(jours))
-    return f"{d.day:02d} {mois_fr(d).lower()}"
-
-
-def _apports_progress_card(titre, pct, restant, date_txt, color):
-    pct_c = max(0.0, min(pct, 100.0))
-    pct_str_card = f"{pct:,.1f}".replace(",", " ").replace(".", ",")
+def _progress_bar_html(pct, gradient, glow_color, texte):
+    """Barre de progression pleine largeur (objectif annuel, net conservé après retrait)."""
+    pct_c = max(0.0, min(float(pct), 100.0))
     return (
-        '<div style="flex:1; min-width:260px; background:#ffffff; border:1px solid #e2e8f0; border-left:4px solid '
-        f'{color}; border-radius:12px; padding:12px 16px;">'
-        f'<div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">{titre}</div>'
-        '<div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:6px;">'
-        f'<span class="num-mono" style="font-size:1.35rem; font-weight:700; color:#0f172a;">{pct_str_card} %</span>'
-        f'<span class="num-mono" style="font-size:0.85rem; color:#475569;">reste {fmt_eur(restant)}</span></div>'
-        '<div style="background:#e2e8f0; border-radius:999px; height:10px; overflow:hidden; margin-top:8px;">'
-        f'<div style="width:{pct_c:.1f}%; height:100%; background:{color}; border-radius:999px;"></div></div>'
-        f'<div style="font-size:0.78rem; color:#64748b; margin-top:8px;">Date estimée d\'atteinte : <b class="num-mono" style="color:#0f172a;">{date_txt}</b></div>'
-        '</div>'
+        '<div style="background:#e2e8f0; border-radius:999px; height:34px; overflow:hidden; position:relative; box-shadow: inset 0 2px 5px rgba(0,0,0,0.10);">'
+        f'<div style="width:{pct_c}%; height:100%; background:{gradient}; border-radius:999px; transition:width 0.6s ease-in-out; position:relative; box-shadow: 0 0 14px {glow_color}66;">'
+        '<div style="position:absolute; inset:0; border-radius:999px; background:linear-gradient(180deg, rgba(255,255,255,0.40) 0%, rgba(255,255,255,0.05) 45%, rgba(255,255,255,0) 60%);"></div></div>'
+        '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:0 8px; text-align:center; '
+        f'font-size:0.88rem; font-weight:800; color:#0f172a; text-shadow: 0 1px 3px rgba(255,255,255,0.75);">{texte}</div></div>'
     )
 
 
@@ -4687,11 +4698,14 @@ if not df_transactions.empty:
     diff = relativedelta(today_date, pea_opening_dt.normalize())
     anciennete_str = f"{diff.years} an(s) {diff.months} mois {diff.days} jour(s)"
 
-    st.markdown(f"🗓️ **Date d'ouverture du PEA :** {pea_opening_date} (Ancienneté : **{anciennete_str}**)")
-    st.markdown(f"🏦 **Courtier :** **{app_config.get('broker', 'Non renseigné')}**")
+    st.markdown(
+        f"🗓️ **Date d'ouverture du PEA :** {pea_opening_date}  \n"
+        f"<span style='color:#64748b;'>(Ancienneté : **{anciennete_str}**)</span>",
+        unsafe_allow_html=True,
+    )
 else:
     st.markdown("🗓️ **Date d'ouverture du PEA :** Aucune transaction")
-    st.markdown(f"🏦 **Courtier :** **{app_config.get('broker', 'Non renseigné')}**")
+st.markdown(f"🏦 **Courtier :** **{app_config.get('broker', 'Non renseigné')}**")
 
 # Note : le réglage "Commission courtier (%)" qui vivait ici en permanence sur le dashboard a
 # été retiré (redondant avec le même réglage, disponible et modifiable directement en haut de
@@ -5165,13 +5179,13 @@ def _tab_open(_tab):
 # de conservation de l'état). Les clés ci-dessous sont extraites automatiquement du code de
 # chaque onglet (widgets ayant un key= littéral).
 _TAB_STATE_KEYS = {
-    "tab_overview": ("apport_prevision_input", ),
+    "tab_overview": ("k_objectif_cible", "apport_prevision_input", ),
     "tab_apports": (),
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
     "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
     "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
-    "tab_simulateur": ("k_horizon_projection", "k_apport_annuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_pea_5ans", "k_pat_sim_depart", "k_pat_sim_invest", "k_pat_sim_annees", "k_pat_sim_rend", "k_pat_sim_impot", "k_pat_sim_retrait", "k_pat_sim_infl", ),
+    "tab_simulateur": ("k_horizon_projection", "k_apport_annuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_invest", "k_rp_annees", "k_rp_rend", "k_rp_impot", "k_rp_retrait", ),
 }
 _tab_objs_by_name = {
     "tab_overview": tab_overview, "tab_positions": tab_positions, "tab_apports": tab_apports, "tab_classements": tab_classements,
@@ -5244,147 +5258,122 @@ if _tab_open(tab_overview):
         # alerte de ce type. N'affiche rien si la watchlist est vide ou si aucune valeur suivie n'a de
         # zone d'achat définie, pour ne pas surcharger le haut du dashboard sans raison. ---
         with st.expander("🎯 Objectif Annuel", expanded=True):
-            col_left, col_right = st.columns([1, 3])
-            with col_left:
-                with st.container(border=True):
-                    st.markdown("**💰 Objectif de fin d'année**")
+            with st.container(border=True):
+                st.markdown("**💰 Objectif de fin d'année & ➕ épargne prévue**")
+                with st.container(key="compact_cols_objectif"):
+                    col_obj_cible, col_obj_epargne = st.columns(2)
                     current_target_val = int(app_config.get("yearly_target", 10000))
-                    new_target = st.number_input(
+                    new_target = col_obj_cible.number_input(
                         "Valeur totale visée (€)",
-                        min_value=0,
-                        step=1,
-                        value=current_target_val,
-                        format="%d",
-                        label_visibility="visible"
+                        min_value=0, step=1, value=current_target_val, format="%d",
+                        key="k_objectif_cible",
                     )
-                    if new_target != current_target_val:
-                        app_config["yearly_target"] = int(new_target)
-                        _ok_cfg, _err_cfg = save_config(app_config)
-                        if not _ok_cfg:
-                            st.warning(_err_cfg)
-
-                    st.markdown("**➕ Épargne prévue**")
                     current_apport_prev_val = int(app_config.get("apport_previsionnel", 0))
-                    apport_prevision = st.number_input(
+                    apport_prevision = col_obj_epargne.number_input(
                         "Apport prévisionnel d'ici fin d'année (€)",
-                        min_value=0,
-                        step=1,
-                        value=current_apport_prev_val,
-                        format="%d",
-                        label_visibility="visible",
-                        key="apport_prevision_input"
+                        min_value=0, step=1, value=current_apport_prev_val, format="%d",
+                        key="apport_prevision_input",
                     )
-                    if apport_prevision != current_apport_prev_val:
-                        app_config["apport_previsionnel"] = int(apport_prevision)
-                        _ok_cfg2, _err_cfg2 = save_config(app_config)
-                        if not _ok_cfg2:
-                            st.warning(_err_cfg2)
+                if new_target != current_target_val:
+                    app_config["yearly_target"] = int(new_target)
+                    _ok_cfg, _err_cfg = save_config(app_config)
+                    if not _ok_cfg:
+                        st.warning(_err_cfg)
+                if apport_prevision != current_apport_prev_val:
+                    app_config["apport_previsionnel"] = int(apport_prevision)
+                    _ok_cfg2, _err_cfg2 = save_config(app_config)
+                    if not _ok_cfg2:
+                        st.warning(_err_cfg2)
 
-            with col_right:
-                # La barre de progression et "Restant à atteindre" intègrent l'épargne prévue :
-                # avant ce correctif, seul le texte "Performance requise" tout en bas en tenait
-                # compte, donc modifier ce champ ne faisait quasiment rien bouger visuellement,
-                # ce qui donnait l'impression qu'il ne servait à rien.
-                valeur_projetee = tot_value_globale + apport_prevision
-                prog_pct = (valeur_projetee / new_target * 100) if new_target > 0 else 0
-                prog_pct_clamped = max(0.0, min(prog_pct, 100.0))
-                montant_restant = max(0.0, new_target - valeur_projetee)
+            # Résultats sous les champs, sur toute la largeur.
+            # La barre de progression et "Restant à atteindre" intègrent l'épargne prévue :
+            # avant ce correctif, seul le texte "Performance requise" tout en bas en tenait
+            # compte, donc modifier ce champ ne faisait quasiment rien bouger visuellement,
+            # ce qui donnait l'impression qu'il ne servait à rien.
+            valeur_projetee = tot_value_globale + apport_prevision
+            prog_pct = (valeur_projetee / new_target * 100) if new_target > 0 else 0
+            prog_pct_clamped = max(0.0, min(prog_pct, 100.0))
+            montant_restant = max(0.0, new_target - valeur_projetee)
 
-                # Performance qu'il reste à réaliser sur les actions déjà en portefeuille pour
-                # combler l'écart à l'objectif, une fois déduit l'apport prévisionnel (qui, lui,
-                # comble l'écart en cash, sans nécessiter de performance boursière).
-                gain_necessaire = new_target - valeur_projetee
-                objectif_deja_couvert = gain_necessaire <= 0 or prog_pct >= 100
+            # Performance qu'il reste à réaliser sur les actions déjà en portefeuille pour
+            # combler l'écart à l'objectif, une fois déduit l'apport prévisionnel (qui, lui,
+            # comble l'écart en cash, sans nécessiter de performance boursière).
+            gain_necessaire = new_target - valeur_projetee
+            objectif_deja_couvert = gain_necessaire <= 0 or prog_pct >= 100
 
-                if objectif_deja_couvert:
-                    perf_necessaire_pct = 0.0
-                    perf_necessaire_str = "0,00 % (déjà couvert)"
-                elif tot_value_actions > 0:
-                    perf_necessaire_pct = (gain_necessaire / tot_value_actions) * 100
-                    perf_necessaire_str = f"{perf_necessaire_pct:,.2f} %".replace(",", " ").replace(".", ",")
-                else:
-                    perf_necessaire_pct = None
-                    perf_necessaire_str = "N/A"
+            if objectif_deja_couvert:
+                perf_necessaire_pct = 0.0
+                perf_necessaire_str = "0,00 % (déjà couvert)"
+            elif tot_value_actions > 0:
+                perf_necessaire_pct = (gain_necessaire / tot_value_actions) * 100
+                perf_necessaire_str = f"{perf_necessaire_pct:,.2f} %".replace(",", " ").replace(".", ",")
+            else:
+                perf_necessaire_pct = None
+                perf_necessaire_str = "N/A"
 
-                # Repère : rendement moyen des marchés actions sur longue période (~8 %/an), ramené
-                # au temps qu'il reste réellement d'ici la fin de l'année pour rester comparable à
-                # une performance qui, elle, ne porte que sur les mois restants.
-                RENDEMENT_MARCHE_ANNUEL = 8.0
-                today_ts = pd.Timestamp.today().normalize()
-                jours_restants_annee = max((pd.Timestamp(today_ts.year, 12, 31) - today_ts).days, 1)
-                repere_marche_periode = RENDEMENT_MARCHE_ANNUEL * (jours_restants_annee / 365.0)
+            # Repère : rendement moyen des marchés actions sur longue période (~8 %/an), ramené
+            # au temps qu'il reste réellement d'ici la fin de l'année pour rester comparable à
+            # une performance qui, elle, ne porte que sur les mois restants.
+            RENDEMENT_MARCHE_ANNUEL = 8.0
+            today_ts = pd.Timestamp.today().normalize()
+            jours_restants_annee = max((pd.Timestamp(today_ts.year, 12, 31) - today_ts).days, 1)
+            repere_marche_periode = RENDEMENT_MARCHE_ANNUEL * (jours_restants_annee / 365.0)
 
-                # Le message reflète la difficulté de la PERFORMANCE BOURSIÈRE requise (comparée à
-                # ce repère de marché), pas le % du montant déjà atteint — un objectif rempli à 20 %
-                # peut être trivial à finir si le reste vient d'un apport, et inversement.
-                if objectif_deja_couvert:
-                    grad_color = "linear-gradient(90deg, #16a34a, #4ade80)"
-                    badge = "🎉 Objectif déjà couvert"
-                    badge_color = "#16a34a"
-                    badge_detail = "Votre épargne prévue suffit, sans performance boursière supplémentaire."
-                elif perf_necessaire_pct is None:
-                    grad_color = "linear-gradient(90deg, #94a3b8, #cbd5e1)"
-                    badge = "❓ Performance indéterminée"
-                    badge_color = "#64748b"
-                    badge_detail = "Pas encore de valeur en actions pour estimer une performance requise."
-                elif perf_necessaire_pct <= repere_marche_periode * 0.5:
-                    grad_color = "linear-gradient(90deg, #16a34a, #4ade80)"
-                    badge = "🌊 Objectif très accessible"
-                    badge_color = "#16a34a"
-                    badge_detail = f"Nettement sous la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
-                elif perf_necessaire_pct <= repere_marche_periode:
-                    grad_color = "linear-gradient(90deg, #0284c7, #38bdf8)"
-                    badge = "🚀 Objectif réaliste"
-                    badge_color = "#0284c7"
-                    badge_detail = f"En ligne avec la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
-                elif perf_necessaire_pct <= repere_marche_periode * 2:
-                    grad_color = "linear-gradient(90deg, #7c3aed, #a78bfa)"
-                    badge = "⚡ Objectif ambitieux"
-                    badge_color = "#7c3aed"
-                    badge_detail = "Nécessite une performance nettement supérieure à la moyenne du marché."
-                else:
-                    grad_color = "linear-gradient(90deg, #d97706, #fbbf24)"
-                    badge = "🔥 Objectif très ambitieux"
-                    badge_color = "#d97706"
-                    badge_detail = "Nécessite une performance très supérieure à la moyenne du marché — peu probable en l'état."
+            # Le message reflète la difficulté de la PERFORMANCE BOURSIÈRE requise (comparée à
+            # ce repère de marché), pas le % du montant déjà atteint — un objectif rempli à 20 %
+            # peut être trivial à finir si le reste vient d'un apport, et inversement.
+            if objectif_deja_couvert:
+                grad_color = "linear-gradient(90deg, #16a34a, #4ade80)"
+                badge = "🎉 Objectif déjà couvert"
+                badge_color = "#16a34a"
+                badge_detail = "Votre épargne prévue suffit, sans performance boursière supplémentaire."
+            elif perf_necessaire_pct is None:
+                grad_color = "linear-gradient(90deg, #94a3b8, #cbd5e1)"
+                badge = "❓ Performance indéterminée"
+                badge_color = "#64748b"
+                badge_detail = "Pas encore de valeur en actions pour estimer une performance requise."
+            elif perf_necessaire_pct <= repere_marche_periode * 0.5:
+                grad_color = "linear-gradient(90deg, #16a34a, #4ade80)"
+                badge = "🌊 Objectif très accessible"
+                badge_color = "#16a34a"
+                badge_detail = f"Nettement sous la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
+            elif perf_necessaire_pct <= repere_marche_periode:
+                grad_color = "linear-gradient(90deg, #0284c7, #38bdf8)"
+                badge = "🚀 Objectif réaliste"
+                badge_color = "#0284c7"
+                badge_detail = f"En ligne avec la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
+            elif perf_necessaire_pct <= repere_marche_periode * 2:
+                grad_color = "linear-gradient(90deg, #7c3aed, #a78bfa)"
+                badge = "⚡ Objectif ambitieux"
+                badge_color = "#7c3aed"
+                badge_detail = "Nécessite une performance nettement supérieure à la moyenne du marché."
+            else:
+                grad_color = "linear-gradient(90deg, #d97706, #fbbf24)"
+                badge = "🔥 Objectif très ambitieux"
+                badge_color = "#d97706"
+                badge_detail = "Nécessite une performance très supérieure à la moyenne du marché — peu probable en l'état."
 
-                pct_str = f"{prog_pct:,.1f}%".replace(".", ",")
-                pct_suffix = " du montant visé (épargne prévue incluse)" if apport_prevision > 0 else " du montant visé"
+            pct_str = f"{prog_pct:,.1f}%".replace(".", ",")
+            pct_suffix = " du montant visé (épargne prévue incluse)" if apport_prevision > 0 else " du montant visé"
 
-                st.markdown(
-                    f"""
-                <div style="background:#e2e8f0; border-radius:999px; height:34px; overflow:hidden; position:relative; box-shadow: inset 0 2px 5px rgba(0,0,0,0.10);">
-                    <div style="width:{prog_pct_clamped}%; height:100%; background:{grad_color}; border-radius:999px; transition:width 0.6s ease-in-out; position:relative; box-shadow: 0 0 14px {badge_color}66;">
-                        <div style="position:absolute; inset:0; border-radius:999px; background:linear-gradient(180deg, rgba(255,255,255,0.40) 0%, rgba(255,255,255,0.05) 45%, rgba(255,255,255,0) 60%);"></div>
-                    </div>
-                    <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:0.88rem; font-weight:800; color:#0f172a; text-shadow: 0 1px 3px rgba(255,255,255,0.75);">
-                        {pct_str}{pct_suffix}
-                    </div>
+            st.markdown(
+                f"""
+            {_progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)}
+            <div class="pea-stats">
+                <div class="pea-stat"><div class="k">Actuel</div><div class="v">{fmt_eur(tot_value_globale)}</div></div>
+                <div class="pea-stat"><div class="k">Restant (après épargne prévue)</div><div class="v" style="color:{badge_color};">{fmt_eur(montant_restant)}</div></div>
+                <div class="pea-stat"><div class="k">Cible</div><div class="v">{fmt_eur(new_target)}</div></div>
+            </div>
+            <div style="margin-top: 12px; padding: 10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid {badge_color}; border-radius:8px;">
+                <div style="font-size:0.88rem; font-weight:700; color:{badge_color};">{badge}</div>
+                <div style="font-size:0.78rem; color:#64748b; margin-top:2px;">{badge_detail}</div>
+                <div style="font-size:0.82rem; font-weight:600; color:#475569; margin-top:6px;">
+                    📊 Performance requise sur vos actions d'ici fin d'année : <b style="color:#0f172a;">{perf_necessaire_str}</b>
                 </div>
-                <div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px; margin-top: 14px;">
-                    <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:140px; text-align:center;">
-                        <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Actuel</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(tot_value_globale)}</div>
-                    </div>
-                    <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:140px; text-align:center;">
-                        <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Restant (après épargne prévue)</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:{badge_color};">{fmt_eur(montant_restant)}</div>
-                    </div>
-                    <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:140px; text-align:center;">
-                        <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Cible</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(new_target)}</div>
-                    </div>
-                </div>
-                <div style="margin-top: 12px; padding: 10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid {badge_color}; border-radius:8px;">
-                    <div style="font-size:0.88rem; font-weight:700; color:{badge_color};">{badge}</div>
-                    <div style="font-size:0.78rem; color:#64748b; margin-top:2px;">{badge_detail}</div>
-                    <div style="font-size:0.82rem; font-weight:600; color:#475569; margin-top:6px;">
-                        📊 Performance requise sur vos actions d'ici fin d'année : <b style="color:#0f172a;">{perf_necessaire_str}</b>
-                    </div>
-                </div>
-                """, 
-                    unsafe_allow_html=True
-                )
+            </div>
+            """, 
+                unsafe_allow_html=True
+            )
 
 # ------------------------------------------
 # ONGLÊT 2 : POSITIONS & TRANSACTIONS
@@ -6948,41 +6937,35 @@ if _tab_open(tab_perf):
                             "Nikkei 225": ('#ca8a04', 1.5)
                         }
 
-                        col_graph, col_legend = st.columns([2.5, 1])
-
                         benchmarks = {
                             "Mon Portefeuille": (sub_history_graph["Perf_Port_Pct"], color_palette["Mon Portefeuille"][0], color_palette["Mon Portefeuille"][1])
                         }
 
-                        with col_legend:
-                            placeholder_legende = st.empty()
-                            st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-                        
-                            st.markdown("##### ⚙️ Sélection des indices à comparer")
-                        
-                            indices_options_list = list(available_indices_dict.keys())
-                        
-                            selected_benchmarks = st.multiselect(
-                                "Choisissez un indice à comparer",
-                                options=indices_options_list,
-                                default=[],
-                                label_visibility="visible",
-                                key="multiselect_indices_benchmarks",
-                                help="Sélectionnez un ou plusieurs indices pour comparer la performance de votre portefeuille."
-                            )
-
-                            st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-
-                            st.markdown("##### 📖 Descriptions des indices")
-                            desc_html = "".join([f"<p style='margin-bottom: 6px; font-size: 0.85rem;'><b>{k}</b> : {v}</p>" for k, v in available_indices_help.items()])
-                            st.markdown(
-                                f"""
-                            <div style="max-height: 140px; overflow-y: auto; padding-right: 6px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; background-color: #ffffff;">
-                                {desc_html}
-                            </div>
-                            """,
-                                unsafe_allow_html=True
-                            )
+                        # Disposition : sélection des indices AU-DESSUS, graphique pleine largeur,
+                        # légende EN DESSOUS, puis la description des indices.
+                        st.markdown("##### ⚙️ Sélection des indices à comparer")
+                        indices_options_list = list(available_indices_dict.keys())
+                        selected_benchmarks = st.multiselect(
+                            "Choisissez un indice à comparer",
+                            options=indices_options_list,
+                            default=[],
+                            label_visibility="collapsed",
+                            placeholder="Choisissez un ou plusieurs indices à comparer",
+                            key="multiselect_indices_benchmarks",
+                            help="Sélectionnez un ou plusieurs indices pour comparer la performance de votre portefeuille."
+                        )
+                        chart_slot = st.container()          # graphique (rempli plus bas)
+                        placeholder_legende = st.empty()     # légende (remplie plus bas)
+                        desc_html = "".join([f"<p style='margin-bottom: 6px; font-size: 0.85rem;'><b>{k}</b> : {v}</p>" for k, v in available_indices_help.items()])
+                        st.markdown(
+                            f"""
+                        <div style="font-size: 0.85rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 6px 0;">📖 Descriptions des indices</div>
+                        <div style="max-height: 140px; overflow-y: auto; padding-right: 6px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; background-color: #ffffff;">
+                            {desc_html}
+                        </div>
+                        """,
+                            unsafe_allow_html=True
+                        )
 
                         for b_name in selected_benchmarks:
                             if b_name in available_indices_dict:
@@ -7073,8 +7056,8 @@ if _tab_open(tab_perf):
                                 textposition=text_positions.get(name, "middle right"),
                                 cliponaxis=False,
                                 line=dict(color=color, width=width, dash='solid'),
-                                customdata=extended_y,
-                                hovertemplate=f"<b>{name}</b><br>Performance : %{{customdata:+,.2f}}%<extra></extra>".replace(".", ",")
+                                customdata=[f"{v:+,.2f}".replace(",", " ").replace(".", ",") for v in extended_y],
+                                hovertemplate=f"<b>{name}</b><br>Performance : %{{customdata}} %<extra></extra>"
                             ))
 
                         fig.add_hline(
@@ -7091,9 +7074,10 @@ if _tab_open(tab_perf):
                             paper_bgcolor='rgba(0,0,0,0)', 
                             plot_bgcolor='rgba(0,0,0,0)', 
                             hovermode="x unified", 
-                            margin=dict(l=60, r=120, t=10, b=40),
-                            yaxis_title="Performance (%)",
-                            xaxis_title="Date",
+                            margin=dict(l=8, r=64, t=10, b=8),
+                            yaxis_title="",
+                            xaxis_title="",
+                            height=380,
                             showlegend=False,
                             xaxis=dict(range=[dt_graph_start, future_date + pd.Timedelta(days=10)], autorange=False)
                         )
@@ -7101,10 +7085,9 @@ if _tab_open(tab_perf):
                     
                         fig.update_xaxes(type="date", tickformat="%d/%m/%Y", hoverformat="%d/%m/%Y", tickangle=-45, nticks=10, showticklabels=True, automargin=True)
 
-                        with col_graph:
+                        with chart_slot:
                             apply_chart_theme(fig)
-                            config_options = {"displayModeBar": True, "scrollZoom": True, "modeBarButtonsToRemove": ["lasso2d", "select2d"]}
-                            _plotly_chart(fig, use_container_width=True, theme=None, config=config_options)
+                            _plotly_chart(fig, use_container_width=True, theme=None)
 
                         nb_curves = len(benchmarks)
                         # Toujours en colonne (vertical) : l'ancien passage en "row" (horizontal) à
@@ -7118,7 +7101,8 @@ if _tab_open(tab_perf):
                         for name, data in benchmarks.items():
                             c_col = data[1]
                             v_end = final_values.get(name, 0.0)
-                            legend_html_items.append(f"<div style='display: flex; justify-content: space-between; align-items: center; {item_margin} font-size: 0.85rem;'><span style='display: inline-flex; align-items: center;'><span style='height: 10px; width: 10px; background-color: {c_col}; display: inline-block; border-radius: 50%; margin-right: 6px;'></span><b style='color: #1e293b;'>{name}</b></span><span style='color: {c_col}; font-weight: bold; margin-left: 10px;'>{v_end:+,.2f}%</span></div>".replace(".", ","))
+                            v_end_txt = f"{v_end:+,.2f}".replace(",", " ").replace(".", ",")
+                            legend_html_items.append(f"<div style='display: flex; justify-content: space-between; align-items: center; {item_margin} font-size: 0.85rem;'><span style='display: inline-flex; align-items: center;'><span style='height: 10px; width: 10px; background-color: {c_col}; display: inline-block; border-radius: 50%; margin-right: 6px;'></span><b style='color: #1e293b;'>{name}</b></span><span style='color: {c_col}; font-weight: bold; margin-left: 10px;'>{v_end_txt} %</span></div>")
                     
                         placeholder_legende.markdown(
                             f"""
@@ -8211,11 +8195,11 @@ if _tab_open(tab_watchlist):
                 "<tr style='border-bottom:2px solid #e2e8f0;'>"
                 "<th style='padding:7px 10px; text-align:left;'>Nom</th>"
                 f"<th style='{_wl_cols_droite}'>Prix Actuel</th>"
-                f"<th style='{_wl_cols_droite}'>Var. 7 jours</th>"
-                f"<th style='{_wl_cols_droite}'>Var. 30 jours</th>"
+                f"<th class='hm' style='{_wl_cols_droite}'>Var. 7 jours</th>"
+                f"<th class='hm' style='{_wl_cols_droite}'>Var. 30 jours</th>"
                 f"<th style='{_wl_cols_droite}'>Var. 6 mois</th>"
                 f"<th style='{_wl_cols_droite}'>Var. 12 mois</th>"
-                f"<th style='{_wl_cols_droite}'>Zone d'achat</th>"
+                f"<th class='hm' style='{_wl_cols_droite}'>Zone d'achat</th>"
                 f"<th style='{_wl_cols_droite}'>Écart à la zone</th>"
                 "<th style='padding:7px 10px; text-align:left;'>Statut</th>"
                 "</tr>"
@@ -8231,11 +8215,11 @@ if _tab_open(tab_watchlist):
                     f"<tr style='{row_style}'>"
                     f"<td style='padding:7px 10px;'>{c['nom']}</td>"
                     f"<td style='{_wl_cols_droite}'>{prix_cell_html}</td>"
-                    f"<td style='{_wl_cols_droite}'>{_wl_var_cell_html(*variations['semaine'])}</td>"
-                    f"<td style='{_wl_cols_droite}'>{_wl_var_cell_html(*variations['30j'])}</td>"
+                    f"<td class='hm' style='{_wl_cols_droite}'>{_wl_var_cell_html(*variations['semaine'])}</td>"
+                    f"<td class='hm' style='{_wl_cols_droite}'>{_wl_var_cell_html(*variations['30j'])}</td>"
                     f"<td style='{_wl_cols_droite}'>{_wl_var_cell_html(*variations['6m'])}</td>"
                     f"<td style='{_wl_cols_droite}'>{_wl_var_cell_html(*variations['12m'])}</td>"
-                    f"<td style='{_wl_cols_droite}'>{c['zone_txt']}</td>"
+                    f"<td class='hm' style='{_wl_cols_droite}'>{c['zone_txt']}</td>"
                     f"<td style='{_wl_cols_droite}'>{c['ecart_txt']}</td>"
                     f"<td style='padding:7px 10px;'>{c['statut_txt']}</td>"
                     "</tr>"
@@ -8243,7 +8227,7 @@ if _tab_open(tab_watchlist):
 
             st.markdown(
                 "<div style='overflow-x:auto;'>"
-                "<table style='width:100%; min-width:760px; border-collapse:collapse; font-size:0.9rem;'>"
+                "<table class='pea-wl' style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
                 f"<thead>{_header_html}</thead>"
                 f"<tbody>{''.join(_lignes_wl_html)}</tbody>"
                 "</table></div>",
@@ -8301,611 +8285,456 @@ if _tab_open(tab_watchlist):
         _watchlist_tab_fragment()
 
 # ------------------------------------------
-# ONGLÊT 7 : SIMULATEUR DE RETRAIT
+# ONGLET SIMULATEURS : projection de la valeur, revenu passif, retrait
+# Même gabarit pour les trois : valeurs modifiables EN HAUT (champs côte à côte), résultats et courbes
+# EN DESSOUS sur toute la largeur. Les cartes viennent des helpers _sim_* (CSS .pea-stat / .pea-pill).
 # ------------------------------------------
+PLAFOND_PEA_VERSEMENTS = 150000.0
+
+
+def _sim_stat(label, value, color="#0f172a"):
+    return f'<div class="pea-stat"><div class="k">{label}</div><div class="v" style="color:{color};">{value}</div></div>'
+
+
+def _sim_stats(*cards):
+    st.markdown('<div class="pea-stats">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+
+
+def _sim_headline(label, value, sub="", color="#0f172a"):
+    sub_html = f'<div class="s">{sub}</div>' if sub else ""
+    st.markdown(
+        f'<div class="pea-head"><div class="k">{label}</div><div class="v" style="color:{color};">{value}</div>{sub_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _sim_pills(rows):
+    """Lignes pleine largeur « ● libellé ........ valeur » ; rows = (libellé, valeur, point, fond, bordure, texte)."""
+    html = "".join(
+        f'<div class="pea-pill" style="background:{bg}; border:1px solid {bd}; color:{tx};">'
+        f'<span><span style="color:{dot};">●</span> {lab}</span><b>{val}</b></div>'
+        for lab, val, dot, bg, bd, tx in rows
+    )
+    st.markdown(f'<div class="pea-pills">{html}</div>', unsafe_allow_html=True)
+
+
+def _sim_info_box(titre, texte_html):
+    st.markdown(
+        '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:8px 12px 10px 12px; '
+        'margin-top:6px; text-align:center;">'
+        f'<div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">{titre}</div>'
+        f'<div style="font-size:0.88rem; font-weight:800; color:#0f172a; margin-top:2px; line-height:1.5;">{texte_html}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _plural(n, mot="an"):
+    return f"{mot}s" if n >= 2 else mot
+
+
+def _anciennete_et_perf_annualisee():
+    """(années écoulées depuis l'ouverture, performance annualisée composée). La performance est déduite de
+    « Perf. Globale » (cumul depuis l'origine) ramenée à un taux ANNUEL ; 0 si l'historique fait moins de 3 mois."""
+    annees = max((pd.Timestamp.today() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
+    if annees >= 0.25 and (1 + perf_globale / 100) > 0:
+        return annees, (1 + perf_globale / 100) ** (1 / annees) - 1
+    return annees, 0.0
+
+
+def _render_sim_projection():
+    """Projection de la valeur du portefeuille : croissance d'abord, apport ajouté en fin d'année (hypothèse
+    prudente), apports bornés par le plafond de versements du PEA (150 000 €)."""
+    st.markdown("### 📈 Projection de la Valeur du Portefeuille")
+    with st.expander("🔮 Simulation de croissance à long terme", expanded=True):
+        annees_ecoulees, perf_annualisee = _anciennete_et_perf_annualisee()
+
+        # Moyenne historique des apports : valeur de départ de la projection des versements futurs.
+        avg_apport_annuel_hist = (apports_totaux / annees_ecoulees) if annees_ecoulees >= 0.08 else apports_totaux
+        avg_apport_mensuel_hist = avg_apport_annuel_hist / 12.0
+        _default_apport_proj_hist = max(0, int(round(avg_apport_annuel_hist / 50.0) * 50))
+        _default_perf_proj_hist = round(perf_annualisee * 100, 2)
+
+        # Boutons « Revenir à la moyenne historique » : le drapeau posé par le bouton est consommé ICI, avant
+        # l'instanciation des widgets portant ces clés (sinon StreamlitAPIException).
+        if st.session_state.pop("_reset_apport_proj_pending", False):
+            app_config["apport_annuel_projection"] = _default_apport_proj_hist
+            st.session_state["k_apport_annuel_projection"] = _default_apport_proj_hist
+            _ok_r1, _err_r1 = save_config(app_config)
+            if not _ok_r1:
+                st.warning(_err_r1)
+        if st.session_state.pop("_reset_perf_proj_pending", False):
+            app_config["perf_annuelle_projection"] = _default_perf_proj_hist
+            st.session_state["k_perf_annuelle_projection"] = _default_perf_proj_hist
+            _ok_r2, _err_r2 = save_config(app_config)
+            if not _ok_r2:
+                st.warning(_err_r2)
+
+        # ---- Valeurs modifiables (en haut)
+        with st.container(border=True):
+            st.markdown("**📆 Horizon & ➕ apports**")
+            with st.container(key="compact_cols_proj_apports"):
+                col_h, col_a = st.columns(2)
+                horizon_annees = col_h.number_input(
+                    "Nombre d'années", min_value=1, max_value=50, step=1, format="%d",
+                    value=int(app_config.get("horizon_projection_annees", 10)), key="k_horizon_projection",
+                )
+                apport_annuel_proj = col_a.number_input(
+                    "Apport prévu par an (€)", min_value=0, step=1, format="%d",
+                    value=int(app_config.get("apport_annuel_projection", _default_apport_proj_hist)),
+                    key="k_apport_annuel_projection",
+                    help="Pré-rempli avec la moyenne historique de vos apports passés. Ajouté en une fois à la fin de chaque année simulée, en plus de la croissance du portefeuille.",
+                )
+            if horizon_annees != int(app_config.get("horizon_projection_annees", 10)):
+                app_config["horizon_projection_annees"] = int(horizon_annees)
+                _ok1, _err1 = save_config(app_config)
+                if not _ok1:
+                    st.warning(_err1)
+            if apport_annuel_proj != int(app_config.get("apport_annuel_projection", _default_apport_proj_hist)):
+                app_config["apport_annuel_projection"] = int(apport_annuel_proj)
+                _ok2, _err2 = save_config(app_config)
+                if not _ok2:
+                    st.warning(_err2)
+            st.caption(f"↔️ Soit environ **{fmt_eur(apport_annuel_proj / 12.0)} / mois**")
+            _sim_info_box(
+                "📊 Moyenne des apports passés",
+                f'{fmt_eur(avg_apport_annuel_hist)} / an <span style="font-weight:500; color:#64748b;">(~{fmt_eur(avg_apport_mensuel_hist)} / mois)</span>',
+            )
+            with st.container(key="btn_reset_apport_hist_wrap"):
+                if st.button("↺ Revenir à la moyenne historique", key="btn_reset_apport_hist", use_container_width=True):
+                    st.session_state["_reset_apport_proj_pending"] = True
+                    st.rerun()
+
+        with st.container(border=True):
+            st.markdown(
+                "**📊 Performance annuelle retenue**",
+                help="Pré-remplie avec la performance annualisée moyenne constatée depuis l'ouverture du PEA, modifiable librement pour la projection.",
+            )
+            perf_annuelle_proj_pct = st.number_input(
+                "Performance annuelle retenue (%)", step=0.01, format="%.2f",
+                value=float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)),
+                key="k_perf_annuelle_projection",
+                help="Utilisée pour faire croître le portefeuille d'une année sur l'autre dans la projection.",
+            )
+            if round(perf_annuelle_proj_pct, 2) != round(float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)), 2):
+                app_config["perf_annuelle_projection"] = float(perf_annuelle_proj_pct)
+                _ok3, _err3 = save_config(app_config)
+                if not _ok3:
+                    st.warning(_err3)
+            perf_annuelle_retenue = perf_annuelle_proj_pct / 100.0
+            _annees_str = f"{annees_ecoulees:.1f}".replace(".", ",")
+            _perf_hist_str = f"{perf_annualisee * 100:+.2f}".replace(".", ",")
+            _sim_info_box(
+                "📊 Moyenne historique constatée",
+                f'{_perf_hist_str} % / an <span style="font-weight:500; color:#64748b;">(depuis l\'ouverture, {_annees_str} {_plural(annees_ecoulees)})</span>',
+            )
+            if annees_ecoulees < 1:
+                st.caption("⚠️ Historique court : ce taux annualisé est peu fiable sur si peu de recul.")
+            with st.container(key="btn_reset_perf_hist_wrap"):
+                if st.button("↺ Revenir à la moyenne historique", key="btn_reset_perf_hist", use_container_width=True):
+                    st.session_state["_reset_perf_proj_pending"] = True
+                    st.rerun()
+
+        # ---- Calcul année par année : croissance, puis apport en fin d'année ; le plafond de versements
+        # (150 000 €) porte sur le cumul des APPORTS nets : une fois atteint, seule la performance joue.
+        n_ans = int(horizon_annees)
+        valeurs_annuelles = [tot_value_globale]
+        apports_cumules_annuels = [min(apports_totaux, PLAFOND_PEA_VERSEMENTS)]
+        v_courant, ap_courant = tot_value_globale, apports_totaux
+        for _an in range(1, n_ans + 1):
+            place_restante = max(PLAFOND_PEA_VERSEMENTS - ap_courant, 0.0)
+            apport_reel_annee = min(apport_annuel_proj, place_restante)
+            v_courant = v_courant * (1 + perf_annuelle_retenue) + apport_reel_annee
+            ap_courant += apport_reel_annee
+            valeurs_annuelles.append(v_courant)
+            apports_cumules_annuels.append(min(ap_courant, PLAFOND_PEA_VERSEMENTS))
+
+        valeur_projetee_finale = valeurs_annuelles[-1]
+        apports_cumules_finaux = min(ap_courant, PLAFOND_PEA_VERSEMENTS)
+        apports_projetes_periode = apports_cumules_finaux - apports_totaux
+
+        # Échéance d'atteinte du plafond au rythme de l'apport annuel prévu (versement continu et régulier).
+        montant_restant_plafond = PLAFOND_PEA_VERSEMENTS - apports_totaux
+        annees_avant_plafond = None
+        if montant_restant_plafond <= 0:
+            date_plafond_str = "Déjà atteint"
+        elif apport_annuel_proj > 0:
+            annees_avant_plafond = montant_restant_plafond / apport_annuel_proj
+            date_plafond_str = (pd.Timestamp.today() + pd.Timedelta(days=annees_avant_plafond * 365.25)).strftime("%d/%m/%Y")
+        else:
+            date_plafond_str = "Jamais (aucun apport prévu)"
+
+        # ---- Résultats (en dessous)
+        _sim_headline(
+            f"Valeur projetée dans {n_ans} {_plural(n_ans)}", fmt_eur(valeur_projetee_finale),
+            f"à partir de {fmt_eur(tot_value_globale)} aujourd'hui", color="#0284c7",
+        )
+
+        annees_x = list(range(0, n_ans + 1))
+        fig_proj = go.Figure()
+        fig_proj.add_trace(go.Scatter(
+            x=annees_x, y=apports_cumules_annuels, mode="lines", name="Apports cumulés",
+            line=dict(color="#94a3b8", width=2, dash="dot", shape="spline"),
+            customdata=[fmt_eur(v) for v in apports_cumules_annuels],
+            hovertemplate="Apports cumulés : <b>%{customdata}</b><extra></extra>",
+        ))
+        fig_proj.add_trace(go.Scatter(
+            x=annees_x, y=valeurs_annuelles, mode="lines+markers", name="Valeur projetée",
+            line=dict(color="#0284c7", width=3.5, shape="spline"),
+            marker=dict(size=6, color="#0284c7", line=dict(width=1.5, color="#ffffff")),
+            fill="tonexty", fillcolor="rgba(2, 132, 199, 0.14)",
+            customdata=[fmt_eur(v) for v in valeurs_annuelles],
+            hovertemplate="Valeur projetée : <b>%{customdata}</b><extra></extra>",
+        ))
+        if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n_ans:
+            fig_proj.add_vline(x=annees_avant_plafond, line_width=2, line_dash="dash", line_color="#f59e0b")
+            fig_proj.add_annotation(
+                x=annees_avant_plafond, y=max(valeurs_annuelles), yshift=18,
+                text=f"🏦 Plafond atteint (~{date_plafond_str})", showarrow=False,
+                font=dict(size=11, color="#b45309"),
+                bgcolor="rgba(245, 158, 11, 0.14)", bordercolor="#f59e0b", borderwidth=1, borderpad=4,
+            )
+        _tick_step = max(1, (len(annees_x) - 1) // 12 or 1)
+        _tickvals = annees_x[::_tick_step]
+        if annees_x[-1] not in _tickvals:
+            _tickvals = _tickvals + [annees_x[-1]]
+        fig_proj.update_layout(
+            height=340, margin=dict(l=8, r=12, t=36, b=8), hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11)),
+            yaxis=dict(title="", zeroline=False, showgrid=True, tickformat=".2s", ticksuffix=" €", nticks=5, automargin=True),
+            xaxis=dict(
+                title="", tickmode="array", tickvals=_tickvals,
+                ticktext=["Auj." if a == 0 else f"{a} an{'s' if a >= 2 else ''}" for a in _tickvals],
+                tickfont=dict(size=10, color="#475569"), showline=False, ticks="", showgrid=True,
+            ),
+        )
+        apply_chart_theme(fig_proj)
+        _plotly_chart(fig_proj, use_container_width=True, key="projection_valeur_chart")
+
+        _sim_stats(
+            _sim_stat("Valeur actuelle", fmt_eur(tot_value_globale)),
+            _sim_stat(f"Apports prévus sur {n_ans} {_plural(n_ans)}", fmt_eur(apports_projetes_periode)),
+            _sim_stat("Apports cumulés en fin de période", fmt_eur(apports_cumules_finaux)),
+        )
+        if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n_ans and apport_annuel_proj > 0:
+            st.caption(f"⚠️ Au rythme prévu, le plafond de versements du PEA ({fmt_eur(PLAFOND_PEA_VERSEMENTS)}) serait atteint avant la fin de l'horizon choisi : les apports sont donc plafonnés sur le graphique à partir de cette échéance.")
+
+        # Plafond de versements : la barre reflète les apports cumulés PROJETÉS en fin d'horizon.
+        pct_plafond = min(max((apports_cumules_finaux / PLAFOND_PEA_VERSEMENTS) * 100, 0.0), 100.0)
+        grad_plafond = "linear-gradient(90deg, #d97706, #fbbf24)" if pct_plafond < 90 else "linear-gradient(90deg, #dc2626, #f87171)"
+        st.markdown(
+            '<div style="margin-top: 14px; padding: 14px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">'
+            '<div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:4px; margin-bottom:8px;">'
+            '<div style="font-size:0.78rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">🏦 Plafond de versements PEA</div>'
+            f'<div style="font-size:0.85rem; font-weight:700; color:#0f172a;">{fmt_eur(apports_cumules_finaux)} / {fmt_eur(PLAFOND_PEA_VERSEMENTS)}</div></div>'
+            '<div style="background:#e2e8f0; border-radius:999px; height:14px; overflow:hidden;">'
+            f'<div style="width:{pct_plafond}%; height:100%; background:{grad_plafond}; border-radius:999px;"></div></div>'
+            '<div style="margin-top:10px; font-size:0.8rem; color:#475569;">'
+            f'📅 Date estimée d\'atteinte du plafond, au rythme de l\'apport annuel prévu ci-dessus : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
+            unsafe_allow_html=True,
+        )
+
 
 @fragment_wrapper
-def _render_simulateur_patrimoine(valeur_depart, apport_annuel_defaut, rendement_defaut, taux_impot_defaut):
-    """Simulateur « patrimoine & revenu passif » : projection année par année, nette d'impôt sur les
-    gains, avec revenu passif mensuel (taux de retrait) et valeurs corrigées de l'inflation.
-    Même principe que la projection existante (croissance d'abord, versement en fin d'année)."""
-    st.markdown("### 🧭 Simulateur de patrimoine & revenu passif")
-    with st.expander("🌱 Valeur nette, revenu passif et inflation", expanded=True):
-        with st.container(key="stack_sim_patrimoine"):
-            col_in, col_out = st.columns([1, 2], gap="medium")
-
-        with col_in:
-            with st.container(border=True):
-                st.markdown("**💼 Point de départ**")
-                pat0 = st.number_input(
-                    "Patrimoine actuel (€)", min_value=0.0, step=1000.0, format="%.0f",
-                    value=float(max(round(valeur_depart), 0)), key="k_pat_sim_depart",
+def _render_sim_revenu_passif(valeur_depart, apport_annuel_defaut, rendement_defaut, taux_impot_defaut):
+    """Simulateur de revenu passif : projection année par année du portefeuille, nette d'impôt sur les gains,
+    avec revenu passif mensuel (taux de retrait). Même principe que la projection (croissance d'abord,
+    versement en fin d'année)."""
+    st.markdown("### 🧭 Simulateur de revenu passif")
+    with st.expander("🌱 Valeur nette et revenu passif", expanded=True):
+        with st.container(border=True):
+            st.markdown("**💼 Point de départ**")
+            with st.container(key="compact_cols_rp_depart"):
+                col_pf, col_inv = st.columns(2)
+                pf0 = col_pf.number_input(
+                    "Portefeuille actuel (€)", min_value=0.0, step=1000.0, format="%.0f",
+                    value=float(max(round(valeur_depart), 0)), key="k_rp_depart",
                 )
-                inv = st.number_input(
+                inv = col_inv.number_input(
                     "Investissements annuels (€)", min_value=0.0, step=100.0, format="%.0f",
-                    value=float(max(apport_annuel_defaut, 0)), key="k_pat_sim_invest",
+                    value=float(max(apport_annuel_defaut, 0)), key="k_rp_invest",
                 )
-                ans = st.slider("Nombre d'années d'épargne", min_value=1, max_value=40, value=15, key="k_pat_sim_annees")
-            with st.container(border=True):
-                st.markdown("**⚙️ Hypothèses**")
-                with st.container(key="compact_cols_pat_sim"):
-                    h1, h2 = st.columns(2)
-                    rend = h1.number_input("Rendement (%)", min_value=-50.0, max_value=100.0, step=0.5,
-                                           value=float(rendement_defaut), key="k_pat_sim_rend")
-                    impot = h2.number_input("Imposition des gains (%)", min_value=0.0, max_value=100.0, step=0.1,
-                                            value=float(taux_impot_defaut), key="k_pat_sim_impot",
-                                            help="Par défaut : le taux de prélèvements sociaux réglé dans l'application.")
-                    h3, h4 = st.columns(2)
-                    taux_ret = h3.number_input("Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25,
-                                               value=3.0, key="k_pat_sim_retrait",
-                                               help="Part du capital net retirée chaque année pour le revenu passif.")
-                    infl = h4.number_input("Inflation (%)", min_value=0.0, max_value=20.0, step=0.1,
-                                           value=2.0, key="k_pat_sim_infl")
+            ans = st.number_input(
+                "Nombre d'années d'épargne", min_value=1, max_value=50, step=1, format="%d",
+                value=15, key="k_rp_annees",
+            )
+        with st.container(border=True):
+            st.markdown("**⚙️ Hypothèses**")
+            with st.container(key="compact_cols_rp_hyp"):
+                col_rend, col_imp = st.columns(2)
+                rend = col_rend.number_input(
+                    "Rendement (%)", min_value=-50.0, max_value=100.0, step=0.5,
+                    value=float(rendement_defaut), key="k_rp_rend",
+                )
+                impot = col_imp.number_input(
+                    "Imposition des gains (%)", min_value=0.0, max_value=100.0, step=0.1,
+                    value=float(taux_impot_defaut), key="k_rp_impot",
+                    help="Par défaut : le taux de prélèvements sociaux réglé dans l'application.",
+                )
+            taux_ret = st.number_input(
+                "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25,
+                value=3.0, key="k_rp_retrait",
+                help="Part du capital net retirée chaque année pour le revenu passif.",
+            )
 
-        # --- Calcul année par année (croissance, puis versement en fin d'année)
+        # ---- Calcul année par année (croissance, puis versement en fin d'année)
         n = int(ans)
         r = rend / 100.0
-        vals, verses, interets = [pat0], [0.0], [0.0]
+        vals, verses, interets = [pf0], [0.0], [0.0]
         for k in range(1, n + 1):
             vals.append(vals[-1] * (1 + r) + inv)
             verses.append(inv * k)
-            interets.append(vals[-1] - pat0 - inv * k)
+            interets.append(vals[-1] - pf0 - inv * k)
         valeur_future = vals[-1]
-        plus_value = valeur_future - pat0 - inv * n
+        plus_value = valeur_future - pf0 - inv * n
         impot_du = max(plus_value, 0.0) * impot / 100.0
         valeur_nette = valeur_future - impot_du
         revenu_mensuel = valeur_nette * taux_ret / 100.0 / 12.0
-        deflateur = (1 + infl / 100.0) ** n
-        valeur_nette_reelle = valeur_nette / deflateur
-        revenu_reel = revenu_mensuel / deflateur
         interets_nets = plus_value - impot_du
 
-        with col_out:
-            st.markdown(
-                f"""
-            <div style="text-align:center; padding:6px 0 2px 0;">
-                <div style="font-size:0.78rem; color:#64748b; font-weight:600;">Valeur nette dans {n} an{'s' if n > 1 else ''}</div>
-                <div style="font-size:2.3rem; font-weight:800; color:#0f172a; line-height:1.15;">{fmt_eur(valeur_nette)}</div>
-                <div style="font-size:0.85rem; color:#64748b; margin-top:2px;">soit un revenu passif d'environ
-                    <b style="color:#0284c7;">{fmt_eur(revenu_mensuel)} / mois</b>
-                    <span style="color:#94a3b8;"> · {fmt_eur(revenu_reel)} / mois en euros d'aujourd'hui</span></div>
-            </div>
-            <div class="h-scroll" style="display:flex; justify-content:center; flex-wrap:wrap; gap:8px; margin:10px 0 6px 0;">
-                <span style="background:#f1f5f9; border:1px solid #e2e8f0; border-radius:999px; padding:4px 12px; font-size:0.78rem; color:#475569;">
-                    <span style="color:#94a3b8;">●</span> Patrimoine initial <b>{fmt_eur(pat0)}</b></span>
-                <span style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:999px; padding:4px 12px; font-size:0.78rem; color:#075985;">
-                    <span style="color:#38bdf8;">●</span> Versements <b>{fmt_eur(inv * n)}</b></span>
-                <span style="background:#fffbeb; border:1px solid #fde68a; border-radius:999px; padding:4px 12px; font-size:0.78rem; color:#92400e;">
-                    <span style="color:#f59e0b;">●</span> Intérêts nets <b>{fmt_eur(interets_nets)}</b></span>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
+        # ---- Résultats (en dessous)
+        _sim_headline(
+            f"Valeur nette dans {n} {_plural(n)}", fmt_eur(valeur_nette),
+            f'soit un revenu passif d\'environ <b style="color:#0284c7;">{fmt_eur(revenu_mensuel)} / mois</b>',
+        )
+        _sim_pills([
+            ("Portefeuille initial", fmt_eur(pf0), "#94a3b8", "#f1f5f9", "#e2e8f0", "#475569"),
+            ("Versements", fmt_eur(inv * n), "#38bdf8", "#f0f9ff", "#bae6fd", "#075985"),
+            ("Intérêts nets", fmt_eur(interets_nets), "#f59e0b", "#fffbeb", "#fde68a", "#92400e"),
+        ])
 
-            xs = list(range(n + 1))
-            fig_pat = go.Figure()
-            fig_pat.add_trace(go.Scatter(
-                x=xs, y=[pat0] * (n + 1), name="Patrimoine initial", mode="lines", stackgroup="pat",
-                line=dict(color="#94a3b8", width=1.5), fill="tozeroy", fillcolor="rgba(148,163,184,0.28)",
-                customdata=[fmt_eur(pat0)] * (n + 1),
-                hovertemplate="Patrimoine initial : %{customdata}<extra></extra>",
-            ))
-            fig_pat.add_trace(go.Scatter(
-                x=xs, y=verses, name="Versements", mode="lines", stackgroup="pat",
-                line=dict(color="#38bdf8", width=1.5), fill="tonexty", fillcolor="rgba(56,189,248,0.30)",
-                customdata=[fmt_eur(v) for v in verses],
-                hovertemplate="Versements cumulés : %{customdata}<extra></extra>",
-            ))
-            fig_pat.add_trace(go.Scatter(
-                x=xs, y=[max(i, 0.0) for i in interets], name="Intérêts", mode="lines", stackgroup="pat",
-                line=dict(color="#f59e0b", width=2.2), fill="tonexty", fillcolor="rgba(245,158,11,0.30)",
-                customdata=[fmt_eur(v) for v in interets],
-                hovertemplate="Intérêts cumulés : %{customdata}<extra></extra>",
-            ))
-            _tv = sorted({0, n // 2, n})
-            fig_pat.update_layout(
-                height=330, margin=dict(l=8, r=12, t=10, b=8), hovermode="x unified", showlegend=False,
-                yaxis=dict(title="", rangemode="tozero", tickformat=".2s", ticksuffix=" €", nticks=5, automargin=True),
-                xaxis=dict(
-                    title="", tickmode="array", tickvals=_tv, showgrid=False,
-                    ticktext=["Aujourd'hui" if t == 0 else (f"dans {t} an{'s' if t > 1 else ''}" if t == n else f"{t} an{'s' if t > 1 else ''}") for t in _tv],
-                ),
-            )
-            apply_chart_theme(fig_pat)
-            _plotly_chart(fig_pat, use_container_width=True, theme=None, key="chart_sim_patrimoine")
+        xs = list(range(n + 1))
+        fig_rp = go.Figure()
+        fig_rp.add_trace(go.Scatter(
+            x=xs, y=[pf0] * (n + 1), name="Portefeuille initial", mode="lines", stackgroup="pf",
+            line=dict(color="#94a3b8", width=1.5), fill="tozeroy", fillcolor="rgba(148,163,184,0.28)",
+            customdata=[fmt_eur(pf0)] * (n + 1),
+            hovertemplate="Portefeuille initial : %{customdata}<extra></extra>",
+        ))
+        fig_rp.add_trace(go.Scatter(
+            x=xs, y=verses, name="Versements", mode="lines", stackgroup="pf",
+            line=dict(color="#38bdf8", width=1.5), fill="tonexty", fillcolor="rgba(56,189,248,0.30)",
+            customdata=[fmt_eur(v) for v in verses],
+            hovertemplate="Versements cumulés : %{customdata}<extra></extra>",
+        ))
+        fig_rp.add_trace(go.Scatter(
+            x=xs, y=[max(i, 0.0) for i in interets], name="Intérêts", mode="lines", stackgroup="pf",
+            line=dict(color="#f59e0b", width=2.2), fill="tonexty", fillcolor="rgba(245,158,11,0.30)",
+            customdata=[fmt_eur(v) for v in interets],
+            hovertemplate="Intérêts cumulés : %{customdata}<extra></extra>",
+        ))
+        _tv = sorted({0, n // 2, n})
+        fig_rp.update_layout(
+            height=320, margin=dict(l=8, r=12, t=10, b=8), hovermode="x unified", showlegend=False,
+            yaxis=dict(title="", rangemode="tozero", tickformat=".2s", ticksuffix=" €", nticks=5, automargin=True),
+            xaxis=dict(
+                title="", tickmode="array", tickvals=_tv, showgrid=False,
+                ticktext=["Aujourd'hui" if t == 0 else (f"dans {t} {_plural(t)}" if t == n else f"{t} {_plural(t)}") for t in _tv],
+            ),
+        )
+        apply_chart_theme(fig_rp)
+        _plotly_chart(fig_rp, use_container_width=True, theme=None, key="chart_sim_revenu_passif")
 
-            def _stat(label, value, color="#0f172a"):
-                return (
-                    '<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:140px; text-align:center;">'
-                    f'<div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">{label}</div>'
-                    f'<div style="font-size:1.05rem; font-weight:700; color:{color};">{value}</div></div>'
+        _sim_stats(
+            _sim_stat("Valeur future (brute)", fmt_eur(valeur_future)),
+            _sim_stat("Dont plus-value", fmt_eur(plus_value), "#16a34a" if plus_value >= 0 else "#dc2626"),
+            _sim_stat("Impôt sur les gains", fmt_eur(impot_du), "#d97706"),
+            _sim_stat("Valeur nette", fmt_eur(valeur_nette), "#0284c7"),
+        )
+        st.caption(
+            "Projection indicative, non garantie : rendement constant, versements en fin d'année, "
+            "imposition appliquée une seule fois sur la plus-value finale, revenu passif = taux de retrait "
+            "× valeur nette. Le rendement proposé est celui constaté depuis l'ouverture du PEA."
+        )
+
+
+def _render_sim_retrait():
+    """Simulateur de retrait PEA : part de capital / de plus-value, prélèvements sociaux, impôt (PEA < 5 ans), net perçu."""
+    st.markdown("### 🧮 Simulateur de Retrait")
+    with st.expander("💸 Simulation d'un retrait", expanded=True):
+        # Le taux de prélèvements sociaux peut évoluer (lois de finances) : il est éditable et mémorisé dans la config.
+        current_taux_ps_val = float(app_config.get("taux_prelevements_sociaux", 18.6))
+        with st.container(border=True):
+            st.markdown("**💰 Paramètres du retrait**")
+            with st.container(key="compact_cols_retrait"):
+                col_mt, col_ps = st.columns(2)
+                montant_retrait_souhaite = col_mt.number_input(
+                    "Montant souhaité (€)", min_value=0.0, step=500.0, value=None,
+                    placeholder="Entrez un montant...", key="k_sim_retrait_montant",
                 )
+                taux_ps_pct = col_ps.number_input(
+                    "Prélèvements sociaux (%)", min_value=0.0, max_value=100.0, step=0.1, format="%.1f",
+                    value=current_taux_ps_val, key="k_sim_retrait_taux_ps",
+                    help="Taux en vigueur au moment du retrait. Modifiable si la réglementation évolue : la valeur saisie est mémorisée automatiquement.",
+                )
+            age_plan_plus_5 = st.checkbox(
+                "Le PEA a plus de 5 ans", value=True, key="k_sim_retrait_pea_5ans",
+                help="Un PEA de plus de 5 ans est exonéré d'impôt sur le revenu sur les plus-values (seuls les prélèvements sociaux restent dus).",
+            )
+        if taux_ps_pct != current_taux_ps_val:
+            app_config["taux_prelevements_sociaux"] = float(taux_ps_pct)
+            _ok_ps, _err_ps = save_config(app_config)
+            if not _ok_ps:
+                st.warning(_err_ps)
+
+        if not age_plan_plus_5:
+            st.caption("⚠️ Avant 5 ans, un retrait (même partiel) clôture le PEA et l'ensemble des gains est imposé (12,8 % + prélèvements sociaux) : "
+                       "cette simulation ne calcule que la part de gain contenue dans le montant retiré.")
+
+        if not (montant_retrait_souhaite is not None and montant_retrait_souhaite > 0):
             st.markdown(
-                '<div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">'
-                + _stat("Valeur future (brute)", fmt_eur(valeur_future))
-                + _stat("Dont plus-value", fmt_eur(plus_value), "#16a34a" if plus_value >= 0 else "#dc2626")
-                + _stat("Impôt sur les gains", fmt_eur(impot_du), "#d97706")
-                + _stat("Valeur nette", fmt_eur(valeur_nette), "#0284c7")
-                + _stat("Valeur nette (€ d'aujourd'hui)", fmt_eur(valeur_nette_reelle))
-                + "</div>",
+                '<div style="padding: 28px 20px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:12px; text-align:center; color:#64748b;">'
+                '<div style="font-size:1.6rem;">🧮</div>'
+                '<div style="font-size:0.92rem; font-weight:600; margin-top:6px;">Saisissez un montant de retrait pour voir la simulation</div>'
+                '<div style="font-size:0.8rem; margin-top:4px;">La répartition capital / plus-value, les taxes et le net perçu s\'afficheront ici.</div></div>',
                 unsafe_allow_html=True,
             )
-            st.caption(
-                "Projection indicative, non garantie : rendement constant, versements en fin d'année, "
-                "imposition appliquée une seule fois sur la plus-value finale, revenu passif = taux de retrait "
-                "× valeur nette. Le rendement proposé est celui constaté depuis l'ouverture du PEA."
-            )
+            return
+
+        # Base réglementaire (BOFiP) : la part de plus-value d'un retrait se calcule sur la VALEUR TOTALE DU PLAN
+        # (actions + espèces) rapportée aux VERSEMENTS NETS CUMULÉS (apports - retraits).
+        valeur_totale_pea = tot_value_globale
+        ratio_pv = max(0.0, (valeur_totale_pea - apports_totaux) / valeur_totale_pea) if valeur_totale_pea > 0 else 0.0
+        part_pv = montant_retrait_souhaite * ratio_pv
+        part_capital = montant_retrait_souhaite - part_pv
+        montant_ps = part_pv * (taux_ps_pct / 100.0)
+        montant_ir = 0.0 if age_plan_plus_5 else part_pv * 0.128
+        total_taxes = montant_ps + montant_ir
+        net_recu = montant_retrait_souhaite - total_taxes
+
+        part_capital_pct = part_capital / montant_retrait_souhaite * 100
+        part_pv_pct = 100.0 - part_capital_pct
+        net_pct = net_recu / montant_retrait_souhaite * 100
+        if net_pct >= 90:
+            grad_color, net_color = "linear-gradient(90deg, #16a34a, #4ade80)", "#16a34a"
+        elif net_pct >= 80:
+            grad_color, net_color = "linear-gradient(90deg, #0284c7, #38bdf8)", "#0284c7"
+        else:
+            grad_color, net_color = "linear-gradient(90deg, #d97706, #fbbf24)", "#d97706"
+
+        _fr = lambda v, d=1: f"{v:,.{d}f}".replace(",", " ").replace(".", ",")
+        _sim_headline("💵 Montant net perçu", fmt_eur(net_recu), color=net_color)
+        st.markdown(_progress_bar_html(net_pct, grad_color, net_color, f"{_fr(net_pct)} % conservés après fiscalité"), unsafe_allow_html=True)
+        cards = [
+            _sim_stat("Montant demandé", fmt_eur(montant_retrait_souhaite)),
+            _sim_stat(f"Dont capital ({_fr(part_capital_pct, 2)} %)", fmt_eur(part_capital)),
+            _sim_stat(f"Dont plus-value ({_fr(part_pv_pct, 2)} %)", fmt_eur(part_pv)),
+            _sim_stat(f"Prélèvements sociaux ({_fr(taux_ps_pct)} %)", fmt_eur(montant_ps), "#d97706"),
+        ]
+        if not age_plan_plus_5:
+            cards.append(_sim_stat("Impôt sur le revenu (12,8 %)", fmt_eur(montant_ir), "#d97706"))
+        cards.append(_sim_stat("Total fiscalité", fmt_eur(total_taxes), "#d97706"))
+        _sim_stats(*cards)
 
 
 if _tab_open(tab_simulateur):
     with tab_simulateur:
-        PLAFOND_PEA_VERSEMENTS = 150000.0
-
-        # ==========================================
-        # 1. PROJECTION DE LA VALEUR DU PORTEFEUILLE
-        # ==========================================
-        st.markdown("### 📈 Projection de la Valeur du Portefeuille")
-
-        with st.expander("🔮 Simulation de croissance à long terme", expanded=True):
-            # Performance annualisée moyenne du portefeuille depuis son ouverture, déduite de
-            # "Perf. Globale" (perf_globale, gain cumulé depuis le début / apports nets) et de
-            # l'ancienneté réelle du PEA (pea_opening_dt) : c'est la même donnée que la métrique
-            # "Perf. Globale" de la Vue d'ensemble, juste ramenée à un taux ANNUEL composé au lieu
-            # d'un cumul depuis l'origine, pour pouvoir projeter année par année.
-            annees_ecoulees = max((pd.Timestamp.today() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
-            if annees_ecoulees >= 0.25 and (1 + perf_globale / 100) > 0:
-                perf_annualisee = (1 + perf_globale / 100) ** (1 / annees_ecoulees) - 1
-            else:
-                perf_annualisee = 0.0
-
-            # Moyenne historique des apports (annuelle et mensuelle), calculée sur l'ancienneté
-            # réelle du plan : c'est cette moyenne qui sert de valeur de départ pour la projection
-            # des versements futurs, avant tout ajustement manuel par l'opérateur.
-            avg_apport_annuel_hist = (apports_totaux / annees_ecoulees) if annees_ecoulees >= 0.08 else apports_totaux
-            avg_apport_mensuel_hist = avg_apport_annuel_hist / 12.0
-            _default_apport_proj_hist = max(0, int(round(avg_apport_annuel_hist / 50.0) * 50))
-
-            # Réinitialisation de l'apport annuel projeté à la moyenne historique : la modification
-            # de st.session_state["k_apport_annuel_projection"] doit impérativement se faire AVANT que
-            # le widget number_input portant cette clé ne soit (ré)instancié plus bas, sous peine de
-            # StreamlitAPIException ("cannot be modified after the widget ... is instantiated"). On
-            # utilise donc un drapeau posé par le bouton, consommé ici avant la création du widget.
-            if st.session_state.pop("_reset_apport_proj_pending", False):
-                app_config["apport_annuel_projection"] = _default_apport_proj_hist
-                st.session_state["k_apport_annuel_projection"] = _default_apport_proj_hist
-                _ok_cfg_reset, _err_cfg_reset = save_config(app_config)
-                if not _ok_cfg_reset:
-                    st.warning(_err_cfg_reset)
-
-            with st.container(key="stack_sim_projection"):
-                col_proj_left, col_proj_right = st.columns([1, 3])
-
-            with col_proj_left:
-                with st.container(border=True):
-                    st.markdown("**📆 Horizon de projection**")
-                    horizon_annees = st.number_input(
-                        "Nombre d'années",
-                        min_value=1,
-                        max_value=50,
-                        step=1,
-                        value=int(app_config.get("horizon_projection_annees", 10)),
-                        format="%d",
-                        label_visibility="visible",
-                        key="k_horizon_projection"
-                    )
-                    if horizon_annees != int(app_config.get("horizon_projection_annees", 10)):
-                        app_config["horizon_projection_annees"] = int(horizon_annees)
-                        _ok_cfg4, _err_cfg4 = save_config(app_config)
-                        if not _ok_cfg4:
-                            st.warning(_err_cfg4)
-
-                    st.markdown("**➕ Apport annuel prévu**")
-                    apport_annuel_proj = st.number_input(
-                        "Apport prévu par an (€)",
-                        min_value=0,
-                        step=1,
-                        value=int(app_config.get("apport_annuel_projection", _default_apport_proj_hist)),
-                        format="%d",
-                        label_visibility="visible",
-                        key="k_apport_annuel_projection",
-                        help="Pré-rempli avec la moyenne historique de vos apports passés. Ajouté en une fois à la fin de chaque année simulée, en plus de la croissance du portefeuille."
-                    )
-                    if apport_annuel_proj != int(app_config.get("apport_annuel_projection", _default_apport_proj_hist)):
-                        app_config["apport_annuel_projection"] = int(apport_annuel_proj)
-                        _ok_cfg5, _err_cfg5 = save_config(app_config)
-                        if not _ok_cfg5:
-                            st.warning(_err_cfg5)
-
-                    st.caption(f"↔️ Soit environ **{fmt_eur(apport_annuel_proj / 12.0)} / mois**")
-
-                    with st.container(key="btn_reset_apport_hist_wrap"):
-                        if st.button("↺ Revenir à la moyenne historique", key="btn_reset_apport_hist", use_container_width=True):
-                            st.session_state["_reset_apport_proj_pending"] = True
-                            st.rerun()
-
-                    st.markdown(
-                        f"""
-                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:8px 12px 12px 12px; margin-top:6px; text-align:center; box-sizing:border-box; overflow:hidden;">
-                        <div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">📊 Moyenne des apports passés</div>
-                        <div style="font-size:0.88rem; font-weight:800; color:#0f172a; margin-top:2px; line-height:1.5;">{fmt_eur(avg_apport_annuel_hist)} / an <span style="font-weight:500; color:#64748b;">(~{fmt_eur(avg_apport_mensuel_hist)} / mois)</span></div>
-                    </div>
-                    """,
-                        unsafe_allow_html=True
-                    )
-
-                    # Réinitialisation de la performance annuelle projetée à la moyenne historique :
-                    # même mécanique que pour l'apport annuel projeté ci-dessus (drapeau consommé
-                    # AVANT l'instanciation du widget number_input portant la même clé).
-                    _default_perf_proj_hist = round(perf_annualisee * 100, 2)
-                    if st.session_state.pop("_reset_perf_proj_pending", False):
-                        app_config["perf_annuelle_projection"] = _default_perf_proj_hist
-                        st.session_state["k_perf_annuelle_projection"] = _default_perf_proj_hist
-                        _ok_cfg_reset_perf, _err_cfg_reset_perf = save_config(app_config)
-                        if not _ok_cfg_reset_perf:
-                            st.warning(_err_cfg_reset_perf)
-
-                    st.markdown("**📊 Performance annuelle retenue**", help="Pré-remplie avec la performance annualisée moyenne constatée depuis l'ouverture du PEA, modifiable librement pour la projection.")
-                    perf_annuelle_proj_pct = st.number_input(
-                        "Performance annuelle retenue (%)",
-                        step=0.01,
-                        format="%.2f",
-                        value=float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)),
-                        label_visibility="visible",
-                        key="k_perf_annuelle_projection",
-                        help="Utilisée pour faire croître le portefeuille d'une année sur l'autre dans la projection."
-                    )
-                    if round(perf_annuelle_proj_pct, 2) != round(float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)), 2):
-                        app_config["perf_annuelle_projection"] = float(perf_annuelle_proj_pct)
-                        _ok_cfg6, _err_cfg6 = save_config(app_config)
-                        if not _ok_cfg6:
-                            st.warning(_err_cfg6)
-
-                    perf_annuelle_retenue = perf_annuelle_proj_pct / 100.0
-
-                    with st.container(key="btn_reset_perf_hist_wrap"):
-                        if st.button("↺ Revenir à la moyenne historique", key="btn_reset_perf_hist", use_container_width=True):
-                            st.session_state["_reset_perf_proj_pending"] = True
-                            st.rerun()
-
-                    _annees_ecoulees_str = f"{annees_ecoulees:.1f}".replace(".", ",")
-                    _perf_annualisee_hist_str = f"{perf_annualisee*100:+.2f}".replace(".", ",")
-                    st.markdown(
-                        f"""
-                    <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:8px 12px 12px 12px; margin-top:6px; margin-bottom:2px; text-align:center; box-sizing:border-box; overflow:hidden;">
-                        <div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">📊 Moyenne historique constatée</div>
-                        <div style="font-size:0.88rem; font-weight:800; color:#0f172a; margin-top:2px; line-height:1.5;">{_perf_annualisee_hist_str}% / an <span style="font-weight:500; color:#64748b;">(depuis l'ouverture, {_annees_ecoulees_str} an{'s' if annees_ecoulees >= 2 else ''})</span></div>
-                    </div>
-                    """,
-                        unsafe_allow_html=True
-                    )
-                    if annees_ecoulees < 1:
-                        st.caption("⚠️ Historique court : ce taux annualisé est peu fiable sur si peu de recul.")
-
-            with col_proj_right:
-                # Simulation année par année : la croissance s'applique d'abord sur la valeur de
-                # l'année précédente, puis l'apport annuel prévu est ajouté en fin d'année (hypothèse
-                # prudente : cet apport ne profite donc de la croissance qu'à partir de l'année
-                # suivante), exactement le même principe que les calculateurs d'épargne classiques.
-                # En parallèle, on suit aussi le cumul des seuls APPORTS (sans croissance) : l'écart
-                # visuel entre les deux courbes représente la plus-value générée par la performance.
-                # Le plafond de versements du PEA (150 000 €) porte sur le cumul des APPORTS nets :
-                # une fois atteint, plus aucun nouvel apport n'est possible (seule la performance du
-                # portefeuille continue à jouer). On borne donc l'apport réellement injecté chaque
-                # année simulée par la place restante sous le plafond, et la courbe des apports
-                # cumulés affichée ne dépasse donc jamais 150 000 €.
-                valeurs_annuelles = [tot_value_globale]
-                apports_cumules_annuels = [min(apports_totaux, PLAFOND_PEA_VERSEMENTS)]
-                v_courant = tot_value_globale
-                ap_courant = apports_totaux
-                for _an in range(1, int(horizon_annees) + 1):
-                    place_restante = max(PLAFOND_PEA_VERSEMENTS - ap_courant, 0.0)
-                    apport_reel_annee = min(apport_annuel_proj, place_restante)
-                    v_courant = v_courant * (1 + perf_annuelle_retenue) + apport_reel_annee
-                    ap_courant = ap_courant + apport_reel_annee
-                    valeurs_annuelles.append(v_courant)
-                    apports_cumules_annuels.append(min(ap_courant, PLAFOND_PEA_VERSEMENTS))
-
-                valeur_projetee_finale = valeurs_annuelles[-1]
-                apports_cumules_finaux = min(ap_courant, PLAFOND_PEA_VERSEMENTS)
-                apports_projetes_periode = apports_cumules_finaux - apports_totaux
-
-                # Date/échéance d'atteinte du plafond de versements PEA (150 000 €, qui porte sur les
-                # APPORTS cumulés nets, jamais sur la valeur du portefeuille) au rythme de l'apport
-                # annuel prévu ci-dessus — pré-rempli avec la moyenne historique et affinable par
-                # l'opérateur — en approximant un versement continu et régulier sur l'année.
-                montant_restant_plafond = PLAFOND_PEA_VERSEMENTS - apports_totaux
-                annees_avant_plafond = None
-                if montant_restant_plafond <= 0:
-                    date_plafond_str = "Déjà atteint"
-                elif apport_annuel_proj > 0:
-                    annees_avant_plafond = montant_restant_plafond / apport_annuel_proj
-                    date_plafond = pd.Timestamp.today() + pd.Timedelta(days=annees_avant_plafond * 365.25)
-                    date_plafond_str = date_plafond.strftime("%d/%m/%Y")
-                else:
-                    date_plafond_str = "Jamais (aucun apport prévu)"
-
-                annees_x = list(range(0, int(horizon_annees) + 1))
-
-                _axis_label_color_proj = "#475569"
-                _grid_color_proj = "#e2e8f0"
-
-                fig_proj = go.Figure()
-
-                fig_proj.add_trace(go.Scatter(
-                    x=annees_x, y=apports_cumules_annuels,
-                    mode="lines",
-                    name="Apports cumulés",
-                    line=dict(color="#94a3b8", width=2, dash="dot", shape="spline"),
-                    customdata=[fmt_eur(v) for v in apports_cumules_annuels],
-                    hovertemplate="Apports cumulés : <b>%{customdata}</b><extra></extra>",
-                ))
-
-                fig_proj.add_trace(go.Scatter(
-                    x=annees_x, y=valeurs_annuelles,
-                    mode="lines+markers",
-                    name="Valeur projetée",
-                    line=dict(color="#0284c7", width=3.5, shape="spline"),
-                    marker=dict(size=6, color="#0284c7", line=dict(width=1.5, color="#ffffff")),
-                    fill="tonexty",
-                    fillcolor="rgba(2, 132, 199, 0.14)",
-                    customdata=[fmt_eur(v) for v in valeurs_annuelles],
-                    hovertemplate="Valeur projetée : <b>%{customdata}</b><extra></extra>",
-                ))
-
-                if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= horizon_annees:
-                    fig_proj.add_vline(
-                        x=annees_avant_plafond, line_width=2, line_dash="dash", line_color="#f59e0b"
-                    )
-                    fig_proj.add_annotation(
-                        x=annees_avant_plafond, y=max(valeurs_annuelles), yshift=18,
-                        text=f"🏦 Plafond atteint (~{date_plafond_str})", showarrow=False,
-                        font=dict(size=11, color="#b45309"),
-                        bgcolor="rgba(245, 158, 11, 0.14)", bordercolor="#f59e0b", borderwidth=1, borderpad=4
-                    )
-
-                _tick_step_proj = max(1, (len(annees_x) - 1) // 12 or 1)
-                _tickvals_proj = annees_x[::_tick_step_proj]
-                if annees_x[-1] not in _tickvals_proj:
-                    _tickvals_proj = _tickvals_proj + [annees_x[-1]]
-
-                fig_proj.update_layout(
-                    height=380,
-                    margin=dict(l=10, r=10, t=36, b=10),
-                    hovermode="x unified",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11)),
-                    yaxis=dict(title="Valeur (€)", zeroline=False, showgrid=True, gridcolor=_grid_color_proj, griddash="dot"),
-                    xaxis=dict(
-                        title="Dans combien d'années", tickmode="array",
-                        tickvals=_tickvals_proj, ticktext=[str(a) for a in _tickvals_proj],
-                        tickfont=dict(size=10, color=_axis_label_color_proj),
-                        showline=False, ticks="", showgrid=True, gridcolor=_grid_color_proj, griddash="dot",
-                    ),
-                )
-                apply_chart_theme(fig_proj)
-                _plotly_chart(fig_proj, use_container_width=True, key="projection_valeur_chart")
-
-                _horizon_suffix = 's' if horizon_annees >= 2 else ''
-                st.markdown(
-                    f"""
-                <div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px;">
-                    <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:170px; text-align:center;">
-                        <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Valeur actuelle</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(tot_value_globale)}</div>
-                    </div>
-                    <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:170px; text-align:center;">
-                        <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Apports prévus sur {int(horizon_annees)} an{_horizon_suffix}</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(apports_projetes_periode)}</div>
-                    </div>
-                    <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:170px; text-align:center;">
-                        <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Apports cumulés en fin de période</div>
-                        <div style="font-size:1.05rem; font-weight:700; color:{'#dc2626' if apports_cumules_finaux > PLAFOND_PEA_VERSEMENTS else '#0f172a'};">{fmt_eur(apports_cumules_finaux)}</div>
-                    </div>
-                </div>
-                <div style="margin-top: 12px; padding: 12px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid #0284c7; border-radius:8px;">
-                    <div style="font-size:0.78rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">🔮 Valeur projetée dans {int(horizon_annees)} an{_horizon_suffix}</div>
-                    <div style="font-size:1.4rem; font-weight:800; color:#0284c7; margin-top:2px;">{fmt_eur(valeur_projetee_finale)}</div>
-                </div>
-                """,
-                    unsafe_allow_html=True
-                )
-
-                if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= horizon_annees and apport_annuel_proj > 0:
-                    st.caption(f"⚠️ Au rythme prévu, le plafond de versements du PEA ({fmt_eur(PLAFOND_PEA_VERSEMENTS)}) serait atteint avant la fin de l'horizon choisi — les apports sont donc plafonnés sur le graphique à partir de cette échéance (voir ci-dessous).")
-
-                # Plafond de versements PEA : porte sur le cumul des APPORTS nets (jamais sur la
-                # valeur du portefeuille, qui elle n'est pas plafonnée), d'où une carte séparée. La
-                # barre reflète les apports CUMULÉS PROJETÉS en fin d'horizon (apports_cumules_finaux,
-                # qui dépend de l'horizon ET de l'apport annuel prévu ci-contre) plutôt que les seuls
-                # apports déjà versés à ce jour (apports_totaux) : sinon la barre restait figée quelle
-                # que soit la valeur saisie dans "Apport prévu par an", contrairement à la date
-                # estimée d'atteinte du plafond juste en dessous, qui elle en tenait déjà compte.
-                pct_plafond = min(max((apports_cumules_finaux / PLAFOND_PEA_VERSEMENTS) * 100, 0.0), 100.0)
-                grad_color_plafond = "linear-gradient(90deg, #d97706, #fbbf24)" if pct_plafond < 90 else "linear-gradient(90deg, #dc2626, #f87171)"
-                st.markdown(
-                    f"""
-                <div style="margin-top: 14px; padding: 14px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">
-                    <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
-                        <div style="font-size:0.78rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">🏦 Plafond de versements PEA</div>
-                        <div style="font-size:0.85rem; font-weight:700; color:#0f172a;">{fmt_eur(apports_cumules_finaux)} / {fmt_eur(PLAFOND_PEA_VERSEMENTS)}</div>
-                    </div>
-                    <div style="background:#e2e8f0; border-radius:999px; height:14px; overflow:hidden;">
-                        <div style="width:{pct_plafond}%; height:100%; background:{grad_color_plafond}; border-radius:999px;"></div>
-                    </div>
-                    <div style="margin-top:10px; font-size:0.8rem; color:#475569;">
-                        📅 Date estimée d'atteinte du plafond, au rythme de l'apport annuel prévu ci-contre : <b style="color:#0f172a;">{date_plafond_str}</b>
-                    </div>
-                </div>
-                """,
-                    unsafe_allow_html=True
-                )
-
-        # ==========================================
-        # 2. SIMULATEUR DE RETRAIT
-        # ==========================================
-        st.markdown("### 🧮 Simulateur de Retrait")
-
-        with st.expander("💸 Simulation d'un retrait", expanded=True):
-            with st.container(key="stack_sim_retrait"):
-                col_left, col_right = st.columns([1, 3])
-
-            with col_left:
-                with st.container(border=True):
-                    st.markdown("**💰 Montant du retrait**")
-                    montant_retrait_souhaite = st.number_input(
-                        "Montant souhaité (€)",
-                        min_value=0.0,
-                        step=500.0,
-                        value=None,
-                        placeholder="Entrez un montant...",
-                        label_visibility="visible",
-                        key="k_sim_retrait_montant",
-                    )
-
-                    st.markdown("**📅 Ancienneté du plan**")
-                    age_plan_plus_5 = st.checkbox(
-                        "Le PEA a plus de 5 ans",
-                        value=True,
-                        help="Un PEA de plus de 5 ans est exonéré d'impôt sur le revenu sur les plus-values (seuls les prélèvements sociaux restent dus).",
-                        key="k_sim_retrait_pea_5ans",
-                    )
-
-                    st.markdown("**🏛️ Taux de prélèvements sociaux**")
-                    # Le taux légal (18,2 % jusqu'en 2018, 17,2 % actuellement pour les nouveaux
-                    # gains, 18,6 % dans certains cas spécifiques) peut évoluer dans le temps. On le
-                    # rend donc éditable plutôt que de le figer en dur, et on mémorise la dernière
-                    # valeur saisie par l'opérateur dans la config locale pour la retrouver telle
-                    # quelle à la prochaine ouverture de l'application (elle ne change en pratique
-                    # que très rarement, lors des lois de finances).
-                    current_taux_ps_val = float(app_config.get("taux_prelevements_sociaux", 18.6))
-                    taux_ps_pct = st.number_input(
-                        "Taux (%)",
-                        min_value=0.0,
-                        max_value=100.0,
-                        step=0.1,
-                        value=current_taux_ps_val,
-                        format="%.1f",
-                        label_visibility="visible",
-                        help="Taux en vigueur au moment du retrait. Modifiable si la réglementation évolue — la valeur saisie est mémorisée automatiquement."
-                    )
-                    if taux_ps_pct != current_taux_ps_val:
-                        app_config["taux_prelevements_sociaux"] = float(taux_ps_pct)
-                        _ok_cfg3, _err_cfg3 = save_config(app_config)
-                        if not _ok_cfg3:
-                            st.warning(_err_cfg3)
-
-            with col_right:
-                if montant_retrait_souhaite is not None and montant_retrait_souhaite > 0:
-                    # Base réglementaire du retrait PEA (BOFiP) : le taux de plus-value contenu dans un
-                    # retrait se calcule sur la VALEUR TOTALE DU PLAN (actions + poche espèces, pas
-                    # seulement les actions) rapportée aux VERSEMENTS NETS CUMULÉS (apports - retraits,
-                    # pas seulement le capital encore investi dans les actions actuellement détenues :
-                    # sinon les gains déjà réalisés et logés en cash, ou les dividendes perçus, ne sont
-                    # pas pris en compte dans le prorata, ce qui sous-estime la part de plus-value).
-                    valeur_totale_pea = tot_value_globale
-                    plus_value_latente_ratio = max(0.0, (valeur_totale_pea - apports_totaux) / valeur_totale_pea) if valeur_totale_pea > 0 else 0.0
-                    part_pv_retrait = montant_retrait_souhaite * plus_value_latente_ratio
-                    part_capital_retrait = montant_retrait_souhaite - part_pv_retrait
-
-                    taux_ps = taux_ps_pct / 100.0
-                    montant_ps = part_pv_retrait * taux_ps
-                    montant_ir = 0.0 if age_plan_plus_5 else part_pv_retrait * 0.128
-                    total_taxes = montant_ps + montant_ir
-                    net_recu = montant_retrait_souhaite - total_taxes
-
-                    part_capital_pct = (part_capital_retrait / montant_retrait_souhaite * 100) if montant_retrait_souhaite > 0 else 0.0
-                    part_pv_pct = 100.0 - part_capital_pct
-                    net_pct = (net_recu / montant_retrait_souhaite * 100) if montant_retrait_souhaite > 0 else 0.0
-                    net_pct_clamped = max(0.0, min(net_pct, 100.0))
-
-                    taux_ps_str = f"{taux_ps_pct:,.1f} %".replace(".", ",")
-                    taux_ir_str = "12,8 %"
-
-                    if net_pct >= 90:
-                        grad_color = "linear-gradient(90deg, #16a34a, #4ade80)"
-                        net_badge_color = "#16a34a"
-                    elif net_pct >= 80:
-                        grad_color = "linear-gradient(90deg, #0284c7, #38bdf8)"
-                        net_badge_color = "#0284c7"
-                    else:
-                        grad_color = "linear-gradient(90deg, #d97706, #fbbf24)"
-                        net_badge_color = "#d97706"
-
-                    net_str = f"{net_pct:,.1f}%".replace(".", ",")
-
-                    # Construite en Python (et non en placeholder direct dans le gros template
-                    # ci-dessous) pour ne JAMAIS laisser de ligne vide au milieu du bloc HTML : une
-                    # ligne vide au milieu d'un bloc <div> injecté via st.markdown(unsafe_allow_html)
-                    # fait croire au moteur Markdown que le bloc HTML est terminé, et le reste (la
-                    # carte "Total fiscalité" suivante) se retrouvait alors affiché en texte brut au
-                    # lieu d'être rendu comme une carte stylée.
-                    ir_row_html = ""
-                    if not age_plan_plus_5:
-                        ir_row_html = (
-                            '<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:160px; text-align:center;">'
-                            f'<div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Impôt sur le revenu ({taux_ir_str})</div>'
-                            f'<div style="font-size:1.05rem; font-weight:700; color:#d97706;">{fmt_eur(montant_ir)}</div>'
-                            '</div>'
-                        )
-
-                    st.markdown(
-                        f"""
-                    <div style="background:#e2e8f0; border-radius:999px; height:34px; overflow:hidden; position:relative; box-shadow: inset 0 2px 5px rgba(0,0,0,0.10);">
-                        <div style="width:{net_pct_clamped}%; height:100%; background:{grad_color}; border-radius:999px; transition:width 0.6s ease-in-out; position:relative; box-shadow: 0 0 14px {net_badge_color}66;">
-                            <div style="position:absolute; inset:0; border-radius:999px; background:linear-gradient(180deg, rgba(255,255,255,0.40) 0%, rgba(255,255,255,0.05) 45%, rgba(255,255,255,0) 60%);"></div>
-                        </div>
-                        <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:0.88rem; font-weight:800; color:#0f172a; text-shadow: 0 1px 3px rgba(255,255,255,0.75);">
-                            {net_str} conservés après fiscalité
-                        </div>
-                    </div>
-                    <div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px; margin-top: 14px;">
-                        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:160px; text-align:center;">
-                            <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Montant demandé</div>
-                            <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(montant_retrait_souhaite)}</div>
-                        </div>
-                        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:160px; text-align:center;">
-                            <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Dont capital ({part_capital_pct:,.2f} %)</div>
-                            <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(part_capital_retrait)}</div>
-                        </div>
-                        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:160px; text-align:center;">
-                            <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Dont plus-value ({part_pv_pct:,.2f} %)</div>
-                            <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(part_pv_retrait)}</div>
-                        </div>
-                    </div>
-                    <div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
-                        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:160px; text-align:center;">
-                            <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Prélèvements sociaux ({taux_ps_str})</div>
-                            <div style="font-size:1.05rem; font-weight:700; color:#d97706;">{fmt_eur(montant_ps)}</div>
-                        </div>{ir_row_html}<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:160px; text-align:center;">
-                            <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Total fiscalité</div>
-                            <div style="font-size:1.05rem; font-weight:700; color:#d97706;">{fmt_eur(total_taxes)}</div>
-                        </div>
-                    </div>
-                    <div style="margin-top: 12px; padding: 12px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid {net_badge_color}; border-radius:8px;">
-                        <div style="font-size:0.78rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">💵 Montant net perçu</div>
-                        <div style="font-size:1.4rem; font-weight:800; color:{net_badge_color}; margin-top:2px;">{fmt_eur(net_recu)}</div>
-                    </div>
-                    """,
-                        unsafe_allow_html=True
-                    )
-                else:
-                    st.markdown(
-                        """
-                    <div style="padding: 28px 20px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:12px; text-align:center; color:#64748b;">
-                        <div style="font-size:1.6rem;">🧮</div>
-                        <div style="font-size:0.92rem; font-weight:600; margin-top:6px;">Saisissez un montant de retrait pour voir la simulation</div>
-                        <div style="font-size:0.8rem; margin-top:4px;">La répartition capital / plus-value, les taxes et le net perçu s'afficheront ici.</div>
-                    </div>
-                    """,
-                        unsafe_allow_html=True
-                    )
-
-        # ==========================================
-        # 3. SIMULATEUR DE PATRIMOINE & REVENU PASSIF
-        # ==========================================
-        _perf_defaut_pat = round(float(perf_annualisee) * 100, 2) if perf_annualisee and perf_annualisee > 0 else 7.0
-        _render_simulateur_patrimoine(
+        _render_sim_projection()
+        _perf_hist = _anciennete_et_perf_annualisee()[1]
+        _perf_defaut_rp = round(float(_perf_hist) * 100, 2) if _perf_hist > 0 else 7.0
+        _render_sim_revenu_passif(
             float(tot_value_globale),
             int(app_config.get("apport_annuel_projection", 0) or 0),
-            _perf_defaut_pat,
+            _perf_defaut_rp,
             float(app_config.get("taux_prelevements_sociaux", 18.6)),
         )
+        _render_sim_retrait()
