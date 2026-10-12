@@ -718,6 +718,15 @@ st.markdown(
        barre fixe (dont la hauteur est d'environ 90-100px, boutons + padding compris). */
     .main .block-container { padding-bottom: 120px !important; }
 
+    /* Boutons « Manage app » (rouge) et pastille de profil que Streamlit Community Cloud
+       superpose en bas à droite quand on est connecté en tant que propriétaire : ils
+       recouvraient le bouton « Simulation ». On les masque (le menu ⋮ en haut à droite
+       reste disponible pour gérer l'app). */
+    [data-testid="manage-app-button"],
+    [class*="viewerBadge"],
+    [class*="_profileContainer"],
+    [class*="_profilePreview"] { display: none !important; }
+
     /* Fenêtre modale "Nouvelle opération" : épurée et moderne */
     div[data-testid="stDialog"] div[role="dialog"] {
         border-radius: 20px;
@@ -820,8 +829,22 @@ st.markdown(
         .stTabs [data-baseweb="tab"] { padding: 0 10px; font-size: 0.85rem; }
         .h-scroll { flex-wrap: nowrap !important; padding-bottom: 6px; }
         .h-scroll > div { flex: 0 0 auto !important; min-width: 150px !important; }
-        .st-key-sticky_ops_bar { padding: 10px 10px !important; }
+        .st-key-sticky_ops_bar { padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px)) 10px !important; }
         .st-key-sticky_ops_bar .stButton > button { height: 46px !important; min-height: 46px !important; font-size: 0.85rem !important; }
+        /* Les deux boutons restent CÔTE À CÔTE sur téléphone (Streamlit les empile par défaut) :
+           la barre fait ~70 px au lieu de ~230 px et ne recouvre plus le contenu. */
+        .st-key-sticky_ops_bar [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: 0.5rem !important; }
+        .st-key-sticky_ops_bar [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            min-width: 0 !important; flex: 1 1 0 !important; width: auto !important;
+        }
+        .st-key-sticky_ops_bar .stButton > button p {
+            white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis;
+        }
+        /* Marge basse = hauteur de la barre + zone de sécurité : le dernier graphique n'est
+           plus jamais caché derrière. */
+        .main .block-container, [data-testid="stMainBlockContainer"] {
+            padding-bottom: calc(130px + env(safe-area-inset-bottom, 0px)) !important;
+        }
     }
     </style>
     """,
@@ -856,10 +879,141 @@ def apply_chart_theme(fig):
         fig.update_layout(title=dict(text=""))
     return fig
 
+def _data_bounds(fig):
+    """Bornes (x_min, x_max, y_min, y_max) des courbes/aires d'une figure, avec une petite marge.
+    Sert à empêcher le zoom/déplacement de sortir du graphique. Renvoie None pour une borne
+    qu'on ne sait pas calculer (axe catégoriel, aucune donnée...)."""
+    x_lo = x_hi = y_lo = y_hi = None
+    zero_based = False
+    for t in fig.data:
+        if getattr(t, "type", "") not in ("scatter", "scattergl"):
+            continue
+        if getattr(t, "yaxis", None) not in (None, "y"):
+            continue
+        if t.x is None or t.y is None or len(t.x) == 0:
+            continue
+        xs = pd.Series(list(t.x))
+        ys = pd.to_numeric(pd.Series(list(t.y)), errors="coerce").dropna()
+        if not pd.api.types.is_numeric_dtype(xs):
+            xs = pd.to_datetime(xs, errors="coerce")
+        xs = xs.dropna()
+        if xs.empty or ys.empty:
+            continue
+        try:
+            lo, hi = xs.min(), xs.max()
+            x_lo = lo if x_lo is None else min(x_lo, lo)
+            x_hi = hi if x_hi is None else max(x_hi, hi)
+        except Exception:
+            pass
+        y_lo = float(ys.min()) if y_lo is None else min(y_lo, float(ys.min()))
+        y_hi = float(ys.max()) if y_hi is None else max(y_hi, float(ys.max()))
+        if getattr(t, "fill", None) in ("tozeroy", "tonexty"):
+            zero_based = True
+    if y_lo is None:
+        return None, None, None, None
+    # Lignes horizontales (objectif, plafond...) : elles doivent rester visibles.
+    for s in (fig.layout.shapes or []):
+        if getattr(s, "type", "") == "line" and getattr(s, "yref", None) in (None, "y") \
+                and s.y0 is not None and s.y0 == s.y1:
+            try:
+                y_lo = min(y_lo, float(s.y0))
+                y_hi = max(y_hi, float(s.y0))
+            except Exception:
+                pass
+    if zero_based or fig.layout.yaxis.rangemode == "tozero":
+        y_lo = min(y_lo, 0.0)
+    span_y = (y_hi - y_lo) or max(abs(y_hi), 1.0)
+    y_lo, y_hi = y_lo - 0.04 * span_y, y_hi + 0.10 * span_y
+    if x_lo is not None and x_hi is not None and x_hi > x_lo:
+        pad = (x_hi - x_lo) * 0.03
+        x_lo, x_hi = x_lo - pad, x_hi + pad
+    else:
+        x_lo = x_hi = None
+    return x_lo, x_hi, y_lo, y_hi
+
+
+def _fmt_bound(v):
+    return v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, "strftime") else float(v)
+
+
+# Script injecté UNE fois dans la page : « doigt maintenu » (≈ 0,25 s) sur une courbe → l'infobulle
+# suit ensuite le doigt tout seul, sans déplacer ni zoomer le graphique. Un glissement immédiat reste
+# un déplacement (pan) et deux doigts restent un zoom (pincer).
+_SCRUB_JS = r"""
+(function () {
+  var P = window.parent;
+  if (!P || P.__peaScrub) return;
+  P.__peaScrub = true;
+  var code = '(' + function () {
+    var HOLD_MS = 250, TOL = 10;
+    var timer = null, pending = false, scrubbing = false;
+    var sx = 0, sy = 0, gd = null;
+    function plotOf(el) { return el && el.closest ? el.closest('.js-plotly-plot') : null; }
+    function layerAt(g, x, y) {
+      var ls = g.querySelectorAll('.nsewdrag');
+      for (var i = 0; i < ls.length; i++) {
+        var r = ls[i].getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return ls[i];
+      }
+      return null;
+    }
+    function hover(x, y) {
+      if (!gd) return;
+      var l = layerAt(gd, x, y);
+      if (!l) return;
+      l.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, cancelable: true, view: window, clientX: x, clientY: y
+      }));
+    }
+    function reset() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      pending = false; scrubbing = false;
+    }
+    window.addEventListener('touchstart', function (e) {
+      reset();
+      if (e.touches.length !== 1) return;
+      var g = plotOf(e.target);
+      if (!g || !g.querySelector('.nsewdrag')) return;
+      gd = g; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      pending = true;
+      timer = setTimeout(function () {
+        timer = null; pending = false; scrubbing = true;
+        gd._dragging = false;               // sinon Plotly ignore le survol pendant un « drag »
+        if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
+        hover(sx, sy);
+      }, HOLD_MS);
+    }, { capture: true, passive: true });
+    window.addEventListener('touchmove', function (e) {
+      if (e.touches.length > 1) { reset(); return; }
+      var t = e.touches[0];
+      if (scrubbing) {
+        e.preventDefault(); e.stopPropagation();
+        hover(t.clientX, t.clientY);
+      } else if (pending) {
+        if (Math.abs(t.clientX - sx) > TOL || Math.abs(t.clientY - sy) > TOL) {
+          reset();                          // le doigt bouge tout de suite : c'est un déplacement normal
+        } else {
+          e.stopPropagation();              // pas encore de pan pendant l'attente du maintien
+        }
+      }
+    }, { capture: true, passive: false });
+    ['touchend', 'touchcancel'].forEach(function (n) {
+      window.addEventListener(n, function () { reset(); }, { capture: true, passive: true });
+    });
+  } + ')();';
+  var s = P.document.createElement('script');
+  s.textContent = code;
+  P.document.head.appendChild(s);
+})();
+"""
+
+
 def _plotly_chart(fig, **kwargs):
     """st.plotly_chart sans barre d'outils. Courbes/aires : zoom à deux doigts (pincer), déplacement
-    au doigt et double-tap pour revenir à la vue d'origine, comme sur une carte. Barres, camemberts
-    et cartographies : pas de zoom (le doigt fait défiler la page normalement)."""
+    au doigt, double-tap pour revenir à la vue d'origine, zoom/déplacement BORNÉS aux données
+    (on ne peut ni descendre sous la courbe, ni monter trop haut, ni sortir à gauche/droite), et
+    doigt maintenu = l'infobulle suit le doigt le long de la courbe. Barres, camemberts et
+    cartographies : pas de zoom (le doigt fait défiler la page normalement)."""
     cfg = dict(kwargs.pop("config", None) or {})
     zoomable = any(getattr(t, "type", "") in ("scatter", "scattergl") for t in fig.data)
     if zoomable:
@@ -867,12 +1021,28 @@ def _plotly_chart(fig, **kwargs):
         fig.update_xaxes(fixedrange=False)
         fig.update_yaxes(fixedrange=False)
         cfg.update({"scrollZoom": True, "doubleClick": "reset"})
+        try:
+            x_lo, x_hi, y_lo, y_hi = _data_bounds(fig)
+            if x_lo is not None:
+                fig.update_layout(xaxis=dict(minallowed=_fmt_bound(x_lo), maxallowed=_fmt_bound(x_hi)))
+            if y_lo is not None:
+                fig.update_layout(yaxis=dict(minallowed=float(y_lo), maxallowed=float(y_hi)))
+        except Exception:
+            pass  # plotly ancien (minallowed/maxallowed absents) ou données inattendues : pas de borne
     else:
         fig.update_layout(dragmode=False)
         fig.update_xaxes(fixedrange=True)
         fig.update_yaxes(fixedrange=True)
         cfg.update({"scrollZoom": False, "doubleClick": False})
     cfg.update({"displayModeBar": False, "displaylogo": False})
+    # Injection (une seule fois par session) du script « doigt maintenu → l'infobulle suit le doigt ».
+    if not st.session_state.get("_pea_scrub_injected"):
+        st.session_state["_pea_scrub_injected"] = True
+        try:
+            import streamlit.components.v1 as _components
+            _components.html("<script>" + _SCRUB_JS + "</script>", height=0)
+        except Exception:
+            pass
     return st.plotly_chart(fig, config=cfg, **kwargs)
 
 try:
@@ -1762,72 +1932,162 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
 
 _ALLOC_COLORS = ["#8fb0ff", "#f2c5e8", "#c8d9ff", "#c8b8f5", "#f2b6ae", "#dda899", "#f4d9b0", "#c5dfc5", "#6fb3ad"]
 
+# True : le montant au centre du camembert inclut aussi les liquidités (qui, elles, ne sont jamais
+# dessinées dans l'anneau). False : centre = total des positions affichées.
+_ALLOC_CENTER_INCLUDE_CASH = False
+
+def _alloc_color(i):
+    if i < len(_ALLOC_COLORS):
+        return _ALLOC_COLORS[i]
+    return f"hsl({(i * 47) % 360}, 45%, 72%)"
+
+_ALLOC_HTML = r"""
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #root { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center;
+          font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); padding: 4px 2px; }
+  #wrap { position: relative; width: 250px; flex: 0 0 250px; }
+  svg { width: 250px; height: 250px; display: block; -webkit-tap-highlight-color: transparent; }
+  .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
+  .slice.dim { opacity: .28; }
+  #tip { position: absolute; pointer-events: none; background: #0f172a; color: #fff; border-radius: 8px;
+         padding: 6px 10px; font-size: 12px; line-height: 1.35; white-space: nowrap; opacity: 0;
+         transition: opacity .15s ease; transform: translate(-50%, -115%); z-index: 5; }
+  #tip.on { opacity: 1; }
+  #legend { flex: 1 1 220px; min-width: 200px; max-width: 420px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer;
+         transition: opacity .18s ease, background .18s ease; -webkit-tap-highlight-color: transparent; }
+  .row.sel { background: rgba(127,127,127,.14); }
+  .row.dim { opacity: .4; }
+  .dot { width: 11px; height: 11px; border-radius: 3px; flex: 0 0 11px; }
+  .nm { flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pc { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; opacity: .8; }
+  text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; }
+</style>
+<div id="root">
+  <div id="wrap"><svg id="svg" viewBox="0 0 250 250"></svg><div id="tip"></div></div>
+  <div id="legend"></div>
+</div>
+<script>
+(function () {
+  var D = __DATA__, TOTAL = __TOTAL__;
+  var fg = '#334155';
+  try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
+  document.documentElement.style.setProperty('--fg', fg);
+
+  var NS = 'http://www.w3.org/2000/svg', C = 125, R = 108, r = 78, sel = -1;
+  var svg = document.getElementById('svg'), tip = document.getElementById('tip'), legend = document.getElementById('legend');
+
+  // Angle minimal visible pour que même les toutes petites positions restent présentes et cliquables.
+  var MIN = 2.2, raw = D.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
+  var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
+  raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
+
+  function pt(rad, a) { var t = (a - 90) * Math.PI / 180; return [C + rad * Math.cos(t), C + rad * Math.sin(t)]; }
+  function arc(s, e) {
+    var gap = (e - s) > 4 ? 0.5 : 0.15; s += gap; e -= gap;
+    if (e - s >= 359.9) e = s + 359.9;
+    var big = (e - s) > 180 ? 1 : 0, p0 = pt(R, s), p1 = pt(R, e), p2 = pt(r, e), p3 = pt(r, s);
+    return 'M' + p0 + 'A' + R + ',' + R + ' 0 ' + big + ' 1 ' + p1 + 'L' + p2 + 'A' + r + ',' + r + ' 0 ' + big + ' 0 ' + p3 + 'Z';
+  }
+  function el(n, at, parent) {
+    var e = document.createElementNS(NS, n);
+    for (var key in at) e.setAttribute(key, at[key]);
+    (parent || svg).appendChild(e); return e;
+  }
+  function cut(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+  var slices = D.map(function (d, i) {
+    var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice' });
+    p.addEventListener('click', function (ev) { ev.stopPropagation(); select(sel === i ? -1 : i); });
+    return p;
+  });
+  var t1 = el('text', { x: C, y: C - 20, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 });
+  var t2 = el('text', { x: C, y: C + 6, 'text-anchor': 'middle', 'font-size': 19, 'font-weight': 700, 'class': 'mono' });
+  var t3 = el('text', { x: C, y: C + 28, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 });
+
+  var rows = D.map(function (d, i) {
+    var row = document.createElement('div'); row.className = 'row';
+    row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
+    row.querySelector('.nm').textContent = d.n; row.title = d.n;
+    row.addEventListener('click', function (ev) { ev.stopPropagation(); select(sel === i ? -1 : i); });
+    legend.appendChild(row); return row;
+  });
+
+  function select(i) {
+    sel = i;
+    slices.forEach(function (s, j) {
+      s.setAttribute('class', 'slice' + (i >= 0 && j !== i ? ' dim' : ''));
+      if (j === i) {
+        var m = (ang[j][0] + ang[j][1]) / 2 * Math.PI / 180;
+        s.style.transform = 'translate(' + (Math.sin(m) * 5) + 'px,' + (-Math.cos(m) * 5) + 'px)';
+      } else { s.style.transform = ''; }
+    });
+    rows.forEach(function (rw, j) { rw.className = 'row' + (j === i ? ' sel' : '') + (i >= 0 && j !== i ? ' dim' : ''); });
+    if (i < 0) {
+      t1.textContent = 'Total portefeuille'; t2.textContent = TOTAL; t3.textContent = D.length + ' position' + (D.length > 1 ? 's' : '');
+      tip.className = ''; return;
+    }
+    var d = D[i];
+    t1.textContent = cut(d.n, 18); t2.textContent = d.v; t3.textContent = d.pt + ' %';
+    // infobulle posée sur le bord extérieur de la part cliquée
+    var mid = (ang[i][0] + ang[i][1]) / 2, p = pt(R + 4, mid), box = svg.getBoundingClientRect(), sc = box.width / 250;
+    tip.innerHTML = '<b></b><br>' + d.v + ' · ' + d.pt + ' %'; tip.querySelector('b').textContent = d.n;
+    var x = p[0] * sc, y = p[1] * sc;
+    tip.style.left = Math.min(Math.max(x, 60), box.width - 60) + 'px'; tip.style.top = Math.max(y, 38) + 'px';
+    tip.className = 'on';
+  }
+  document.body.addEventListener('click', function () { if (sel >= 0) select(-1); });
+
+  function fit() {
+    try {
+      var h = document.getElementById('root').getBoundingClientRect().height + 10;
+      window.frameElement.style.height = Math.ceil(h) + 'px';
+    } catch (e) {}
+  }
+  select(-1); fit();
+  window.addEventListener('resize', fit); setTimeout(fit, 150);
+})();
+</script>
+"""
+
 def _render_allocation(df_active, cash):
-    """Camembert (anneau) de la répartition du portefeuille, avec légende à barres rayées :
-    positions actives + liquidités ; au-delà de 9 lignes, les plus petites sont regroupées dans « Autre »."""
-    import html as _html
+    """Camembert (anneau) de la répartition du portefeuille : TOUTES les positions actives (même les
+    très petites), sans les liquidités. Composant 100 % côté navigateur (aucun rechargement de la
+    page au clic) : au repos le centre affiche le total du portefeuille ; au clic sur une part (ou
+    sur sa ligne de légende) le centre et l'infobulle affichent sa valeur et les autres parts sont
+    atténuées. Un second clic (ou un clic à côté) revient à l'état de départ."""
+    import streamlit.components.v1 as components
     rows = []
     if df_active is not None and not df_active.empty:
         for _, r in df_active.iterrows():
             v = float(r["Valeur Actuelle (€)"])
             if v > 0:
                 rows.append((str(r["Nom"]), v))
-    if cash is not None and cash > 0.005:
-        rows.append(("Liquidités (€)", float(cash)))
     if not rows:
-        st.info("Aucune position ni liquidité à répartir pour le moment.")
+        st.info("Aucune position à répartir pour le moment.")
         return
     rows.sort(key=lambda x: -x[1])
-    if len(rows) > 9:
-        autre = sum(v for _, v in rows[8:])
-        rows = rows[:8] + [("Autre", autre)]
     total = sum(v for _, v in rows)
-    labels = [n for n, _ in rows]
-    values = [v for _, v in rows]
-    pcts = [v / total * 100 for v in values]
-    colors = [_ALLOC_COLORS[i % len(_ALLOC_COLORS)] for i in range(len(rows))]
-
-    def _val_txt(v):
-        return f"{v:,.0f} €".replace(",", " ")
+    total_centre = total
+    if _ALLOC_CENTER_INCLUDE_CASH and cash is not None and cash > 0.005:
+        total_centre += float(cash)
 
     def _pct_txt(p):
         return f"{p:.2f}".replace(".", ",")
 
-    fig = go.Figure(go.Pie(
-        labels=labels, values=values, hole=0.72, sort=False, direction="clockwise",
-        marker=dict(colors=colors, line=dict(color="#f1f5f9", width=3)),
-        textinfo="none", showlegend=False,
-        text=[f"<b>{_html.escape(n)}</b><br>{fmt_eur(v)} · {_pct_txt(p)} %" for n, v, p in zip(labels, values, pcts)],
-        hovertemplate="%{text}<extra></extra>",
-    ))
-    fig.update_layout(
-        height=270, margin=dict(l=5, r=5, t=5, b=5),
-        annotations=[dict(
-            text=(f"<span style='font-size:12px;color:#64748b'>{_html.escape(labels[0])}</span><br>"
-                  f"<span style='font-size:20px'><b>{_val_txt(values[0])}</b></span><br>"
-                  f"<span style='font-size:12px;color:#64748b'>{_pct_txt(pcts[0])} %</span>"),
-            x=0.5, y=0.5, showarrow=False,
-        )],
-    )
-    apply_chart_theme(fig)
-
-    track = "repeating-linear-gradient(90deg, #e2e8f0 0 2px, transparent 2px 4px)"
-    rows_html = ""
-    for n, p, c in zip(labels, pcts, colors):
-        stripe = f"repeating-linear-gradient(90deg, {c} 0 2px, transparent 2px 4px)"
-        n_esc = _html.escape(n)
-        rows_html += (
-            '<div style="display:grid; grid-template-columns:minmax(80px,150px) 1fr 58px; gap:12px; align-items:center; padding:5px 0;">'
-            f'<div style="font-size:0.85rem; color:#334155; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{n_esc}">{n_esc}</div>'
-            f'<div style="height:14px; background:{track}; border-radius:2px;"><div style="width:{min(p, 100):.2f}%; height:100%; background:{stripe};"></div></div>'
-            f'<div class="num-mono" style="text-align:right; font-size:0.8rem; color:#475569;">{_pct_txt(p)} %</div>'
-            '</div>'
-        )
-    col_chart, col_leg = st.columns([1, 1.8])
-    with col_chart:
-        _plotly_chart(fig, use_container_width=True, theme=None, key="chart_repartition_portefeuille")
-    with col_leg:
-        st.markdown(f'<div style="padding-top:6px;">{rows_html}</div>', unsafe_allow_html=True)
+    data = [
+        {"n": n, "v": fmt_eur(v), "pct": v / total * 100, "pt": _pct_txt(v / total * 100), "c": _alloc_color(i)}
+        for i, (n, v) in enumerate(rows)
+    ]
+    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    page = (_ALLOC_HTML
+            .replace("__DATA__", payload)
+            .replace("__TOTAL__", json.dumps(fmt_eur(total_centre), ensure_ascii=False)))
+    # Hauteur « pire cas » (anneau au-dessus de la légende, écran étroit) ; le script la réduit
+    # automatiquement à la hauteur réelle dès que le composant est affiché.
+    components.html(page, height=290 + 34 * len(rows))
 
 
 def _estimer_date_atteinte(cumul_jour, cible):
@@ -4553,7 +4813,7 @@ def _ops_bar_fragment():
             _new_clicked = st.button("➕ Nouvelle opération", type="primary", key="add_op_main_btn", use_container_width=True)
     with col_sim_op:
         with st.container(key="sim_op_btn_wrap"):
-            _sim_clicked = st.button("🧪 Simulation nouvelle opération", key="sim_op_main_btn", use_container_width=True)
+            _sim_clicked = st.button("🧪 Simulation", key="sim_op_main_btn", use_container_width=True)
 
     # Une seule fenêtre à la fois. La fenêtre « Nouvelle opération » est mémorisée comme « ouverte »
     # (st.session_state["_op_dialog_open"]) et ré-ouverte à chaque rechargement du script, tant que
