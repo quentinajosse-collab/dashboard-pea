@@ -787,20 +787,24 @@ st.markdown(
         .main .block-container, [data-testid="stMainBlockContainer"] {
             padding-left: 0.75rem !important; padding-right: 0.75rem !important;
         }
-        /* Rangées de métriques : une seule ligne, glissable horizontalement (au lieu de s'empiler) */
-        .st-key-row_capital_wrap [data-testid="stHorizontalBlock"],
-        .st-key-row_perf_wrap [data-testid="stHorizontalBlock"],
-        .st-key-row_gains_wrap [data-testid="stHorizontalBlock"],
-        div[class*="st-key-scroll_cols"] [data-testid="stHorizontalBlock"] {
-            flex-wrap: nowrap !important; overflow-x: auto; gap: 0.6rem !important;
-            -webkit-overflow-scrolling: touch; padding-bottom: 8px;
-            scrollbar-width: thin;
+        /* Une SECTION (expander contenant des colonnes) = UN SEUL bloc glissable horizontalement :
+           tout le contenu (toutes les rangées, graphiques compris) est large de 720 px et se
+           décale ensemble au glissement, au lieu que chaque rangée défile séparément. */
+        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])) [data-testid="stExpanderDetails"],
+        div[class*="st-key-slide_"] {
+            overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin; padding-bottom: 6px;
         }
-        .st-key-row_capital_wrap [data-testid="stHorizontalBlock"] > div,
-        .st-key-row_perf_wrap [data-testid="stHorizontalBlock"] > div,
-        .st-key-row_gains_wrap [data-testid="stHorizontalBlock"] > div,
-        div[class*="st-key-scroll_cols"] [data-testid="stHorizontalBlock"] > div {
-            flex: 0 0 170px !important; min-width: 170px !important; width: 170px !important;
+        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])) [data-testid="stExpanderDetails"] > *,
+        div[class*="st-key-slide_"] > * {
+            min-width: 720px;
+        }
+        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])) [data-testid="stHorizontalBlock"],
+        div[class*="st-key-slide_"] [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important; gap: 0.6rem !important;
+        }
+        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+        div[class*="st-key-slide_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            min-width: 0 !important;
         }
         /* Rangées de filtres : champs réduits, côte à côte (2 par ligne) au lieu d'une pile verticale */
         div[class*="st-key-compact_cols"] [data-testid="stHorizontalBlock"] {
@@ -840,8 +844,9 @@ def apply_chart_theme(fig):
     fig.update_layout(**PLOTLY_LAYOUT_DEFAULTS)
     fig.update_xaxes(**PLOTLY_AXIS_DEFAULTS)
     fig.update_yaxes(**PLOTLY_AXIS_DEFAULTS)
-    # Pas de zoom/déplacement au doigt : sur téléphone, le graphique ne "vole" plus le défilement de la page.
-    fig.update_layout(dragmode=False)
+    # Marges automatiques : les libellés d'axes ne sont jamais coupés (téléphone compris).
+    fig.update_xaxes(automargin=True)
+    fig.update_yaxes(automargin=True)
     # PLOTLY_LAYOUT_DEFAULTS définit title_font (style du titre) mais pas title.text : pour un
     # graphique qui ne fixe pas lui-même de titre, Plotly se retrouve avec un objet "title" à
     # moitié rempli (police définie, texte manquant), ce qui affiche littéralement le texte
@@ -852,9 +857,22 @@ def apply_chart_theme(fig):
     return fig
 
 def _plotly_chart(fig, **kwargs):
-    """st.plotly_chart sans la barre d'outils (reset axes, autoscale, zoom...) ni le zoom à la molette."""
+    """st.plotly_chart sans barre d'outils. Courbes/aires : zoom à deux doigts (pincer), déplacement
+    au doigt et double-tap pour revenir à la vue d'origine, comme sur une carte. Barres, camemberts
+    et cartographies : pas de zoom (le doigt fait défiler la page normalement)."""
     cfg = dict(kwargs.pop("config", None) or {})
-    cfg.update({"displayModeBar": False, "displaylogo": False, "scrollZoom": False, "doubleClick": False})
+    zoomable = any(getattr(t, "type", "") in ("scatter", "scattergl") for t in fig.data)
+    if zoomable:
+        fig.update_layout(dragmode="pan")
+        fig.update_xaxes(fixedrange=False)
+        fig.update_yaxes(fixedrange=False)
+        cfg.update({"scrollZoom": True, "doubleClick": "reset"})
+    else:
+        fig.update_layout(dragmode=False)
+        fig.update_xaxes(fixedrange=True)
+        fig.update_yaxes(fixedrange=True)
+        cfg.update({"scrollZoom": False, "doubleClick": False})
+    cfg.update({"displayModeBar": False, "displaylogo": False})
     return st.plotly_chart(fig, config=cfg, **kwargs)
 
 try:
@@ -1638,21 +1656,24 @@ def _breakdown_lines_for_kind(df_subset, kind, value_col=None):
     return lines
 
 def _fmt_cell_heat(v):
-    """Valeur affichée dans une case de la cartographie : sans décimale à partir de 100, sinon 1 décimale."""
-    if v >= 100:
-        return f"{v:,.0f}".replace(",", " ")
+    """Valeur compacte écrite dans une case (les cases sont petites sur téléphone) :
+    1,2k au-delà de 1000, entier de 10 à 999, sinon 1 décimale. Le détail complet reste au survol."""
+    if v >= 1000:
+        return f"{v / 1000:.1f}".replace(".", ",") + "k"
+    if v >= 10:
+        return f"{v:.0f}"
     return f"{v:.1f}".replace(".", ",")
 
 def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, unit_label="€", date_ouverture=None, breakdown_kind=None):
     """Cartographie mensuelle : une ligne par année (la plus récente en haut), un mois par colonne,
-    le montant écrit dans chaque case, dégradé continu (blanc -> couleur d'accent) et légende en barre
-    horizontale sous le graphique (adaptée aux petits écrans). N'affiche jamais de mois futur, ni de
-    mois antérieur à date_ouverture. Le survol (détail du mois) est inchangé."""
+    montant compact écrit dans chaque case, dégradé blanc -> couleur d'accent, légende horizontale
+    sous le graphique. Axes numériques (0..11 / 0..n-1) avec libellés personnalisés : cases carrées-ish,
+    annotations parfaitement alignées. Aucun mois futur ni antérieur à date_ouverture. Survol inchangé."""
     if df_source.empty:
         st.info("Aucune donnée à afficher pour le moment.")
         return
 
-    mois_abbr = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+    mois_court = ["Jan", "Fév", "Mar", "Avr", "Mai", "Jui", "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"]
     mois_hover = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sep", "Oct", "Nov", "Déc"]
 
     dates = df_source[date_col]
@@ -1665,80 +1686,74 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
     else:
         first_year = int(dates.dt.year.min())
         first_month_ouverture = 1
-    years = list(range(first_year, today.year + 1))
+    years = list(range(today.year, first_year - 1, -1))  # plus récente en haut (ligne 0)
+    n = len(years)
 
-    z_montants = np.full((len(years), 12), np.nan)
-    text_matrix = [["" for _ in range(12)] for _ in range(len(years))]
-    _accent_hover = colorscale[-1] if colorscale else "#0f172a"
+    z = np.full((n, 12), np.nan)
+    hover = [["" for _ in range(12)] for _ in range(n)]
+    _accent = colorscale[-1] if colorscale else "#0f172a"
 
     for yi, year in enumerate(years):
         min_month = first_month_ouverture if year == first_year else 1
         max_month = today.month if year == today.year else 12
         for month in range(min_month, max_month + 1):
             val = float(monthly_sum.get((year, month), 0.0))
-            z_montants[yi, month - 1] = val
-            cell_txt = f"<b>{mois_hover[month - 1]} {year}</b><br><span style='color:{_accent_hover};'><b>Total : {fmt_eur(val)}</b></span>"
+            z[yi, month - 1] = val
+            cell_txt = f"<b>{mois_hover[month - 1]} {year}</b><br><span style='color:{_accent};'><b>Total : {fmt_eur(val)}</b></span>"
             if breakdown_kind is not None and val != 0:
                 df_cell = df_source[(dates.dt.year == year) & (dates.dt.month == month)]
-                breakdown_lines = _breakdown_lines_for_kind(df_cell, breakdown_kind, value_col)
-                if breakdown_lines:
-                    cell_txt += "<br>" + "<br>".join(breakdown_lines)
-            text_matrix[yi][month - 1] = cell_txt
+                lines = _breakdown_lines_for_kind(df_cell, breakdown_kind, value_col)
+                if lines:
+                    cell_txt += "<br>" + "<br>".join(lines)
+            hover[yi][month - 1] = cell_txt
 
-    zmax = float(np.nanmax(z_montants)) if np.isfinite(z_montants).any() else 0.0
+    zmax = float(np.nanmax(z)) if np.isfinite(z).any() else 0.0
     if zmax <= 0:
         zmax = 1.0
 
-    # Montant écrit dans chaque case (texte blanc sur fond foncé, sombre sur fond clair)
     annotations = []
-    for yi, year in enumerate(years):
+    for yi in range(n):
         for mi in range(12):
-            v = z_montants[yi, mi]
+            v = z[yi, mi]
             if np.isnan(v):
                 continue
             annotations.append(dict(
-                x=mois_abbr[mi], y=str(year), xref="x", yref="y", showarrow=False,
-                text=_fmt_cell_heat(v),
+                x=mi, y=yi, xref="x", yref="y", showarrow=False, text=_fmt_cell_heat(v),
                 font=dict(size=10, color="#ffffff" if (v / zmax) > 0.55 else "#0f172a"),
             ))
 
-    plot_h = 38 * len(years) + 8
+    row_h = 34
+    plot_h = row_h * n
+    top_m, bot_m = 28, 78
     tick_vals = [0.0, zmax / 2.0, zmax]
     tick_text = [_fmt_cell_heat(v) for v in tick_vals]
 
     fig = go.Figure(data=go.Heatmap(
-        z=z_montants,
-        x=mois_abbr,
-        y=[str(y) for y in years],
-        text=text_matrix,
-        hovertemplate="%{text}<extra></extra>",
-        colorscale=colorscale,
-        zmin=0, zmax=zmax,
-        xgap=3, ygap=3,
-        hoverongaps=False,
-        showscale=True,
+        z=z, x=list(range(12)), y=list(range(n)),
+        text=hover, hovertemplate="%{text}<extra></extra>",
+        colorscale=colorscale, zmin=0, zmax=zmax,
+        xgap=2, ygap=2, hoverongaps=False, showscale=True, name="",
         colorbar=dict(
             orientation="h", x=0.5, xanchor="center",
-            y=-(80.0 / plot_h), yanchor="top",
-            len=0.92, thickness=10, outlinewidth=0,
+            y=-(14.0 / plot_h), yanchor="top", yref="paper",
+            lenmode="fraction", len=0.9, thickness=10, outlinewidth=0,
             tickmode="array", tickvals=tick_vals, ticktext=tick_text,
-            ticks="outside", ticklen=3, tickfont=dict(size=11),
+            ticks="outside", ticklen=3, tickfont=dict(size=10),
         ),
-        name="",
     ))
     fig.update_layout(
-        height=plot_h + 10 + 150,
-        margin=dict(l=45, r=10, t=10, b=150),
+        height=plot_h + top_m + bot_m,
+        margin=dict(l=40, r=6, t=top_m, b=bot_m),
         annotations=annotations,
         xaxis=dict(
-            showgrid=False, side="bottom", type="category",
-            tickmode="array", tickvals=mois_abbr, ticktext=mois_abbr,
-            tickangle=-45, tickfont=dict(size=11),
+            showgrid=False, zeroline=False, side="top", range=[-0.5, 11.5],
+            tickmode="array", tickvals=list(range(12)), ticktext=mois_court,
+            tickangle=0, tickfont=dict(size=9), automargin=False,
         ),
         yaxis=dict(
-            showgrid=False, type="category",
-            tickmode="array", tickvals=[str(y) for y in years], ticktext=[str(y) for y in years],
-            tickfont=dict(size=12),
+            showgrid=False, zeroline=False, range=[n - 0.5, -0.5],
+            tickmode="array", tickvals=list(range(n)), ticktext=[str(y) for y in years],
+            tickfont=dict(size=11), automargin=False,
         ),
     )
     apply_chart_theme(fig)
@@ -5612,7 +5627,7 @@ if _tab_open(tab_apports):
             _fin_serie = max(pd.Timestamp.today().normalize(), _net_jour.index.max())
             _cumul = _net_jour.reindex(pd.date_range(_net_jour.index.min(), _fin_serie), method="ffill")
 
-            with st.container(key="scroll_cols_apports_kpi"):
+            with st.container(key="slide_apports_kpi"):
                 _k1, _k2, _k3, _k4 = st.columns(4)
                 _k1.metric("Versements depuis le début", fmt_eur(_total_verse))
                 _k2.metric(f"Versements {_annee_ap}", fmt_eur(_verse_an))
@@ -5657,9 +5672,9 @@ if _tab_open(tab_apports):
                         annotation_font_color="#d97706",
                     )
                 fig_ap.update_layout(
-                    height=340, margin=dict(l=10, r=10, t=20, b=10), hovermode="x",
-                    yaxis=dict(title="Apports nets (€)", rangemode="tozero"),
-                    xaxis=dict(title="", tickformat="%m/%Y", showgrid=False),
+                    height=340, margin=dict(l=8, r=16, t=20, b=8), hovermode="x",
+                    yaxis=dict(title="", rangemode="tozero", tickformat=",.0f", ticksuffix=" €", automargin=True, nticks=6),
+                    xaxis=dict(title="", tickformat="%m/%y", showgrid=False, nticks=5, automargin=True),
                 )
                 apply_chart_theme(fig_ap)
                 _plotly_chart(fig_ap, use_container_width=True, theme=None, key="chart_apports_cumul")
@@ -5672,7 +5687,7 @@ if _tab_open(tab_apports):
                 fig_ap_an.add_trace(go.Bar(
                     x=[str(a) for a in _ann], y=_v_an, name="Versements",
                     marker=dict(color="#06b6d4"),
-                    text=[fmt_eur(v) if v > 0 else "" for v in _v_an], textposition="outside", cliponaxis=False,
+                    text=[(f"{v:,.0f}".replace(",", " ") + " €") if v > 0 else "" for v in _v_an], textposition="outside", cliponaxis=False,
                     customdata=[fmt_eur(v) for v in _v_an],
                     hovertemplate="<b>%{x}</b><br>Versements : %{customdata}<extra></extra>",
                 ))
@@ -5684,9 +5699,9 @@ if _tab_open(tab_apports):
                         hovertemplate="<b>%{x}</b><br>Retraits : %{customdata}<extra></extra>",
                     ))
                 fig_ap_an.update_layout(
-                    height=320, margin=dict(l=10, r=10, t=30, b=10), barmode="relative", bargap=0.35,
-                    yaxis=dict(title="Montant (€)", zeroline=True, zerolinewidth=2),
-                    xaxis=dict(title="", type="category"),
+                    height=340, margin=dict(l=8, r=16, t=50, b=8), barmode="relative", bargap=0.35,
+                    yaxis=dict(title="", zeroline=True, zerolinewidth=2, tickformat=",.0f", ticksuffix=" €", automargin=True, nticks=6),
+                    xaxis=dict(title="", type="category", automargin=True),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
                 )
                 apply_chart_theme(fig_ap_an)
