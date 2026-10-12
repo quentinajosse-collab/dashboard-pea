@@ -718,14 +718,6 @@ st.markdown(
        barre fixe (dont la hauteur est d'environ 90-100px, boutons + padding compris). */
     .main .block-container { padding-bottom: 120px !important; }
 
-    /* Boutons « Manage app » (rouge) et pastille de profil que Streamlit Community Cloud
-       superpose en bas à droite quand on est connecté en tant que propriétaire : ils
-       recouvraient le bouton « Simulation ». On les masque (le menu ⋮ en haut à droite
-       reste disponible pour gérer l'app). */
-    [data-testid="manage-app-button"],
-    [class*="viewerBadge"],
-    [class*="_profileContainer"],
-    [class*="_profilePreview"] { display: none !important; }
 
     /* Fenêtre modale "Nouvelle opération" : épurée et moderne */
     div[data-testid="stDialog"] div[role="dialog"] {
@@ -799,19 +791,19 @@ st.markdown(
         /* Une SECTION (expander contenant des colonnes) = UN SEUL bloc glissable horizontalement :
            tout le contenu (toutes les rangées, graphiques compris) est large de 720 px et se
            décale ensemble au glissement, au lieu que chaque rangée défile séparément. */
-        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])) [data-testid="stExpanderDetails"],
+        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])):not(:has([class*="st-key-stack_"])) [data-testid="stExpanderDetails"],
         div[class*="st-key-slide_"] {
             overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin; padding-bottom: 6px;
         }
-        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])) [data-testid="stExpanderDetails"] > *,
+        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])):not(:has([class*="st-key-stack_"])) [data-testid="stExpanderDetails"] > *,
         div[class*="st-key-slide_"] > * {
-            min-width: 720px;
+            min-width: 520px;
         }
-        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])) [data-testid="stHorizontalBlock"],
+        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])):not(:has([class*="st-key-stack_"])) [data-testid="stHorizontalBlock"],
         div[class*="st-key-slide_"] [data-testid="stHorizontalBlock"] {
             flex-wrap: nowrap !important; gap: 0.6rem !important;
         }
-        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+        [data-testid="stExpander"]:has([data-testid="stExpanderDetails"] [data-testid="stHorizontalBlock"]):not(:has([class*="st-key-compact_cols"])):not(:has([class*="st-key-stack_"])) [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
         div[class*="st-key-slide_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
             min-width: 0 !important;
         }
@@ -827,9 +819,19 @@ st.markdown(
         div[class*="st-key-compact_cols"] label p { font-size: 0.74rem !important; }
         div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div { font-size: 1.2rem !important; }
         .stTabs [data-baseweb="tab"] { padding: 0 10px; font-size: 0.85rem; }
+        /* Simulateurs : colonnes empilées (valeurs modifiables en haut, graphiques en dessous) */
+        div[class*="st-key-stack_"] [data-testid="stHorizontalBlock"] {
+            flex-direction: column !important; flex-wrap: nowrap !important; gap: 0.9rem !important;
+        }
+        div[class*="st-key-stack_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            width: 100% !important; min-width: 100% !important; flex: 1 1 100% !important;
+        }
         .h-scroll { flex-wrap: nowrap !important; padding-bottom: 6px; }
         .h-scroll > div { flex: 0 0 auto !important; min-width: 150px !important; }
-        .st-key-sticky_ops_bar { padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px)) 10px !important; }
+        /* À droite : ~15 % de la largeur laissés libres pour le bouton rouge « Manage app » et la
+           pastille de profil que Streamlit Community Cloud affiche par-dessus l'app (ils sont dans la
+           page parente, impossibles à masquer depuis ici) — les boutons ne passent plus dessous. */
+        .st-key-sticky_ops_bar { padding: 10px max(15vw, 64px) calc(10px + env(safe-area-inset-bottom, 0px)) 10px !important; }
         .st-key-sticky_ops_bar .stButton > button { height: 46px !important; min-height: 46px !important; font-size: 0.85rem !important; }
         /* Les deux boutons restent CÔTE À CÔTE sur téléphone (Streamlit les empile par défaut) :
            la barre fait ~70 px au lieu de ~230 px et ne recouvre plus le contenu. */
@@ -936,69 +938,76 @@ def _fmt_bound(v):
     return v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, "strftime") else float(v)
 
 
-# Script injecté UNE fois dans la page : « doigt maintenu » (≈ 0,25 s) sur une courbe → l'infobulle
-# suit ensuite le doigt tout seul, sans déplacer ni zoomer le graphique. Un glissement immédiat reste
-# un déplacement (pan) et deux doigts restent un zoom (pincer).
+# Script injecté UNE fois dans la page. Il ne gère QUE le zoom à deux doigts des courbes : le doigt
+# unique (maintenir puis glisser = l'infobulle suit le doigt) est géré nativement par Plotly, comme sur
+# les cartographies. Plotly ne sait pas zoomer à deux doigts quand le glissement est désactivé : on
+# convertit donc le pincement en événements « molette » (que Plotly gère, bornes comprises), et le
+# glissement à deux doigts en un zoom avant/arrière successifs sur les deux bords (= un déplacement).
 _SCRUB_JS = r"""
 (function () {
   var P = window.parent;
-  if (!P || P.__peaScrub) return;
-  P.__peaScrub = true;
+  if (!P || P.__peaPinch) return;
+  P.__peaPinch = true;
   var code = '(' + function () {
-    var HOLD_MS = 250, TOL = 10;
-    var timer = null, pending = false, scrubbing = false;
-    var sx = 0, sy = 0, gd = null;
+    var pin = null;
     function plotOf(el) { return el && el.closest ? el.closest('.js-plotly-plot') : null; }
+    function zoomable(g) {
+      try { var xa = g._fullLayout.xaxis; return g.querySelector('.nsewdrag') && xa && !xa.fixedrange; } catch (e) { return false; }
+    }
+    function dist(t) { return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY); }
     function layerAt(g, x, y) {
-      var ls = g.querySelectorAll('.nsewdrag');
+      var ls = g.querySelectorAll('.nsewdrag'), best = null;
       for (var i = 0; i < ls.length; i++) {
         var r = ls[i].getBoundingClientRect();
         if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return ls[i];
+        if (!best) best = ls[i];
       }
-      return null;
+      return best;
     }
-    function hover(x, y) {
-      if (!gd) return;
-      var l = layerAt(gd, x, y);
-      if (!l) return;
-      l.dispatchEvent(new MouseEvent('mousemove', {
-        bubbles: true, cancelable: true, view: window, clientX: x, clientY: y
-      }));
+    function wheel(l, x, y, d) {
+      l.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, view: window,
+        clientX: x, clientY: y, deltaY: d, deltaMode: 0 }));
     }
-    function reset() {
-      if (timer) { clearTimeout(timer); timer = null; }
-      pending = false; scrubbing = false;
+    function zoomBy(l, x, y, z) {            // z > 1 : zoom avant autour du point (x, y)
+      var d = -200 * Math.log(z);
+      for (var n = 0; n < 60 && Math.abs(d) > 0.05; n++) {
+        var s = Math.max(-20, Math.min(20, d)); wheel(l, x, y, s); d -= s;
+      }
+    }
+    function span(xa) { return Math.abs(xa._rl[1] - xa._rl[0]); }
+    function fullSpan(xa) {
+      try { return Math.abs(xa.r2l(xa.maxallowed) - xa.r2l(xa.minallowed)); } catch (e) { return NaN; }
+    }
+    function pan(g, l, cy, dx) {
+      var xa = g._fullLayout.xaxis, fs = fullSpan(xa);
+      if (!(fs > 0) || span(xa) >= fs * 0.995) return;      // vue complète : rien à déplacer
+      var r = l.getBoundingClientRect(), f = Math.min(Math.abs(dx) / r.width, 0.25), z = 1 / (1 - f);
+      var A = dx > 0 ? r.left + 1 : r.right - 1, B = dx > 0 ? r.right - 1 : r.left + 1;
+      zoomBy(l, A, cy, z); zoomBy(l, B, cy, 1 / z);
     }
     window.addEventListener('touchstart', function (e) {
-      reset();
-      if (e.touches.length !== 1) return;
-      var g = plotOf(e.target);
-      if (!g || !g.querySelector('.nsewdrag')) return;
-      gd = g; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-      pending = true;
-      timer = setTimeout(function () {
-        timer = null; pending = false; scrubbing = true;
-        gd._dragging = false;               // sinon Plotly ignore le survol pendant un « drag »
-        if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
-        hover(sx, sy);
-      }, HOLD_MS);
+      if (e.touches.length === 2) {
+        var g = plotOf(e.touches[0].target);
+        if (g && zoomable(g)) {
+          pin = { g: g, d: dist(e.touches), cx: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                  cy: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
+        } else { pin = null; }
+      } else { pin = null; }
     }, { capture: true, passive: true });
     window.addEventListener('touchmove', function (e) {
-      if (e.touches.length > 1) { reset(); return; }
-      var t = e.touches[0];
-      if (scrubbing) {
-        e.preventDefault(); e.stopPropagation();
-        hover(t.clientX, t.clientY);
-      } else if (pending) {
-        if (Math.abs(t.clientX - sx) > TOL || Math.abs(t.clientY - sy) > TOL) {
-          reset();                          // le doigt bouge tout de suite : c'est un déplacement normal
-        } else {
-          e.stopPropagation();              // pas encore de pan pendant l'attente du maintien
-        }
-      }
+      if (!pin || e.touches.length !== 2) return;
+      e.preventDefault(); e.stopPropagation();
+      var t = e.touches, d = dist(t), cx = (t[0].clientX + t[1].clientX) / 2, cy = (t[0].clientY + t[1].clientY) / 2;
+      var l = layerAt(pin.g, cx, cy);
+      if (!l || !(pin.d > 0)) return;
+      var z = Math.max(0.6, Math.min(1.6, d / pin.d));
+      if (Math.abs(z - 1) > 0.004) zoomBy(l, cx, cy, z);
+      var dx = cx - pin.cx;
+      if (Math.abs(dx) > 1) pan(pin.g, l, cy, dx);
+      pin.d = d; pin.cx = cx; pin.cy = cy;
     }, { capture: true, passive: false });
     ['touchend', 'touchcancel'].forEach(function (n) {
-      window.addEventListener(n, function () { reset(); }, { capture: true, passive: true });
+      window.addEventListener(n, function (e) { if (e.touches.length < 2) pin = null; }, { capture: true, passive: true });
     });
   } + ')();';
   var s = P.document.createElement('script');
@@ -1009,24 +1018,26 @@ _SCRUB_JS = r"""
 
 
 def _plotly_chart(fig, **kwargs):
-    """st.plotly_chart sans barre d'outils. Courbes/aires : zoom à deux doigts (pincer), déplacement
-    au doigt, double-tap pour revenir à la vue d'origine, zoom/déplacement BORNÉS aux données
-    (on ne peut ni descendre sous la courbe, ni monter trop haut, ni sortir à gauche/droite), et
-    doigt maintenu = l'infobulle suit le doigt le long de la courbe. Barres, camemberts et
-    cartographies : pas de zoom (le doigt fait défiler la page normalement)."""
+    """st.plotly_chart sans barre d'outils.
+    Courbes/aires : comme sur les cartographies, un doigt maintenu puis glissé fait suivre l'infobulle
+    le long de la courbe (aucun déplacement involontaire de la courbe) ; zoom/dézoom à deux doigts
+    sur l'axe du temps UNIQUEMENT (l'axe vertical reste calé sur les données), borné au début et à
+    la fin de la courbe ; double-tap pour revenir à la vue complète.
+    Barres, camemberts, cartographies : pas de zoom (le doigt fait défiler la page normalement)."""
     cfg = dict(kwargs.pop("config", None) or {})
     zoomable = any(getattr(t, "type", "") in ("scatter", "scattergl") for t in fig.data)
     if zoomable:
-        fig.update_layout(dragmode="pan")
+        fig.update_layout(dragmode=False)
         fig.update_xaxes(fixedrange=False)
-        fig.update_yaxes(fixedrange=False)
+        fig.update_yaxes(fixedrange=True)
         cfg.update({"scrollZoom": True, "doubleClick": "reset"})
         try:
-            x_lo, x_hi, y_lo, y_hi = _data_bounds(fig)
+            x_lo, x_hi, _y_lo, _y_hi = _data_bounds(fig)
             if x_lo is not None:
-                fig.update_layout(xaxis=dict(minallowed=_fmt_bound(x_lo), maxallowed=_fmt_bound(x_hi)))
-            if y_lo is not None:
-                fig.update_layout(yaxis=dict(minallowed=float(y_lo), maxallowed=float(y_hi)))
+                upd = dict(minallowed=_fmt_bound(x_lo), maxallowed=_fmt_bound(x_hi))
+                if fig.layout.xaxis.range is None:
+                    upd.update(range=[_fmt_bound(x_lo), _fmt_bound(x_hi)], autorange=False)
+                fig.update_layout(xaxis=upd)
         except Exception:
             pass  # plotly ancien (minallowed/maxallowed absents) ou données inattendues : pas de borne
     else:
@@ -1035,8 +1046,8 @@ def _plotly_chart(fig, **kwargs):
         fig.update_yaxes(fixedrange=True)
         cfg.update({"scrollZoom": False, "doubleClick": False})
     cfg.update({"displayModeBar": False, "displaylogo": False})
-    # Injection (une seule fois par session) du script « doigt maintenu → l'infobulle suit le doigt ».
-    if not st.session_state.get("_pea_scrub_injected"):
+    # Injection (une seule fois par session) du script de pincement à deux doigts.
+    if zoomable and not st.session_state.get("_pea_scrub_injected"):
         st.session_state["_pea_scrub_injected"] = True
         try:
             import streamlit.components.v1 as _components
@@ -1946,7 +1957,7 @@ _ALLOC_HTML = r"""
   html, body { margin: 0; padding: 0; background: transparent; }
   #root { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center;
           font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); padding: 4px 2px; }
-  #wrap { position: relative; width: 250px; flex: 0 0 250px; }
+  #wrap { position: relative; width: 250px; flex: 0 0 250px; margin-top: 46px; }
   svg { width: 250px; height: 250px; display: block; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
   .slice.dim { opacity: .28; }
@@ -1963,6 +1974,7 @@ _ALLOC_HTML = r"""
   .nm { flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pc { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; opacity: .8; }
   text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
+  html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; }
 </style>
 <div id="root">
@@ -1976,7 +1988,7 @@ _ALLOC_HTML = r"""
   try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
   document.documentElement.style.setProperty('--fg', fg);
 
-  var NS = 'http://www.w3.org/2000/svg', C = 125, R = 108, r = 78, sel = -1;
+  var NS = 'http://www.w3.org/2000/svg', C = 125, R = 108, r = 78, sel = -1, mute = 0;
   var svg = document.getElementById('svg'), tip = document.getElementById('tip'), legend = document.getElementById('legend');
 
   // Angle minimal visible pour que même les toutes petites positions restent présentes et cliquables.
@@ -1999,8 +2011,8 @@ _ALLOC_HTML = r"""
   function cut(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
   var slices = D.map(function (d, i) {
-    var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice' });
-    p.addEventListener('click', function (ev) { ev.stopPropagation(); select(sel === i ? -1 : i); });
+    var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice', 'data-i': i });
+    p.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; select(sel === i ? -1 : i); });
     return p;
   });
   var t1 = el('text', { x: C, y: C - 20, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 });
@@ -2008,10 +2020,10 @@ _ALLOC_HTML = r"""
   var t3 = el('text', { x: C, y: C + 28, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 });
 
   var rows = D.map(function (d, i) {
-    var row = document.createElement('div'); row.className = 'row';
+    var row = document.createElement('div'); row.className = 'row'; row.setAttribute('data-i', i);
     row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
     row.querySelector('.nm').textContent = d.n; row.title = d.n;
-    row.addEventListener('click', function (ev) { ev.stopPropagation(); select(sel === i ? -1 : i); });
+    row.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; select(sel === i ? -1 : i); });
     legend.appendChild(row); return row;
   });
 
@@ -2035,10 +2047,47 @@ _ALLOC_HTML = r"""
     var mid = (ang[i][0] + ang[i][1]) / 2, p = pt(R + 4, mid), box = svg.getBoundingClientRect(), sc = box.width / 250;
     tip.innerHTML = '<b></b><br>' + d.v + ' · ' + d.pt + ' %'; tip.querySelector('b').textContent = d.n;
     var x = p[0] * sc, y = p[1] * sc;
-    tip.style.left = Math.min(Math.max(x, 60), box.width - 60) + 'px'; tip.style.top = Math.max(y, 38) + 'px';
+    tip.style.left = Math.min(Math.max(x, 60), box.width - 60) + 'px'; tip.style.top = Math.max(y, 30) + 'px';
     tip.className = 'on';
   }
-  document.body.addEventListener('click', function () { if (sel >= 0) select(-1); });
+  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (sel >= 0) select(-1); });
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  // Doigt maintenu (~0,25 s) sur une part ou une ligne de légende, puis glissé : la sélection suit le doigt.
+  var timer = null, scrub = false, sx = 0, sy = 0;
+  function idxAt(x, y) {
+    var e = document.elementFromPoint(x, y);
+    while (e && e !== document.body) {
+      var v = e.getAttribute && e.getAttribute('data-i');
+      if (v !== null && v !== undefined) return +v;
+      e = e.parentNode;
+    }
+    return -1;
+  }
+  function stopHold() { if (timer) { clearTimeout(timer); timer = null; } if (scrub) { scrub = false; mute = Date.now() + 450; } }
+  document.addEventListener('touchstart', function (e) {
+    stopHold();
+    if (e.touches.length !== 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    if (idxAt(sx, sy) < 0) return;
+    timer = setTimeout(function () {
+      timer = null; scrub = true;
+      if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
+      var i = idxAt(sx, sy); if (i >= 0) select(i);
+    }, 250);
+  }, { passive: true });
+  document.addEventListener('touchmove', function (e) {
+    var t = e.touches[0];
+    if (scrub) {
+      e.preventDefault();
+      var i = idxAt(t.clientX, t.clientY);
+      if (i >= 0 && i !== sel) select(i);
+    } else if (timer && (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10)) {
+      clearTimeout(timer); timer = null;
+    }
+  }, { passive: false });
+  document.addEventListener('touchend', stopHold, { passive: true });
+  document.addEventListener('touchcancel', stopHold, { passive: true });
 
   function fit() {
     try {
@@ -5859,58 +5908,19 @@ if _tab_open(tab_apports):
             _df_mv["Annee"] = _df_mv["Date_Heure"].dt.year
             _annees_ap = sorted(_df_mv["Annee"].unique().tolist(), reverse=True)
 
-            with st.container(key="compact_cols_apports_filtres"):
-                _ca1, _ca2 = st.columns(2)
-                with _ca1:
-                    _annee_ap = st.selectbox("Année", _annees_ap, key="k_apports_annee")
-                with _ca2:
-                    _obj_saved = int(app_config.get("objectif_apports", 0))
-                    _objectif_ap = st.number_input(
-                        "Objectif de versements (€)", min_value=0, step=500, value=_obj_saved,
-                        format="%d", key="k_objectif_apports",
-                        help="Montant total de versements que vous souhaitez atteindre (0 = pas d'objectif).",
-                    )
-            if _objectif_ap != _obj_saved:
-                app_config["objectif_apports"] = int(_objectif_ap)
-                _ok_obj, _err_obj = save_config(app_config)
-                if not _ok_obj:
-                    st.warning(_err_obj)
-
+            # (Les filtres Année / Objectif, les indicateurs, les cartes Plafond/Objectif et la phrase
+            # d'estimation ont été retirés de l'onglet : seuls les calculs servant aux graphiques restent.)
+            _objectif_ap = int(app_config.get("objectif_apports", 0) or 0)
             _total_verse = float(_df_mv.loc[_df_mv["Type"] == "APPORT", "Quantité"].sum())
             _total_retire = float(_df_mv.loc[_df_mv["Type"] == "RETRAIT", "Quantité"].sum())
             _net_total = _total_verse - _total_retire
-            _verse_an = float(_df_mv.loc[(_df_mv["Type"] == "APPORT") & (_df_mv["Annee"] == _annee_ap), "Quantité"].sum())
-            _retire_an = float(_df_mv.loc[(_df_mv["Type"] == "RETRAIT") & (_df_mv["Annee"] == _annee_ap), "Quantité"].sum())
 
-            # Série quotidienne des apports nets cumulés (base du graphique et de l'estimation)
+            # Série quotidienne des apports nets cumulés (base du graphique)
             _net_jour = _df_mv.groupby(_df_mv["Date_Heure"].dt.normalize())["Net"].sum().cumsum()
             _fin_serie = max(pd.Timestamp.today().normalize(), _net_jour.index.max())
             _cumul = _net_jour.reindex(pd.date_range(_net_jour.index.min(), _fin_serie), method="ffill")
 
-            with st.container(key="slide_apports_kpi"):
-                _k1, _k2, _k3, _k4 = st.columns(4)
-                _k1.metric("Versements depuis le début", fmt_eur(_total_verse))
-                _k2.metric(f"Versements {_annee_ap}", fmt_eur(_verse_an))
-                _k3.metric("Retraits cumulés", fmt_eur(_total_retire))
-                _k4.metric("Apports nets", fmt_eur(_net_total))
-
-            _cards = ""
-            if _objectif_ap > 0:
-                _cards += _apports_progress_card(
-                    f"Objectif : {fmt_eur(_objectif_ap)}", _net_total / _objectif_ap * 100,
-                    max(_objectif_ap - _net_total, 0.0), _estimer_date_atteinte(_cumul, _objectif_ap), "#0891b2",
-                )
-            _cards += _apports_progress_card(
-                f"Plafond PEA : {fmt_eur(PLAFOND_APPORTS)}", _net_total / PLAFOND_APPORTS * 100,
-                max(PLAFOND_APPORTS - _net_total, 0.0), _estimer_date_atteinte(_cumul, PLAFOND_APPORTS), "#d97706",
-            )
-            st.markdown(
-                f'<div class="h-scroll" style="display:flex; flex-wrap:wrap; gap:12px; margin:10px 0 4px 0;">{_cards}</div>',
-                unsafe_allow_html=True,
-            )
-            st.caption("Dates estimées par régression linéaire sur l'historique de vos apports nets — à titre indicatif seulement.")
-
-            with st.expander("📈 Évolution des apports nets cumulés", expanded=True):
+            with st.expander("📈 Évolution des apports cumulés", expanded=True):
                 fig_ap = go.Figure()
                 fig_ap.add_trace(go.Scatter(
                     x=_cumul.index, y=_cumul.values, mode="lines", name="",
@@ -8353,7 +8363,8 @@ if _tab_open(tab_simulateur):
                 if not _ok_cfg_reset:
                     st.warning(_err_cfg_reset)
 
-            col_proj_left, col_proj_right = st.columns([1, 3])
+            with st.container(key="stack_sim_projection"):
+                col_proj_left, col_proj_right = st.columns([1, 3])
 
             with col_proj_left:
                 with st.container(border=True):
@@ -8620,7 +8631,8 @@ if _tab_open(tab_simulateur):
         st.markdown("### 🧮 Simulateur de Retrait")
 
         with st.expander("💸 Simulation d'un retrait", expanded=True):
-            col_left, col_right = st.columns([1, 3])
+            with st.container(key="stack_sim_retrait"):
+                col_left, col_right = st.columns([1, 3])
 
             with col_left:
                 with st.container(border=True):
