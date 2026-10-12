@@ -391,7 +391,7 @@ if not app_config.get("user_name"):
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@500;600;700;800&display=swap');
 
     html, body, [class*="css"], .stApp, .stMarkdown, .stDataFrame, button, input, select, textarea {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
@@ -770,15 +770,24 @@ st.markdown(
         margin: 0 !important;
         padding: 0 !important;
     }
-    /* Typographie chiffrée : police à chasse fixe pour tous les montants (lecture en colonnes, chiffres alignés) */
+    /* Typographie chiffrée : Manrope (géométrique, moderne) en chiffres alignés « tabulaires » pour tous
+       les montants — indicateurs, cartes HTML (valeurs en gras et grandes), classes .num-mono. */
     div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div, div[data-testid="stMetricDelta"],
-    .num-mono {
-        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
-        font-variant-numeric: tabular-nums;
-        letter-spacing: -0.03em;
+    .num-mono,
+    [data-testid="stMarkdownContainer"] [style*="font-size:1."][style*="font-weight:7"],
+    [data-testid="stMarkdownContainer"] [style*="font-size:1."][style*="font-weight:8"],
+    [data-testid="stMarkdownContainer"] [style*="font-size: 1."][style*="font-weight: 7"],
+    [data-testid="stMarkdownContainer"] [style*="font-size: 1."][style*="font-weight: 8"],
+    [data-testid="stMarkdownContainer"] [style*="font-size:2."],
+    [data-testid="stMarkdownContainer"] [style*="font-size: 2."] {
+        font-family: 'Manrope', 'Inter', system-ui, -apple-system, sans-serif !important;
+        font-variant-numeric: tabular-nums lining-nums;
+        font-feature-settings: "tnum" 1, "lnum" 1;
+        letter-spacing: -0.025em;
     }
-    div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div { font-size: 1.45rem !important; }
-    div[data-testid="stMetricDelta"] { font-size: 0.78rem !important; }
+    div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div { font-size: 1.55rem !important; font-weight: 800 !important; letter-spacing: -0.035em; }
+    div[data-testid="stMetricDelta"] { font-size: 0.8rem !important; font-weight: 700 !important; }
+    div[data-testid="stMetricLabel"] p { font-weight: 600; letter-spacing: 0.01em; }
 
     /* Défilement horizontal des rangées de cartes HTML (même hors mobile, si l'écran est trop étroit) */
     .h-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -857,12 +866,12 @@ st.markdown(
 PLOTLY_LAYOUT_DEFAULTS = dict(
     paper_bgcolor='rgba(0,0,0,0)',
     plot_bgcolor='rgba(0,0,0,0)',
-    font=dict(family="Inter, sans-serif", color="#334155", size=13),
+    font=dict(family="Manrope, Inter, sans-serif", color="#334155", size=13),
     title_font=dict(family="Inter, sans-serif", size=16, color="#0f172a"),
     legend=dict(bgcolor='rgba(0,0,0,0)'),
-    hoverlabel=dict(font_family="Inter, sans-serif", bgcolor="#0f172a", font_color="#ffffff"),
+    hoverlabel=dict(font_family="Manrope, Inter, sans-serif", bgcolor="#0f172a", font_color="#ffffff"),
 )
-PLOTLY_AXIS_DEFAULTS = dict(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0", linecolor="#cbd5e1")
+PLOTLY_AXIS_DEFAULTS = dict(gridcolor="#e2e8f0", zerolinecolor="#e2e8f0", linecolor="#cbd5e1", griddash="dot")
 
 def apply_chart_theme(fig):
     """Applique le thème visuel commun à une figure Plotly sans modifier ses données/traces."""
@@ -881,133 +890,124 @@ def apply_chart_theme(fig):
         fig.update_layout(title=dict(text=""))
     return fig
 
-def _data_bounds(fig):
-    """Bornes (x_min, x_max, y_min, y_max) des courbes/aires d'une figure, avec une petite marge.
-    Sert à empêcher le zoom/déplacement de sortir du graphique. Renvoie None pour une borne
-    qu'on ne sait pas calculer (axe catégoriel, aucune donnée...)."""
-    x_lo = x_hi = y_lo = y_hi = None
-    zero_based = False
+def _hex_to_rgba(c, alpha):
+    """'#06b6d4' -> 'rgba(6,182,212,alpha)' ; None si la couleur n'est pas un hexadécimal simple."""
+    try:
+        c = str(c).strip()
+        if not c.startswith("#"):
+            return None
+        if len(c) == 4:
+            c = "#" + "".join(ch * 2 for ch in c[1:])
+        r, g, b = int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+        return f"rgba({r},{g},{b},{alpha})"
+    except Exception:
+        return None
+
+
+def _style_curves(fig):
+    """Rendu des courbes/aires : dégradé sous la courbe (intense près de la courbe, fondu vers l'axe),
+    grille en pointillés, ligne verticale qui suit le doigt, infobulle active sur TOUTE la hauteur
+    du graphique (donc aussi en dessous de la courbe)."""
+    ymax_all = None
     for t in fig.data:
         if getattr(t, "type", "") not in ("scatter", "scattergl"):
             continue
-        if getattr(t, "yaxis", None) not in (None, "y"):
-            continue
-        if t.x is None or t.y is None or len(t.x) == 0:
-            continue
-        xs = pd.Series(list(t.x))
-        ys = pd.to_numeric(pd.Series(list(t.y)), errors="coerce").dropna()
-        if not pd.api.types.is_numeric_dtype(xs):
-            xs = pd.to_datetime(xs, errors="coerce")
-        xs = xs.dropna()
-        if xs.empty or ys.empty:
-            continue
         try:
-            lo, hi = xs.min(), xs.max()
-            x_lo = lo if x_lo is None else min(x_lo, lo)
-            x_hi = hi if x_hi is None else max(x_hi, hi)
+            ys = pd.to_numeric(pd.Series(list(t.y)), errors="coerce").dropna()
         except Exception:
-            pass
-        y_lo = float(ys.min()) if y_lo is None else min(y_lo, float(ys.min()))
-        y_hi = float(ys.max()) if y_hi is None else max(y_hi, float(ys.max()))
-        if getattr(t, "fill", None) in ("tozeroy", "tonexty"):
-            zero_based = True
-    if y_lo is None:
-        return None, None, None, None
-    # Lignes horizontales (objectif, plafond...) : elles doivent rester visibles.
-    for s in (fig.layout.shapes or []):
-        if getattr(s, "type", "") == "line" and getattr(s, "yref", None) in (None, "y") \
-                and s.y0 is not None and s.y0 == s.y1:
-            try:
-                y_lo = min(y_lo, float(s.y0))
-                y_hi = max(y_hi, float(s.y0))
-            except Exception:
-                pass
-    if zero_based or fig.layout.yaxis.rangemode == "tozero":
-        y_lo = min(y_lo, 0.0)
-    span_y = (y_hi - y_lo) or max(abs(y_hi), 1.0)
-    y_lo, y_hi = y_lo - 0.04 * span_y, y_hi + 0.10 * span_y
-    if x_lo is not None and x_hi is not None and x_hi > x_lo:
-        pad = (x_hi - x_lo) * 0.03
-        x_lo, x_hi = x_lo - pad, x_hi + pad
-    else:
-        x_lo = x_hi = None
-    return x_lo, x_hi, y_lo, y_hi
+            ys = pd.Series(dtype=float)
+        if getattr(t, "fill", None) == "tozeroy" and not getattr(t, "stackgroup", None) and not ys.empty:
+            col = getattr(getattr(t, "line", None), "color", None)
+            top, bottom = _hex_to_rgba(col, 0.42), _hex_to_rgba(col, 0.0)
+            if top and bottom:
+                try:
+                    t.update(
+                        fillgradient=dict(
+                            type="vertical", start=min(0.0, float(ys.min())), stop=float(ys.max()),
+                            colorscale=[[0.0, bottom], [1.0, top]],
+                        ),
+                        fillcolor=top,
+                    )
+                except Exception:
+                    pass  # plotly trop ancien pour fillgradient : on garde l'aplat d'origine
+    if fig.layout.hovermode in (None, "closest"):
+        fig.update_layout(hovermode="x")
+    fig.update_layout(hoverdistance=-1, spikedistance=-1)
+    fig.update_xaxes(
+        showspikes=True, spikemode="across", spikesnap="cursor",
+        spikethickness=1, spikedash="dot", spikecolor="#94a3b8",
+    )
 
 
-def _fmt_bound(v):
-    return v.strftime("%Y-%m-%d %H:%M:%S") if hasattr(v, "strftime") else float(v)
-
-
-# Script injecté UNE fois dans la page. Il ne gère QUE le zoom à deux doigts des courbes : le doigt
-# unique (maintenir puis glisser = l'infobulle suit le doigt) est géré nativement par Plotly, comme sur
-# les cartographies. Plotly ne sait pas zoomer à deux doigts quand le glissement est désactivé : on
-# convertit donc le pincement en événements « molette » (que Plotly gère, bornes comprises), et le
-# glissement à deux doigts en un zoom avant/arrière successifs sur les deux bords (= un déplacement).
+# Script injecté UNE fois dans la page : « doigt maintenu » (~0,25 s) sur un graphique → l'infobulle
+# suit ensuite le doigt tout seul, sans faire défiler la page. Un glissement immédiat reste un
+# défilement normal de la page. Le doigt peut être n'importe où dans la zone du graphique
+# (au-dessus ou au-dessous de la courbe) : on le ramène dans la zone de survol de Plotly.
 _SCRUB_JS = r"""
 (function () {
   var P = window.parent;
-  if (!P || P.__peaPinch) return;
-  P.__peaPinch = true;
+  if (!P || P.__peaScrub2) return;
+  P.__peaScrub2 = true;
   var code = '(' + function () {
-    var pin = null;
+    var HOLD_MS = 250, TOL = 10;
+    var timer = null, pending = false, scrubbing = false, sx = 0, sy = 0, gd = null;
     function plotOf(el) { return el && el.closest ? el.closest('.js-plotly-plot') : null; }
-    function zoomable(g) {
-      try { var xa = g._fullLayout.xaxis; return g.querySelector('.nsewdrag') && xa && !xa.fixedrange; } catch (e) { return false; }
-    }
-    function dist(t) { return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY); }
-    function layerAt(g, x, y) {
-      var ls = g.querySelectorAll('.nsewdrag'), best = null;
+    function layerFor(g, x, y) {
+      var ls = g.querySelectorAll('.nsewdrag'), best = null, bd = 1e9;
       for (var i = 0; i < ls.length; i++) {
         var r = ls[i].getBoundingClientRect();
-        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return ls[i];
-        if (!best) best = ls[i];
+        var dx = x < r.left ? r.left - x : (x > r.right ? x - r.right : 0);
+        var dy = y < r.top ? r.top - y : (y > r.bottom ? y - r.bottom : 0);
+        var d = dx + dy;
+        if (d < bd) { bd = d; best = ls[i]; }
       }
       return best;
     }
-    function wheel(l, x, y, d) {
-      l.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, view: window,
-        clientX: x, clientY: y, deltaY: d, deltaMode: 0 }));
+    function hover(x, y) {
+      if (!gd) return;
+      var l = layerFor(gd, x, y);
+      if (!l) return;
+      var r = l.getBoundingClientRect();
+      var cx = Math.min(Math.max(x, r.left + 1), r.right - 1);
+      var cy = Math.min(Math.max(y, r.top + 1), r.bottom - 1);
+      l.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy
+      }));
     }
-    function zoomBy(l, x, y, z) {            // z > 1 : zoom avant autour du point (x, y)
-      var d = -200 * Math.log(z);
-      for (var n = 0; n < 60 && Math.abs(d) > 0.05; n++) {
-        var s = Math.max(-20, Math.min(20, d)); wheel(l, x, y, s); d -= s;
-      }
-    }
-    function span(xa) { return Math.abs(xa._rl[1] - xa._rl[0]); }
-    function fullSpan(xa) {
-      try { return Math.abs(xa.r2l(xa.maxallowed) - xa.r2l(xa.minallowed)); } catch (e) { return NaN; }
-    }
-    function pan(g, l, cy, dx) {
-      var xa = g._fullLayout.xaxis, fs = fullSpan(xa);
-      if (!(fs > 0) || span(xa) >= fs * 0.995) return;      // vue complète : rien à déplacer
-      var r = l.getBoundingClientRect(), f = Math.min(Math.abs(dx) / r.width, 0.25), z = 1 / (1 - f);
-      var A = dx > 0 ? r.left + 1 : r.right - 1, B = dx > 0 ? r.right - 1 : r.left + 1;
-      zoomBy(l, A, cy, z); zoomBy(l, B, cy, 1 / z);
+    function reset() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      pending = false; scrubbing = false;
     }
     window.addEventListener('touchstart', function (e) {
-      if (e.touches.length === 2) {
-        var g = plotOf(e.touches[0].target);
-        if (g && zoomable(g)) {
-          pin = { g: g, d: dist(e.touches), cx: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-                  cy: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
-        } else { pin = null; }
-      } else { pin = null; }
+      reset();
+      if (e.touches.length !== 1) return;
+      var g = plotOf(e.target);
+      if (!g || !g.querySelector('.nsewdrag')) return;
+      gd = g; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      pending = true;
+      timer = setTimeout(function () {
+        timer = null; pending = false; scrubbing = true;
+        gd._dragging = false;
+        if (gd._fullLayout) gd._fullLayout._dragging = false;
+        if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
+        hover(sx, sy);
+      }, HOLD_MS);
     }, { capture: true, passive: true });
     window.addEventListener('touchmove', function (e) {
-      if (!pin || e.touches.length !== 2) return;
-      e.preventDefault(); e.stopPropagation();
-      var t = e.touches, d = dist(t), cx = (t[0].clientX + t[1].clientX) / 2, cy = (t[0].clientY + t[1].clientY) / 2;
-      var l = layerAt(pin.g, cx, cy);
-      if (!l || !(pin.d > 0)) return;
-      var z = Math.max(0.6, Math.min(1.6, d / pin.d));
-      if (Math.abs(z - 1) > 0.004) zoomBy(l, cx, cy, z);
-      var dx = cx - pin.cx;
-      if (Math.abs(dx) > 1) pan(pin.g, l, cy, dx);
-      pin.d = d; pin.cx = cx; pin.cy = cy;
+      if (e.touches.length > 1) { reset(); return; }
+      var t = e.touches[0];
+      if (scrubbing) {
+        e.preventDefault(); e.stopPropagation();
+        hover(t.clientX, t.clientY);
+      } else if (pending && (Math.abs(t.clientX - sx) > TOL || Math.abs(t.clientY - sy) > TOL)) {
+        reset();                              // le doigt bouge tout de suite : défilement normal
+      }
     }, { capture: true, passive: false });
     ['touchend', 'touchcancel'].forEach(function (n) {
-      window.addEventListener(n, function (e) { if (e.touches.length < 2) pin = null; }, { capture: true, passive: true });
+      window.addEventListener(n, function () { reset(); }, { capture: true, passive: true });
+    });
+    document.addEventListener('contextmenu', function (e) {
+      if (plotOf(e.target)) e.preventDefault();
     });
   } + ')();';
   var s = P.document.createElement('script');
@@ -1018,37 +1018,22 @@ _SCRUB_JS = r"""
 
 
 def _plotly_chart(fig, **kwargs):
-    """st.plotly_chart sans barre d'outils.
-    Courbes/aires : comme sur les cartographies, un doigt maintenu puis glissé fait suivre l'infobulle
-    le long de la courbe (aucun déplacement involontaire de la courbe) ; zoom/dézoom à deux doigts
-    sur l'axe du temps UNIQUEMENT (l'axe vertical reste calé sur les données), borné au début et à
-    la fin de la courbe ; double-tap pour revenir à la vue complète.
-    Barres, camemberts, cartographies : pas de zoom (le doigt fait défiler la page normalement)."""
+    """st.plotly_chart sans barre d'outils ni zoom : le graphique ne peut pas être déformé ou déplacé.
+    Doigt maintenu puis glissé = l'infobulle suit le doigt sur tout le graphique (y compris sous la
+    courbe) ; un glissement immédiat fait défiler la page normalement."""
     cfg = dict(kwargs.pop("config", None) or {})
-    zoomable = any(getattr(t, "type", "") in ("scatter", "scattergl") for t in fig.data)
-    if zoomable:
-        fig.update_layout(dragmode=False)
-        fig.update_xaxes(fixedrange=False)
-        fig.update_yaxes(fixedrange=True)
-        cfg.update({"scrollZoom": True, "doubleClick": "reset"})
+    if any(getattr(t, "type", "") in ("scatter", "scattergl") for t in fig.data):
         try:
-            x_lo, x_hi, _y_lo, _y_hi = _data_bounds(fig)
-            if x_lo is not None:
-                upd = dict(minallowed=_fmt_bound(x_lo), maxallowed=_fmt_bound(x_hi))
-                if fig.layout.xaxis.range is None:
-                    upd.update(range=[_fmt_bound(x_lo), _fmt_bound(x_hi)], autorange=False)
-                fig.update_layout(xaxis=upd)
+            _style_curves(fig)
         except Exception:
-            pass  # plotly ancien (minallowed/maxallowed absents) ou données inattendues : pas de borne
-    else:
-        fig.update_layout(dragmode=False)
-        fig.update_xaxes(fixedrange=True)
-        fig.update_yaxes(fixedrange=True)
-        cfg.update({"scrollZoom": False, "doubleClick": False})
-    cfg.update({"displayModeBar": False, "displaylogo": False})
-    # Injection (une seule fois par session) du script de pincement à deux doigts.
-    if zoomable and not st.session_state.get("_pea_scrub_injected"):
-        st.session_state["_pea_scrub_injected"] = True
+            pass
+    fig.update_layout(dragmode=False)
+    fig.update_xaxes(fixedrange=True)
+    fig.update_yaxes(fixedrange=True)
+    cfg.update({"scrollZoom": False, "doubleClick": False, "displayModeBar": False, "displaylogo": False})
+    # Injection (une seule fois par session) du script « doigt maintenu → l'infobulle suit le doigt ».
+    if not st.session_state.get("_pea_scrub_injected2"):
+        st.session_state["_pea_scrub_injected2"] = True
         try:
             import streamlit.components.v1 as _components
             _components.html("<script>" + _SCRUB_JS + "</script>", height=0)
@@ -1954,9 +1939,10 @@ def _alloc_color(i):
 
 _ALLOC_HTML = r"""
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
   html, body { margin: 0; padding: 0; background: transparent; }
   #root { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center;
-          font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); padding: 4px 2px; }
+          font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); padding: 4px 2px; }
   #wrap { position: relative; width: 250px; flex: 0 0 250px; margin-top: 46px; }
   svg { width: 250px; height: 250px; display: block; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
@@ -1972,10 +1958,10 @@ _ALLOC_HTML = r"""
   .row.dim { opacity: .4; }
   .dot { width: 11px; height: 11px; border-radius: 3px; flex: 0 0 11px; }
   .nm { flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pc { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; opacity: .8; }
+  .pc { font-family: Manrope, Inter, system-ui, sans-serif; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12.5px; opacity: .85; }
   text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
   html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; }
+  .mono { font-family: Manrope, Inter, system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
 </style>
 <div id="root">
   <div id="wrap"><svg id="svg" viewBox="0 0 250 250"></svg><div id="tip"></div></div>
@@ -5180,12 +5166,12 @@ def _tab_open(_tab):
 # chaque onglet (widgets ayant un key= littéral).
 _TAB_STATE_KEYS = {
     "tab_overview": ("apport_prevision_input", ),
-    "tab_apports": ("k_apports_annee", "k_objectif_apports", ),
+    "tab_apports": (),
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
     "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
     "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
-    "tab_simulateur": ("k_horizon_projection", "k_apport_annuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_pea_5ans", ),
+    "tab_simulateur": ("k_horizon_projection", "k_apport_annuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_pea_5ans", "k_pat_sim_depart", "k_pat_sim_invest", "k_pat_sim_annees", "k_pat_sim_rend", "k_pat_sim_impot", "k_pat_sim_retrait", "k_pat_sim_infl", ),
 }
 _tab_objs_by_name = {
     "tab_overview": tab_overview, "tab_positions": tab_positions, "tab_apports": tab_apports, "tab_classements": tab_classements,
@@ -5910,7 +5896,6 @@ if _tab_open(tab_apports):
 
             # (Les filtres Année / Objectif, les indicateurs, les cartes Plafond/Objectif et la phrase
             # d'estimation ont été retirés de l'onglet : seuls les calculs servant aux graphiques restent.)
-            _objectif_ap = int(app_config.get("objectif_apports", 0) or 0)
             _total_verse = float(_df_mv.loc[_df_mv["Type"] == "APPORT", "Quantité"].sum())
             _total_retire = float(_df_mv.loc[_df_mv["Type"] == "RETRAIT", "Quantité"].sum())
             _net_total = _total_verse - _total_retire
@@ -5929,12 +5914,6 @@ if _tab_open(tab_apports):
                     customdata=[fmt_eur(v) for v in _cumul.values],
                     hovertemplate="<b>%{x|%d/%m/%Y}</b><br>Apports nets cumulés : %{customdata}<extra></extra>",
                 ))
-                if _objectif_ap > 0:
-                    fig_ap.add_hline(
-                        y=_objectif_ap, line_dash="dash", line_color="#0284c7", line_width=1.5,
-                        annotation_text="Objectif", annotation_position="top left",
-                        annotation_font_color="#0284c7",
-                    )
                 if _net_total >= 0.6 * PLAFOND_APPORTS:
                     fig_ap.add_hline(
                         y=PLAFOND_APPORTS, line_dash="dot", line_color="#d97706", line_width=1.5,
@@ -6127,7 +6106,8 @@ if _tab_open(tab_classements):
                     height=max(220, 34 * _n + 40),
                     margin=dict(l=10, r=70, t=10, b=10),
                     bargap=0.35,
-                    xaxis=dict(title=axis_title, showgrid=True, gridcolor="#f1f5f9", zeroline=True, range=[0, _edge * 1.25]),
+                    xaxis=dict(title=None, showgrid=True, gridcolor="#f1f5f9", zeroline=True, range=[0, _edge * 1.25],
+                               nticks=4, tickformat=",.0f", ticksuffix=" €", tickfont=dict(size=11)),
                     yaxis=dict(title=None, tickmode="array", tickvals=_y, ticktext=_labels, range=[-0.6, _n - 0.4]),
                 )
                 apply_chart_theme(fig)
@@ -6227,7 +6207,7 @@ if _tab_open(tab_classements):
                             showlegend=False,
                         )
 
-                    col_gains_frise, col_pertes_frise = st.columns(2)
+                    col_gains_frise, col_pertes_frise = st.columns(2, gap="small")
 
                     # Totaux sur l'ENSEMBLE des ventes réalisées (pas seulement les 10 affichées dans
                     # chaque classement ci-dessous), sous la même forme de petite carte que "Total
@@ -6390,7 +6370,7 @@ if _tab_open(tab_classements):
                         st.markdown("#### Meilleures et pires journées du portefeuille (en €)")
                         df_best_days_eur = df_days_rank.nlargest(10, "PnL_Jour").sort_values("PnL_Jour", ascending=False)
                         df_worst_days_eur = df_days_rank.nsmallest(10, "PnL_Jour").sort_values("PnL_Jour", ascending=True)
-                        col_best_eur, col_worst_eur = st.columns(2)
+                        col_best_eur, col_worst_eur = st.columns(2, gap="small")
                         with col_best_eur:
                             st.markdown("**📈 Top 10 des meilleures journées**")
                             _render_days_ranking(df_best_days_eur, "PnL_Jour", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6403,7 +6383,7 @@ if _tab_open(tab_classements):
                         st.markdown("#### Meilleures et pires journées du portefeuille (en %)")
                         df_best_days_pct = df_days_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                         df_worst_days_pct = df_days_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                        col_best_pct, col_worst_pct = st.columns(2)
+                        col_best_pct, col_worst_pct = st.columns(2, gap="small")
                         with col_best_pct:
                             st.markdown("**📈 Top 10 des meilleures journées**")
                             _render_days_ranking(df_best_days_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -6432,7 +6412,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires mois du portefeuille (en €)")
                     df_best_months_eur = df_months_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_months_eur = df_months_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_m_eur, col_worst_m_eur = st.columns(2)
+                    col_best_m_eur, col_worst_m_eur = st.columns(2, gap="small")
                     with col_best_m_eur:
                         st.markdown("**📈 Top 10 des meilleurs mois**")
                         _render_months_ranking(df_best_months_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6445,7 +6425,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires mois du portefeuille (en %)")
                     df_best_months_pct = df_months_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_months_pct = df_months_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_m_pct, col_worst_m_pct = st.columns(2)
+                    col_best_m_pct, col_worst_m_pct = st.columns(2, gap="small")
                     with col_best_m_pct:
                         st.markdown("**📈 Top 10 des meilleurs mois**")
                         _render_months_ranking(df_best_months_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -6474,7 +6454,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires années du portefeuille (en €)")
                     df_best_years_eur = df_years_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_years_eur = df_years_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_y_eur, col_worst_y_eur = st.columns(2)
+                    col_best_y_eur, col_worst_y_eur = st.columns(2, gap="small")
                     with col_best_y_eur:
                         st.markdown("**📈 Meilleures années**")
                         _render_years_ranking(df_best_years_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6487,7 +6467,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires années du portefeuille (en %)")
                     df_best_years_pct = df_years_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_years_pct = df_years_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_y_pct, col_worst_y_pct = st.columns(2)
+                    col_best_y_pct, col_worst_y_pct = st.columns(2, gap="small")
                     with col_best_y_pct:
                         st.markdown("**📈 Meilleures années**")
                         _render_years_ranking(df_best_years_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -8323,6 +8303,140 @@ if _tab_open(tab_watchlist):
 # ------------------------------------------
 # ONGLÊT 7 : SIMULATEUR DE RETRAIT
 # ------------------------------------------
+
+@fragment_wrapper
+def _render_simulateur_patrimoine(valeur_depart, apport_annuel_defaut, rendement_defaut, taux_impot_defaut):
+    """Simulateur « patrimoine & revenu passif » : projection année par année, nette d'impôt sur les
+    gains, avec revenu passif mensuel (taux de retrait) et valeurs corrigées de l'inflation.
+    Même principe que la projection existante (croissance d'abord, versement en fin d'année)."""
+    st.markdown("### 🧭 Simulateur de patrimoine & revenu passif")
+    with st.expander("🌱 Valeur nette, revenu passif et inflation", expanded=True):
+        with st.container(key="stack_sim_patrimoine"):
+            col_in, col_out = st.columns([1, 2], gap="medium")
+
+        with col_in:
+            with st.container(border=True):
+                st.markdown("**💼 Point de départ**")
+                pat0 = st.number_input(
+                    "Patrimoine actuel (€)", min_value=0.0, step=1000.0, format="%.0f",
+                    value=float(max(round(valeur_depart), 0)), key="k_pat_sim_depart",
+                )
+                inv = st.number_input(
+                    "Investissements annuels (€)", min_value=0.0, step=100.0, format="%.0f",
+                    value=float(max(apport_annuel_defaut, 0)), key="k_pat_sim_invest",
+                )
+                ans = st.slider("Nombre d'années d'épargne", min_value=1, max_value=40, value=15, key="k_pat_sim_annees")
+            with st.container(border=True):
+                st.markdown("**⚙️ Hypothèses**")
+                with st.container(key="compact_cols_pat_sim"):
+                    h1, h2 = st.columns(2)
+                    rend = h1.number_input("Rendement (%)", min_value=-50.0, max_value=100.0, step=0.5,
+                                           value=float(rendement_defaut), key="k_pat_sim_rend")
+                    impot = h2.number_input("Imposition des gains (%)", min_value=0.0, max_value=100.0, step=0.1,
+                                            value=float(taux_impot_defaut), key="k_pat_sim_impot",
+                                            help="Par défaut : le taux de prélèvements sociaux réglé dans l'application.")
+                    h3, h4 = st.columns(2)
+                    taux_ret = h3.number_input("Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25,
+                                               value=3.0, key="k_pat_sim_retrait",
+                                               help="Part du capital net retirée chaque année pour le revenu passif.")
+                    infl = h4.number_input("Inflation (%)", min_value=0.0, max_value=20.0, step=0.1,
+                                           value=2.0, key="k_pat_sim_infl")
+
+        # --- Calcul année par année (croissance, puis versement en fin d'année)
+        n = int(ans)
+        r = rend / 100.0
+        vals, verses, interets = [pat0], [0.0], [0.0]
+        for k in range(1, n + 1):
+            vals.append(vals[-1] * (1 + r) + inv)
+            verses.append(inv * k)
+            interets.append(vals[-1] - pat0 - inv * k)
+        valeur_future = vals[-1]
+        plus_value = valeur_future - pat0 - inv * n
+        impot_du = max(plus_value, 0.0) * impot / 100.0
+        valeur_nette = valeur_future - impot_du
+        revenu_mensuel = valeur_nette * taux_ret / 100.0 / 12.0
+        deflateur = (1 + infl / 100.0) ** n
+        valeur_nette_reelle = valeur_nette / deflateur
+        revenu_reel = revenu_mensuel / deflateur
+        interets_nets = plus_value - impot_du
+
+        with col_out:
+            st.markdown(
+                f"""
+            <div style="text-align:center; padding:6px 0 2px 0;">
+                <div style="font-size:0.78rem; color:#64748b; font-weight:600;">Valeur nette dans {n} an{'s' if n > 1 else ''}</div>
+                <div style="font-size:2.3rem; font-weight:800; color:#0f172a; line-height:1.15;">{fmt_eur(valeur_nette)}</div>
+                <div style="font-size:0.85rem; color:#64748b; margin-top:2px;">soit un revenu passif d'environ
+                    <b style="color:#0284c7;">{fmt_eur(revenu_mensuel)} / mois</b>
+                    <span style="color:#94a3b8;"> · {fmt_eur(revenu_reel)} / mois en euros d'aujourd'hui</span></div>
+            </div>
+            <div class="h-scroll" style="display:flex; justify-content:center; flex-wrap:wrap; gap:8px; margin:10px 0 6px 0;">
+                <span style="background:#f1f5f9; border:1px solid #e2e8f0; border-radius:999px; padding:4px 12px; font-size:0.78rem; color:#475569;">
+                    <span style="color:#94a3b8;">●</span> Patrimoine initial <b>{fmt_eur(pat0)}</b></span>
+                <span style="background:#f0f9ff; border:1px solid #bae6fd; border-radius:999px; padding:4px 12px; font-size:0.78rem; color:#075985;">
+                    <span style="color:#38bdf8;">●</span> Versements <b>{fmt_eur(inv * n)}</b></span>
+                <span style="background:#fffbeb; border:1px solid #fde68a; border-radius:999px; padding:4px 12px; font-size:0.78rem; color:#92400e;">
+                    <span style="color:#f59e0b;">●</span> Intérêts nets <b>{fmt_eur(interets_nets)}</b></span>
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+
+            xs = list(range(n + 1))
+            fig_pat = go.Figure()
+            fig_pat.add_trace(go.Scatter(
+                x=xs, y=[pat0] * (n + 1), name="Patrimoine initial", mode="lines", stackgroup="pat",
+                line=dict(color="#94a3b8", width=1.5), fill="tozeroy", fillcolor="rgba(148,163,184,0.28)",
+                customdata=[fmt_eur(pat0)] * (n + 1),
+                hovertemplate="Patrimoine initial : %{customdata}<extra></extra>",
+            ))
+            fig_pat.add_trace(go.Scatter(
+                x=xs, y=verses, name="Versements", mode="lines", stackgroup="pat",
+                line=dict(color="#38bdf8", width=1.5), fill="tonexty", fillcolor="rgba(56,189,248,0.30)",
+                customdata=[fmt_eur(v) for v in verses],
+                hovertemplate="Versements cumulés : %{customdata}<extra></extra>",
+            ))
+            fig_pat.add_trace(go.Scatter(
+                x=xs, y=[max(i, 0.0) for i in interets], name="Intérêts", mode="lines", stackgroup="pat",
+                line=dict(color="#f59e0b", width=2.2), fill="tonexty", fillcolor="rgba(245,158,11,0.30)",
+                customdata=[fmt_eur(v) for v in interets],
+                hovertemplate="Intérêts cumulés : %{customdata}<extra></extra>",
+            ))
+            _tv = sorted({0, n // 2, n})
+            fig_pat.update_layout(
+                height=330, margin=dict(l=8, r=12, t=10, b=8), hovermode="x unified", showlegend=False,
+                yaxis=dict(title="", rangemode="tozero", tickformat=".2s", ticksuffix=" €", nticks=5, automargin=True),
+                xaxis=dict(
+                    title="", tickmode="array", tickvals=_tv, showgrid=False,
+                    ticktext=["Aujourd'hui" if t == 0 else (f"dans {t} an{'s' if t > 1 else ''}" if t == n else f"{t} an{'s' if t > 1 else ''}") for t in _tv],
+                ),
+            )
+            apply_chart_theme(fig_pat)
+            _plotly_chart(fig_pat, use_container_width=True, theme=None, key="chart_sim_patrimoine")
+
+            def _stat(label, value, color="#0f172a"):
+                return (
+                    '<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:140px; text-align:center;">'
+                    f'<div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">{label}</div>'
+                    f'<div style="font-size:1.05rem; font-weight:700; color:{color};">{value}</div></div>'
+                )
+            st.markdown(
+                '<div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">'
+                + _stat("Valeur future (brute)", fmt_eur(valeur_future))
+                + _stat("Dont plus-value", fmt_eur(plus_value), "#16a34a" if plus_value >= 0 else "#dc2626")
+                + _stat("Impôt sur les gains", fmt_eur(impot_du), "#d97706")
+                + _stat("Valeur nette", fmt_eur(valeur_nette), "#0284c7")
+                + _stat("Valeur nette (€ d'aujourd'hui)", fmt_eur(valeur_nette_reelle))
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "Projection indicative, non garantie : rendement constant, versements en fin d'année, "
+                "imposition appliquée une seule fois sur la plus-value finale, revenu passif = taux de retrait "
+                "× valeur nette. Le rendement proposé est celui constaté depuis l'ouverture du PEA."
+            )
+
+
 if _tab_open(tab_simulateur):
     with tab_simulateur:
         PLAFOND_PEA_VERSEMENTS = 150000.0
@@ -8784,3 +8898,14 @@ if _tab_open(tab_simulateur):
                     """,
                         unsafe_allow_html=True
                     )
+
+        # ==========================================
+        # 3. SIMULATEUR DE PATRIMOINE & REVENU PASSIF
+        # ==========================================
+        _perf_defaut_pat = round(float(perf_annualisee) * 100, 2) if perf_annualisee and perf_annualisee > 0 else 7.0
+        _render_simulateur_patrimoine(
+            float(tot_value_globale),
+            int(app_config.get("apport_annuel_projection", 0) or 0),
+            _perf_defaut_pat,
+            float(app_config.get("taux_prelevements_sociaux", 18.6)),
+        )
