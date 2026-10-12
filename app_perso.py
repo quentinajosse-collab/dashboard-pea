@@ -391,7 +391,7 @@ if not app_config.get("user_name"):
 st.markdown(
     """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
     html, body, [class*="css"], .stApp, .stMarkdown, .stDataFrame, button, input, select, textarea {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
@@ -769,6 +769,56 @@ st.markdown(
         margin: 0 !important;
         padding: 0 !important;
     }
+    /* Typographie chiffrée : police à chasse fixe pour tous les montants (lecture en colonnes, chiffres alignés) */
+    div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div, div[data-testid="stMetricDelta"],
+    .num-mono {
+        font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.03em;
+    }
+    div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div { font-size: 1.45rem !important; }
+    div[data-testid="stMetricDelta"] { font-size: 0.78rem !important; }
+
+    /* Défilement horizontal des rangées de cartes HTML (même hors mobile, si l'écran est trop étroit) */
+    .h-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+    /* ===== Affichage téléphone ===== */
+    @media (max-width: 640px) {
+        .main .block-container, [data-testid="stMainBlockContainer"] {
+            padding-left: 0.75rem !important; padding-right: 0.75rem !important;
+        }
+        /* Rangées de métriques : une seule ligne, glissable horizontalement (au lieu de s'empiler) */
+        .st-key-row_capital_wrap [data-testid="stHorizontalBlock"],
+        .st-key-row_perf_wrap [data-testid="stHorizontalBlock"],
+        .st-key-row_gains_wrap [data-testid="stHorizontalBlock"],
+        div[class*="st-key-scroll_cols"] [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important; overflow-x: auto; gap: 0.6rem !important;
+            -webkit-overflow-scrolling: touch; padding-bottom: 8px;
+            scrollbar-width: thin;
+        }
+        .st-key-row_capital_wrap [data-testid="stHorizontalBlock"] > div,
+        .st-key-row_perf_wrap [data-testid="stHorizontalBlock"] > div,
+        .st-key-row_gains_wrap [data-testid="stHorizontalBlock"] > div,
+        div[class*="st-key-scroll_cols"] [data-testid="stHorizontalBlock"] > div {
+            flex: 0 0 170px !important; min-width: 170px !important; width: 170px !important;
+        }
+        /* Rangées de filtres : champs réduits, côte à côte (2 par ligne) au lieu d'une pile verticale */
+        div[class*="st-key-compact_cols"] [data-testid="stHorizontalBlock"] {
+            flex-wrap: nowrap !important; gap: 0.5rem !important;
+        }
+        div[class*="st-key-compact_cols"] [data-testid="stHorizontalBlock"] > div {
+            flex: 1 1 0 !important; min-width: 0 !important; width: auto !important;
+        }
+        div[class*="st-key-compact_cols"] input,
+        div[class*="st-key-compact_cols"] [data-baseweb="select"] > div { font-size: 0.82rem !important; }
+        div[class*="st-key-compact_cols"] label p { font-size: 0.74rem !important; }
+        div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div { font-size: 1.2rem !important; }
+        .stTabs [data-baseweb="tab"] { padding: 0 10px; font-size: 0.85rem; }
+        .h-scroll { flex-wrap: nowrap !important; padding-bottom: 6px; }
+        .h-scroll > div { flex: 0 0 auto !important; min-width: 150px !important; }
+        .st-key-sticky_ops_bar { padding: 10px 10px !important; }
+        .st-key-sticky_ops_bar .stButton > button { height: 46px !important; min-height: 46px !important; font-size: 0.85rem !important; }
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -790,6 +840,8 @@ def apply_chart_theme(fig):
     fig.update_layout(**PLOTLY_LAYOUT_DEFAULTS)
     fig.update_xaxes(**PLOTLY_AXIS_DEFAULTS)
     fig.update_yaxes(**PLOTLY_AXIS_DEFAULTS)
+    # Pas de zoom/déplacement au doigt : sur téléphone, le graphique ne "vole" plus le défilement de la page.
+    fig.update_layout(dragmode=False)
     # PLOTLY_LAYOUT_DEFAULTS définit title_font (style du titre) mais pas title.text : pour un
     # graphique qui ne fixe pas lui-même de titre, Plotly se retrouve avec un objet "title" à
     # moitié rempli (police définie, texte manquant), ce qui affiche littéralement le texte
@@ -798,6 +850,12 @@ def apply_chart_theme(fig):
     if fig.layout.title.text is None:
         fig.update_layout(title=dict(text=""))
     return fig
+
+def _plotly_chart(fig, **kwargs):
+    """st.plotly_chart sans la barre d'outils (reset axes, autoscale, zoom...) ni le zoom à la molette."""
+    cfg = dict(kwargs.pop("config", None) or {})
+    cfg.update({"displayModeBar": False, "displaylogo": False, "scrollZoom": False, "doubleClick": False})
+    return st.plotly_chart(fig, config=cfg, **kwargs)
 
 try:
     locale.setlocale(locale.LC_TIME, 'fr_FR.UTF-8')
@@ -818,6 +876,34 @@ def mois_fr(dt, with_year=True):
     système (voir commentaire ci-dessus). with_year=True ajoute l'année ('Octobre 2026')."""
     label = _MOIS_FR[dt.month - 1]
     return f"{label} {dt.year}" if with_year else label
+
+_PERIODES_PRESETS = [
+    "Mois en cours", "3 derniers mois", "6 derniers mois", "12 derniers mois",
+    "Année en cours", "3 dernières années", "5 dernières années", "10 dernières années",
+    "Tout l'historique",
+]
+
+def periode_debut(label):
+    """Date de début (Timestamp) correspondant à une période prédéfinie ; None = tout l'historique.
+    La période court toujours jusqu'à aujourd'hui (jour en cours inclus)."""
+    today = pd.Timestamp.today().normalize()
+    if label == "Mois en cours":
+        return today.replace(day=1)
+    if label == "3 derniers mois":
+        return today - relativedelta(months=3)
+    if label == "6 derniers mois":
+        return today - relativedelta(months=6)
+    if label == "12 derniers mois":
+        return today - relativedelta(months=12)
+    if label == "Année en cours":
+        return pd.Timestamp(today.year, 1, 1)
+    if label == "3 dernières années":
+        return today - relativedelta(years=3)
+    if label == "5 dernières années":
+        return today - relativedelta(years=5)
+    if label == "10 dernières années":
+        return today - relativedelta(years=10)
+    return None
 
 def _round_cash(*parts):
     """Additionne des montants et arrondit le résultat au centime, en passant par Decimal
@@ -856,8 +942,6 @@ def _montant_ordre(qty, prix, frais):
 
 
 def fmt_eur(val):
-    if st.session_state.get("hide_amounts_toggle", False):
-        return "**,** €"
     if pd.isna(val):
         return "N/A"
     return f"{val:,.2f}".replace(",", " ").replace(".", ",") + " €"
@@ -868,8 +952,6 @@ def _fmt_eur_lecteur():
     cher (accès verrouillé côté Streamlit) quand un tableau est mis en forme cellule par cellule :
     le tableau quotidien de l'onglet Historique fait plusieurs milliers d'appels. Le réglage ne
     peut pas changer pendant le calcul d'un même tableau, donc le résultat est identique."""
-    if st.session_state.get("hide_amounts_toggle", False):
-        return lambda val: "**,** €"
     def _fmt(val):
         if pd.isna(val):
             return "N/A"
@@ -877,8 +959,6 @@ def _fmt_eur_lecteur():
     return _fmt
 
 def fmt_price_dynamic(val, commission_pct=None, ttf_val=None, include_comm=True):
-    if st.session_state.get("hide_amounts_toggle", False):
-        return "**,** €"
     if pd.isna(val):
         return "N/A"
     val_str_full = f"{val:.4f}"
@@ -1528,7 +1608,7 @@ def render_yearly_amounts(yearly_series, accent_color, detail_source=None, detai
             f'</div>'
         )
     st.markdown(
-        f'<div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:6px;">{cards_html}</div>',
+        f'<div class="h-scroll" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:6px;">{cards_html}</div>',
         unsafe_allow_html=True
     )
 
@@ -1557,26 +1637,23 @@ def _breakdown_lines_for_kind(df_subset, kind, value_col=None):
             lines.append(f"Rompu : {fmt_eur(rompu_amt)}")
     return lines
 
-def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, unit_label="€", date_ouverture=None, breakdown_kind=None):
-    """Calendrier façon 'GitHub contributions' à la maille MENSUELLE : chaque case = un mois.
-    Mois en colonnes (horizontal), années en lignes (vertical). N'affiche jamais de mois futur :
-    l'affichage s'arrête automatiquement au mois en cours (calculé depuis la date du jour) et une
-    nouvelle case apparaît d'elle-même le 1er du mois suivant, sans donnée codée en dur.
+def _fmt_cell_heat(v):
+    """Valeur affichée dans une case de la cartographie : sans décimale à partir de 100, sinon 1 décimale."""
+    if v >= 100:
+        return f"{v:,.0f}".replace(",", " ")
+    return f"{v:.1f}".replace(".", ",")
 
-    - date_ouverture : si fourni, aucune case n'est affichée avant ce mois (les mois antérieurs à
-      l'ouverture du compte restent vides), au lieu de démarrer au 1er janvier de l'année.
-    - breakdown_kind : si fourni ('frais' ou 'dividendes'), le détail de la composition du
-      montant du mois est ajouté au survol de la case (en plus du mois/année/montant déjà
-      affichés), via _breakdown_lines_for_kind.
-    - La couleur de chaque case est calculée par paliers (quartiles des montants non nuls) plutôt
-      que par une échelle linéaire continue : ainsi un mois à 1,25 € reste visuellement distinct
-      d'un mois à 0 €, même si un autre mois de la période atteint 100 €. Les montants réels
-      (inchangés) restent affichés au survol et dans les totaux."""
+def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, unit_label="€", date_ouverture=None, breakdown_kind=None):
+    """Cartographie mensuelle : une ligne par année (la plus récente en haut), un mois par colonne,
+    le montant écrit dans chaque case, dégradé continu (blanc -> couleur d'accent) et légende en barre
+    horizontale sous le graphique (adaptée aux petits écrans). N'affiche jamais de mois futur, ni de
+    mois antérieur à date_ouverture. Le survol (détail du mois) est inchangé."""
     if df_source.empty:
         st.info("Aucune donnée à afficher pour le moment.")
         return
 
-    mois_abbr = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sep", "Oct", "Nov", "Déc"]
+    mois_abbr = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+    mois_hover = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sep", "Oct", "Nov", "Déc"]
 
     dates = df_source[date_col]
     monthly_sum = df_source.groupby([dates.dt.year, dates.dt.month])[value_col].sum()
@@ -1588,25 +1665,19 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
     else:
         first_year = int(dates.dt.year.min())
         first_month_ouverture = 1
-    last_year = today.year
-    years = list(range(first_year, last_year + 1))
+    years = list(range(first_year, today.year + 1))
 
     z_montants = np.full((len(years), 12), np.nan)
     text_matrix = [["" for _ in range(12)] for _ in range(len(years))]
+    _accent_hover = colorscale[-1] if colorscale else "#0f172a"
 
     for yi, year in enumerate(years):
         min_month = first_month_ouverture if year == first_year else 1
         max_month = today.month if year == today.year else 12
-        _accent_hover = colorscale[-1] if colorscale else "#0f172a"
         for month in range(min_month, max_month + 1):
             val = float(monthly_sum.get((year, month), 0.0))
             z_montants[yi, month - 1] = val
-            # Le montant total du mois est mis en gras et dans la couleur d'accent de la
-            # cartographie (au lieu d'une simple ligne de texte) pour qu'il se distingue tout de
-            # suite des lignes de détail juste en dessous ("Commission : ...", "TTF : ...", etc.),
-            # qui elles portent chacune un libellé — sans quoi le total, seul chiffre sans libellé
-            # devant lui, se noyait visuellement parmi le reste du survol.
-            cell_txt = f"<b>{mois_abbr[month - 1]} {year}</b><br><span style='color:{_accent_hover};'><b>Total : {fmt_eur(val)}</b></span>"
+            cell_txt = f"<b>{mois_hover[month - 1]} {year}</b><br><span style='color:{_accent_hover};'><b>Total : {fmt_eur(val)}</b></span>"
             if breakdown_kind is not None and val != 0:
                 df_cell = df_source[(dates.dt.year == year) & (dates.dt.month == month)]
                 breakdown_lines = _breakdown_lines_for_kind(df_cell, breakdown_kind, value_col)
@@ -1614,98 +1685,172 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
                     cell_txt += "<br>" + "<br>".join(breakdown_lines)
             text_matrix[yi][month - 1] = cell_txt
 
-    # Le total sur la période est déjà affiché par l'appelant (metric au-dessus de "Détail par
-    # année"), inutile de le répéter ici juste avant la heatmap.
+    zmax = float(np.nanmax(z_montants)) if np.isfinite(z_montants).any() else 0.0
+    if zmax <= 0:
+        zmax = 1.0
 
-    # --- Construction de la palette par paliers (quartiles) ---
-    valeurs_non_nulles = z_montants[(~np.isnan(z_montants)) & (z_montants > 0)]
-    z_niveaux = np.where(np.isnan(z_montants), np.nan, 0.0)
-    if valeurs_non_nulles.size > 0:
-        uniques = np.unique(valeurs_non_nulles)
-        if uniques.size <= 4:
-            rang = {v: i + 1 for i, v in enumerate(uniques)}
-            mask_pos = (~np.isnan(z_montants)) & (z_montants > 0)
-            for idx in zip(*np.where(mask_pos)):
-                z_niveaux[idx] = rang[z_montants[idx]]
-        else:
-            seuils = np.quantile(valeurs_non_nulles, [0.25, 0.5, 0.75])
-            mask_pos = (~np.isnan(z_montants)) & (z_montants > 0)
-            for idx in zip(*np.where(mask_pos)):
-                z_niveaux[idx] = int(np.digitize(z_montants[idx], seuils)) + 1
+    # Montant écrit dans chaque case (texte blanc sur fond foncé, sombre sur fond clair)
+    annotations = []
+    for yi, year in enumerate(years):
+        for mi in range(12):
+            v = z_montants[yi, mi]
+            if np.isnan(v):
+                continue
+            annotations.append(dict(
+                x=mois_abbr[mi], y=str(year), xref="x", yref="y", showarrow=False,
+                text=_fmt_cell_heat(v),
+                font=dict(size=10, color="#ffffff" if (v / zmax) > 0.55 else "#0f172a"),
+            ))
 
-    n_paliers = 5  # 0 = aucun montant, 1 à 4 = intensité croissante par quartile
-    couleurs_paliers = pcolors.sample_colorscale(colorscale, [i / (n_paliers - 1) for i in range(n_paliers)])
-    discrete_scale = []
-    for i, coul in enumerate(couleurs_paliers):
-        discrete_scale.append([i / n_paliers, coul])
-        discrete_scale.append([(i + 1) / n_paliers, coul])
-
-    # Légende discrète (une étiquette par palier, avec la vraie plage de montants qu'il couvre)
-    # affichée sous forme de barre de couleur classique, à droite du calendrier.
-    tick_vals = [0]
-    tick_text = ["0 €"]
-    for lvl in range(1, n_paliers):
-        vals_lvl = z_montants[z_niveaux == lvl]
-        vals_lvl = vals_lvl[~np.isnan(vals_lvl)]
-        if vals_lvl.size == 0:
-            continue
-        lo, hi = float(vals_lvl.min()), float(vals_lvl.max())
-        if lvl == n_paliers - 1:
-            label = f"≥ {fmt_eur(lo)}"
-        elif abs(hi - lo) < 0.01:
-            label = fmt_eur(lo)
-        else:
-            label = f"{fmt_eur(lo)} – {fmt_eur(hi)}"
-        tick_vals.append(lvl)
-        tick_text.append(label)
+    plot_h = 38 * len(years) + 8
+    tick_vals = [0.0, zmax / 2.0, zmax]
+    tick_text = [_fmt_cell_heat(v) for v in tick_vals]
 
     fig = go.Figure(data=go.Heatmap(
-        z=z_niveaux,
+        z=z_montants,
         x=mois_abbr,
         y=[str(y) for y in years],
         text=text_matrix,
         hovertemplate="%{text}<extra></extra>",
-        colorscale=discrete_scale,
-        zmin=-0.5, zmax=n_paliers - 0.5,
-        xgap=4, ygap=4,
+        colorscale=colorscale,
+        zmin=0, zmax=zmax,
+        xgap=3, ygap=3,
+        hoverongaps=False,
         showscale=True,
         colorbar=dict(
-            title=dict(text=unit_label, side="top"),
-            tickmode="array",
-            tickvals=tick_vals,
-            ticktext=tick_text,
-            thickness=14,
-            len=0.85,
-            x=1.02,
-            xanchor="left",
-            outlinewidth=0,
+            orientation="h", x=0.5, xanchor="center",
+            y=-(80.0 / plot_h), yanchor="top",
+            len=0.92, thickness=10, outlinewidth=0,
+            tickmode="array", tickvals=tick_vals, ticktext=tick_text,
+            ticks="outside", ticklen=3, tickfont=dict(size=11),
         ),
         name="",
     ))
-    # tickmode="array" + tickvals/ticktext explicites : sur un axe "category", laisser Plotly
-    # calculer ses ticks automatiquement peut générer un tick fantôme sans catégorie associée,
-    # affiché comme "undefined" (typiquement au niveau du coin entre les deux axes). En fixant
-    # la liste exacte des catégories à afficher, ce tick parasite n'apparaît plus.
     fig.update_layout(
-        height=max(170, 70 + 42 * len(years)),
-        margin=dict(l=55, r=90, t=45, b=10),
+        height=plot_h + 10 + 150,
+        margin=dict(l=45, r=10, t=10, b=150),
+        annotations=annotations,
         xaxis=dict(
-            showgrid=False, side="top", type="category",
+            showgrid=False, side="bottom", type="category",
             tickmode="array", tickvals=mois_abbr, ticktext=mois_abbr,
-            tickfont=dict(size=12),
+            tickangle=-45, tickfont=dict(size=11),
         ),
         yaxis=dict(
-            autorange="reversed", showgrid=False, type="category",
+            showgrid=False, type="category",
             tickmode="array", tickvals=[str(y) for y in years], ticktext=[str(y) for y in years],
             tickfont=dict(size=12),
         ),
     )
     apply_chart_theme(fig)
-    # theme=None : désactive le thème par défaut "streamlit" de st.plotly_chart, responsable de
-    # l'affichage du mot "undefined" entre les deux axes (bug connu quand un layout définit
-    # title_font sans title.text explicite, ce qui est notre cas via PLOTLY_LAYOUT_DEFAULTS).
-    # Notre propre apply_chart_theme() gère déjà tout le style, ce thème n'est donc pas nécessaire.
-    st.plotly_chart(fig, use_container_width=True, theme=None, key=f"{key_prefix}_heatmap_monthly")
+    _plotly_chart(fig, use_container_width=True, theme=None, key=f"{key_prefix}_heatmap_monthly")
+
+
+_ALLOC_COLORS = ["#8fb0ff", "#f2c5e8", "#c8d9ff", "#c8b8f5", "#f2b6ae", "#dda899", "#f4d9b0", "#c5dfc5", "#6fb3ad"]
+
+def _render_allocation(df_active, cash):
+    """Camembert (anneau) de la répartition du portefeuille, avec légende à barres rayées :
+    positions actives + liquidités ; au-delà de 9 lignes, les plus petites sont regroupées dans « Autre »."""
+    import html as _html
+    rows = []
+    if df_active is not None and not df_active.empty:
+        for _, r in df_active.iterrows():
+            v = float(r["Valeur Actuelle (€)"])
+            if v > 0:
+                rows.append((str(r["Nom"]), v))
+    if cash is not None and cash > 0.005:
+        rows.append(("Liquidités (€)", float(cash)))
+    if not rows:
+        st.info("Aucune position ni liquidité à répartir pour le moment.")
+        return
+    rows.sort(key=lambda x: -x[1])
+    if len(rows) > 9:
+        autre = sum(v for _, v in rows[8:])
+        rows = rows[:8] + [("Autre", autre)]
+    total = sum(v for _, v in rows)
+    labels = [n for n, _ in rows]
+    values = [v for _, v in rows]
+    pcts = [v / total * 100 for v in values]
+    colors = [_ALLOC_COLORS[i % len(_ALLOC_COLORS)] for i in range(len(rows))]
+
+    def _val_txt(v):
+        return f"{v:,.0f} €".replace(",", " ")
+
+    def _pct_txt(p):
+        return f"{p:.2f}".replace(".", ",")
+
+    fig = go.Figure(go.Pie(
+        labels=labels, values=values, hole=0.72, sort=False, direction="clockwise",
+        marker=dict(colors=colors, line=dict(color="#f1f5f9", width=3)),
+        textinfo="none", showlegend=False,
+        text=[f"<b>{_html.escape(n)}</b><br>{fmt_eur(v)} · {_pct_txt(p)} %" for n, v, p in zip(labels, values, pcts)],
+        hovertemplate="%{text}<extra></extra>",
+    ))
+    fig.update_layout(
+        height=270, margin=dict(l=5, r=5, t=5, b=5),
+        annotations=[dict(
+            text=(f"<span style='font-size:12px;color:#64748b'>{_html.escape(labels[0])}</span><br>"
+                  f"<span style='font-size:20px'><b>{_val_txt(values[0])}</b></span><br>"
+                  f"<span style='font-size:12px;color:#64748b'>{_pct_txt(pcts[0])} %</span>"),
+            x=0.5, y=0.5, showarrow=False,
+        )],
+    )
+    apply_chart_theme(fig)
+
+    track = "repeating-linear-gradient(90deg, #e2e8f0 0 2px, transparent 2px 4px)"
+    rows_html = ""
+    for n, p, c in zip(labels, pcts, colors):
+        stripe = f"repeating-linear-gradient(90deg, {c} 0 2px, transparent 2px 4px)"
+        n_esc = _html.escape(n)
+        rows_html += (
+            '<div style="display:grid; grid-template-columns:minmax(80px,150px) 1fr 58px; gap:12px; align-items:center; padding:5px 0;">'
+            f'<div style="font-size:0.85rem; color:#334155; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{n_esc}">{n_esc}</div>'
+            f'<div style="height:14px; background:{track}; border-radius:2px;"><div style="width:{min(p, 100):.2f}%; height:100%; background:{stripe};"></div></div>'
+            f'<div class="num-mono" style="text-align:right; font-size:0.8rem; color:#475569;">{_pct_txt(p)} %</div>'
+            '</div>'
+        )
+    col_chart, col_leg = st.columns([1, 1.8])
+    with col_chart:
+        _plotly_chart(fig, use_container_width=True, theme=None, key="chart_repartition_portefeuille")
+    with col_leg:
+        st.markdown(f'<div style="padding-top:6px;">{rows_html}</div>', unsafe_allow_html=True)
+
+
+def _estimer_date_atteinte(cumul_jour, cible):
+    """Estimation par régression linéaire sur l'historique quotidien des apports nets cumulés : date à
+    laquelle `cible` serait atteinte au rythme moyen constaté (à titre indicatif)."""
+    if cible is None or cible <= 0:
+        return "—"
+    dernier = float(cumul_jour.iloc[-1])
+    if dernier >= cible:
+        return "Déjà atteint"
+    if len(cumul_jour) < 30:
+        return "— (historique trop court)"
+    pente, _ = np.polyfit(np.arange(len(cumul_jour), dtype=float), cumul_jour.to_numpy(dtype=float), 1)
+    if pente <= 0:
+        return "— (rythme nul)"
+    jours = (cible - dernier) / pente
+    if jours > 365 * 60:
+        return "—"
+    d = pd.Timestamp.today().normalize() + pd.Timedelta(days=float(jours))
+    return f"{d.day:02d} {mois_fr(d).lower()}"
+
+
+def _apports_progress_card(titre, pct, restant, date_txt, color):
+    pct_c = max(0.0, min(pct, 100.0))
+    pct_str_card = f"{pct:,.1f}".replace(",", " ").replace(".", ",")
+    return (
+        '<div style="flex:1; min-width:260px; background:#ffffff; border:1px solid #e2e8f0; border-left:4px solid '
+        f'{color}; border-radius:12px; padding:12px 16px;">'
+        f'<div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">{titre}</div>'
+        '<div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:6px;">'
+        f'<span class="num-mono" style="font-size:1.35rem; font-weight:700; color:#0f172a;">{pct_str_card} %</span>'
+        f'<span class="num-mono" style="font-size:0.85rem; color:#475569;">reste {fmt_eur(restant)}</span></div>'
+        '<div style="background:#e2e8f0; border-radius:999px; height:10px; overflow:hidden; margin-top:8px;">'
+        f'<div style="width:{pct_c:.1f}%; height:100%; background:{color}; border-radius:999px;"></div></div>'
+        f'<div style="font-size:0.78rem; color:#64748b; margin-top:8px;">Date estimée d\'atteinte : <b class="num-mono" style="color:#0f172a;">{date_txt}</b></div>'
+        '</div>'
+    )
+
 
 _FAILED_TICKERS = set()  # se remplit automatiquement avec les tickers dont le cours est introuvable
 
@@ -3370,8 +3515,6 @@ def dialog_simulation_operation():
 
     def _delta_eur(delta_val):
         color = "#16a34a" if delta_val > 0.005 else ("#dc2626" if delta_val < -0.005 else "#64748b")
-        if st.session_state.get("hide_amounts_toggle", False):
-            return "**,** €", color
         sign = "+" if delta_val > 0.005 else ""
         return f"{sign}{fmt_eur(delta_val)}", color
 
@@ -3394,7 +3537,7 @@ def dialog_simulation_operation():
                 f'<div style="font-size:0.76rem; font-weight:700; color:{delta_color}; margin-top:4px;">{delta_str}</div>'
                 '</div>'
             )
-        st.markdown(f'<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;">{cards}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;">{cards}</div>', unsafe_allow_html=True)
 
     type_wi = st.radio("Type d'opération", ["Achat", "Vente", "Achat/Vente", "Split"], horizontal=True, key="k_whatif_type")
 
@@ -3517,7 +3660,7 @@ def dialog_simulation_operation():
         _label_net_wi = "Prix d'achat par action net de frais" if type_wi == "Achat" else "Prix de vente par action net de frais"
         st.markdown(
             f'<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 14px; margin-top:4px;">'
-            f'<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">'
+            f'<div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">'
             f'<div><div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Montant de l\'opération</div>'
             f'<div style="font-size:0.78rem; color:#64748b; margin-top:2px;">{qte_wi:g} × {fmt_eur(prix_wi)} ({_detail_frais_str_wi})</div></div>'
             f'<div style="text-align:right;"><div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Total {"payé" if type_wi == "Achat" else "perçu"}</div>'
@@ -3720,7 +3863,7 @@ def dialog_simulation_operation():
 
             st.markdown(
                 f'<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 14px; margin-top:4px;">'
-                f'<div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">'
+                f'<div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">'
                 f'<div><div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Quantité achetable</div>'
                 f'<div style="font-size:0.78rem; color:#64748b; margin-top:2px;">{quantite_av:g} action(s) × {fmt_eur(prix_achat_av)} ({_detail_frais_achat_str_av})</div></div>'
                 f'<div style="text-align:right;"><div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Montant total payé</div>'
@@ -4253,22 +4396,6 @@ else:
 # premier appel, tant que le cache st.cache_data n'est pas encore chaud).
 col_toggles = st.container()
 with col_toggles:
-    st.toggle("🔒 Masquer les montants en €", key="hide_amounts_toggle")
-    with st.container(key="full_refresh_btn_wrap"):
-        if st.button("🔄 Rafraîchir toutes les données", key="full_refresh_btn"):
-            # Vide TOUS les caches st.cache_data de l'app (cours, historiques, métriques du
-            # portefeuille, données de la base...) : le prochain rerun repart de zéro, comme si
-            # la page venait d'être rouverte, sans attendre l'expiration naturelle des ttl.
-            st.cache_data.clear()
-            st.session_state.pop("_last_market_prefetch_ts", None)
-            _export_memo_store().clear()
-            # Le secteur et le pays de chaque valeur (ticker_info_cache.json) ne sont PAS
-            # re-téléchargés : ils ne dépendent pas des cours, et les redemander coûtait environ
-            # un quart du temps du rafraîchissement. Supprimer ce fichier pour les forcer.
-            if _SWR_ENABLED:
-                _swr_state().invalidate(background=_MANUAL_REFRESH_IN_BACKGROUND)
-            st.rerun()
-
     # Indicateurs de synthèse utilisés par les deux exports (XML et PDF) ci-dessous. "Valeur",
     # "PlusValueLatente", "Dividende" et "Frais" viennent de compute_portfolio_metrics, déjà
     # calculé plus haut (cours en direct, mais un seul prix par titre, pas tout un historique).
@@ -4287,129 +4414,116 @@ with col_toggles:
         if _export_apports_totaux > 0 else 0.0
     )
 
-    with st.container(key="export_data_btn_wrap"):
-        # Génère l'export XML de toutes les transactions (Apports, Achats, Ventes, Dividendes,
-        # Splits, Retraits), chaque liste triée chronologiquement, précédées d'une synthèse
-        # globale du portefeuille. La génération est locale (aucun appel réseau), donc
-        # suffisamment rapide pour être recalculée à chaque rerun, comme l'exige
-        # st.download_button (les données doivent être prêtes avant le clic).
-        # Mémoïsé (cf. _memo_export) : reconstruit uniquement si les transactions ou les chiffres
-        # de synthèse ont changé, pas à chaque rerun.
-        import functools as _functools
-        # Empreinte des transactions calculée une seule fois pour les 2 exports (inutile, donc
-        # sautée, quand le téléchargement différé est disponible).
-        _export_tx_fp = None if _DEFERRED_DOWNLOAD else _export_signature(df_transactions)
-        _export_xml_bytes, _export_xml_stamp = _export_payload(
-            "xml",
-            (
-                "xml", _export_tx_fp, _export_valeur, _export_cash, _export_apports_totaux,
-                _export_performance, _export_plus_value_latente, tot_dividends, tot_fees,
-            ),
-            _functools.partial(
-                generate_transactions_xml,
-                df_transactions,
-                valeur=_export_valeur, cash=_export_cash, total_apport=_export_apports_totaux,
-                performance=_export_performance, plus_value_latente=_export_plus_value_latente,
-                dividende_total=tot_dividends, frais_total=tot_fees,
-            ),
-        )
-        st.download_button(
-            label="📤 Exporter les données (XML)",
-            data=_export_xml_bytes,
-            file_name=f"ExportXML_{_export_xml_stamp}.xml",
-            mime="application/xml",
-            key="export_data_xml_btn"
-        )
-    with st.container(key="export_pdf_btn_wrap"):
-        # Même contenu que l'export XML (vue d'ensemble, positions actives, puis une table par
-        # type d'opération), mais mis en page en tableaux dans un PDF (voir generate_transactions_pdf).
-        _export_pdf_broker = app_config.get("broker", "")
-        _export_pdf_ouverture = (df_transactions["Date_Heure"].min().strftime("%d/%m/%Y") if not df_transactions.empty else "")
-        _export_pdf_bytes, _export_pdf_stamp = _export_payload(
-            "pdf",
-            (
-                "pdf", _export_tx_fp, df_port, _export_valeur, _export_cash, _export_apports_totaux,
-                _export_performance, _export_plus_value_latente, tot_dividends, tot_fees,
-                _export_pdf_broker, _export_pdf_ouverture,
-            ),
-            _functools.partial(
-                generate_transactions_pdf,
-                df_transactions, df_port,
-                valeur=_export_valeur, cash=_export_cash, total_apport=_export_apports_totaux,
-                performance=_export_performance, plus_value_latente=_export_plus_value_latente,
-                dividende_total=tot_dividends, frais_total=tot_fees,
-                broker_name=_export_pdf_broker,
-                pea_opening_date_str=_export_pdf_ouverture,
-            ),
-        )
-        st.download_button(
-            label="🧾 Exporter les données (PDF)",
-            data=_export_pdf_bytes,
-            file_name=f"ExportPDF_{_export_pdf_stamp}.pdf",
-            mime="application/pdf",
-            key="export_data_pdf_btn"
-        )
-    with st.container(key="export_csv_btn_wrap"):
-        # Export CSV brut des transactions (mêmes colonnes que la base interne) : utile pour
-        # une sauvegarde, une édition dans Excel, ou pour transférer ses données vers un autre
-        # compte. Contrairement aux exports XML/PDF (mise en forme), celui-ci n'est pas mémoïsé
-        # (_export_payload) : to_csv sur le DataFrame déjà en mémoire est quasi instantané.
-        st.download_button(
-            label="📄 Exporter les données (CSV)",
-            data=df_transactions.to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"ExportCSV_{_export_xml_stamp}.csv",
-            mime="text/csv",
-            key="export_data_csv_btn",
-        )
-
+    # Un seul bouton « Exports / Imports » : les 3 exports (XML, PDF, CSV) et l'import CSV.
+    import functools as _functools
     _TRANSAC_COLUMNS = [
         "Date_Heure", "Type", "Nom", "Ticker",
         "Quantité", "Prix Unitaire (€)", "Commission (€)",
         "TTF (€)", "Frais Totaux (€)", "Rompu", "Retenue_Source_Etrangere",
         "Remboursement_Capital", "Arrondi_Courtier", "Date_Rompus",
     ]
-    with st.expander("📥 Importer des transactions (CSV)", expanded=False):
-        st.caption(
-            "Le fichier importé doit avoir exactement les mêmes colonnes que l'export CSV "
-            "ci-dessus."
-        )
-        _csv_uploaded = st.file_uploader(
-            "Importer un CSV de transactions", type=["csv"], key="import_csv_uploader"
-        )
-        if _csv_uploaded is not None:
-            try:
-                df_csv_import = pd.read_csv(_csv_uploaded)
-                _missing_cols = [c for c in _TRANSAC_COLUMNS if c not in df_csv_import.columns]
-                if _missing_cols:
-                    st.error(f"Colonnes manquantes dans le fichier : {', '.join(_missing_cols)}")
-                else:
-                    df_csv_import = df_csv_import[_TRANSAC_COLUMNS].copy()
-                    df_csv_import["Date_Heure"] = pd.to_datetime(df_csv_import["Date_Heure"])
-                    df_csv_import["Date_Rompus"] = pd.to_datetime(
-                        df_csv_import["Date_Rompus"], errors="coerce"
-                    )
-                    st.write(f"{len(df_csv_import)} lignes détectées dans le fichier.")
-                    _import_mode = st.radio(
-                        "Que faire de ces lignes ?",
-                        ["Ajouter à mes transactions existantes", "Remplacer entièrement mes transactions"],
-                        key="import_csv_mode",
-                    )
-                    if st.button("Confirmer l'import", key="import_csv_confirm", type="primary"):
-                        if _import_mode.startswith("Ajouter"):
-                            df_transactions_new = pd.concat(
-                                [df_transactions, df_csv_import], ignore_index=True
-                            )
-                        else:
-                            df_transactions_new = df_csv_import
-                        ok_save, err_save = save_transactions_csv(df_transactions_new)
-                        if ok_save:
-                            load_data.clear()
-                            st.success(f"{len(df_csv_import)} transactions importées.")
-                            st.rerun()
-                        else:
-                            st.error(err_save)
-            except Exception as e:
-                st.error(f"Erreur lors de la lecture du fichier : {e}")
+    with st.container(key="export_data_btn_wrap"):
+        with st.popover("📦 Exports / Imports", use_container_width=True):
+            st.markdown("**📤 Exports**")
+            _export_tx_fp = None if _DEFERRED_DOWNLOAD else _export_signature(df_transactions)
+            _export_xml_bytes, _export_xml_stamp = _export_payload(
+                "xml",
+                (
+                    "xml", _export_tx_fp, _export_valeur, _export_cash, _export_apports_totaux,
+                    _export_performance, _export_plus_value_latente, tot_dividends, tot_fees,
+                ),
+                _functools.partial(
+                    generate_transactions_xml,
+                    df_transactions,
+                    valeur=_export_valeur, cash=_export_cash, total_apport=_export_apports_totaux,
+                    performance=_export_performance, plus_value_latente=_export_plus_value_latente,
+                    dividende_total=tot_dividends, frais_total=tot_fees,
+                ),
+            )
+            st.download_button(
+                label="📤 Exporter les données (XML)",
+                data=_export_xml_bytes,
+                file_name=f"ExportXML_{_export_xml_stamp}.xml",
+                mime="application/xml",
+                key="export_data_xml_btn",
+                use_container_width=True,
+            )
+            _export_pdf_broker = app_config.get("broker", "")
+            _export_pdf_ouverture = (df_transactions["Date_Heure"].min().strftime("%d/%m/%Y") if not df_transactions.empty else "")
+            _export_pdf_bytes, _export_pdf_stamp = _export_payload(
+                "pdf",
+                (
+                    "pdf", _export_tx_fp, df_port, _export_valeur, _export_cash, _export_apports_totaux,
+                    _export_performance, _export_plus_value_latente, tot_dividends, tot_fees,
+                    _export_pdf_broker, _export_pdf_ouverture,
+                ),
+                _functools.partial(
+                    generate_transactions_pdf,
+                    df_transactions, df_port,
+                    valeur=_export_valeur, cash=_export_cash, total_apport=_export_apports_totaux,
+                    performance=_export_performance, plus_value_latente=_export_plus_value_latente,
+                    dividende_total=tot_dividends, frais_total=tot_fees,
+                    broker_name=_export_pdf_broker,
+                    pea_opening_date_str=_export_pdf_ouverture,
+                ),
+            )
+            st.download_button(
+                label="🧾 Exporter les données (PDF)",
+                data=_export_pdf_bytes,
+                file_name=f"ExportPDF_{_export_pdf_stamp}.pdf",
+                mime="application/pdf",
+                key="export_data_pdf_btn",
+                use_container_width=True,
+            )
+            st.download_button(
+                label="📄 Exporter les données (CSV)",
+                data=df_transactions.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"ExportCSV_{_export_xml_stamp}.csv",
+                mime="text/csv",
+                key="export_data_csv_btn",
+                use_container_width=True,
+            )
+
+            st.markdown("---")
+            st.markdown("**📥 Import (CSV)**")
+            st.caption("Le fichier importé doit avoir exactement les mêmes colonnes que l'export CSV.")
+            _csv_uploaded = st.file_uploader(
+                "Importer un CSV de transactions", type=["csv"], key="import_csv_uploader"
+            )
+            if _csv_uploaded is not None:
+                try:
+                    df_csv_import = pd.read_csv(_csv_uploaded)
+                    _missing_cols = [c for c in _TRANSAC_COLUMNS if c not in df_csv_import.columns]
+                    if _missing_cols:
+                        st.error(f"Colonnes manquantes dans le fichier : {', '.join(_missing_cols)}")
+                    else:
+                        df_csv_import = df_csv_import[_TRANSAC_COLUMNS].copy()
+                        df_csv_import["Date_Heure"] = pd.to_datetime(df_csv_import["Date_Heure"])
+                        df_csv_import["Date_Rompus"] = pd.to_datetime(
+                            df_csv_import["Date_Rompus"], errors="coerce"
+                        )
+                        st.write(f"{len(df_csv_import)} lignes détectées dans le fichier.")
+                        _import_mode = st.radio(
+                            "Que faire de ces lignes ?",
+                            ["Ajouter à mes transactions existantes", "Remplacer entièrement mes transactions"],
+                            key="import_csv_mode",
+                        )
+                        if st.button("Confirmer l'import", key="import_csv_confirm", type="primary"):
+                            if _import_mode.startswith("Ajouter"):
+                                df_transactions_new = pd.concat(
+                                    [df_transactions, df_csv_import], ignore_index=True
+                                )
+                            else:
+                                df_transactions_new = df_csv_import
+                            ok_save, err_save = save_transactions_csv(df_transactions_new)
+                            if ok_save:
+                                load_data.clear()
+                                st.success(f"{len(df_csv_import)} transactions importées.")
+                                st.rerun()
+                            else:
+                                st.error(err_save)
+                except Exception as e:
+                    st.error(f"Erreur lors de la lecture du fichier : {e}")
 
 
 # "Nouvelle opération" et "Simulation" regroupés dans une seule carte, désormais FIXÉE en bas de
@@ -4713,6 +4827,7 @@ except Exception:
 _TAB_LABELS = [
     "📊 Vue d'ensemble & Objectif",
     "📌 Positions & Transactions",
+    "💰 Apports",
     "🏆 Classements",
     "🗓️ Saisonnalité",
     "📈 Performances & Indices",
@@ -4726,7 +4841,7 @@ if _TABS_LAZY:
     _tabs_created = st.tabs(_TAB_LABELS, on_change="rerun", key="main_tabs")
 else:
     _tabs_created = st.tabs(_TAB_LABELS)
-tab_overview, tab_positions, tab_classements, tab_saisonnalite, tab_perf, tab_history, tab_dividends, tab_fees, tab_watchlist, tab_simulateur = _tabs_created
+tab_overview, tab_positions, tab_apports, tab_classements, tab_saisonnalite, tab_perf, tab_history, tab_dividends, tab_fees, tab_watchlist, tab_simulateur = _tabs_created
 
 def _tab_open(_tab):
     """True si le contenu de l'onglet doit être calculé : onglet actuellement affiché, ou
@@ -4741,14 +4856,15 @@ def _tab_open(_tab):
 # chaque onglet (widgets ayant un key= littéral).
 _TAB_STATE_KEYS = {
     "tab_overview": ("apport_prevision_input", ),
-    "tab_positions": ("tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
+    "tab_apports": ("k_apports_annee", "k_objectif_apports", ),
+    "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
-    "tab_perf": ("k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
+    "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
     "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
     "tab_simulateur": ("k_horizon_projection", "k_apport_annuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_pea_5ans", ),
 }
 _tab_objs_by_name = {
-    "tab_overview": tab_overview, "tab_positions": tab_positions, "tab_classements": tab_classements,
+    "tab_overview": tab_overview, "tab_positions": tab_positions, "tab_apports": tab_apports, "tab_classements": tab_classements,
     "tab_saisonnalite": tab_saisonnalite, "tab_perf": tab_perf, "tab_history": tab_history,
     "tab_dividends": tab_dividends, "tab_fees": tab_fees, "tab_watchlist": tab_watchlist,
     "tab_simulateur": tab_simulateur,
@@ -4792,11 +4908,10 @@ if _tab_open(tab_overview):
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>📈 Performances</p>", unsafe_allow_html=True)
                 with st.container(key="row_perf_wrap"):
                     r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
-                    _hide_amt = st.session_state.get("hide_amounts_toggle", False)
-                    r2_c1.metric("Perf. Globale", fmt_perf_text_only(perf_globale), delta=(f"{total_gains_cumules:+,.2f} €".replace(",", " ").replace(".", ",") if not _hide_amt else "**,** €"))
-                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=(f"{gain_total_yr:+,.2f} €".replace(",", " ").replace(".", ",") if not _hide_amt else "**,** €"))
-                    r2_c3.metric("Perf. Mois", fmt_perf_text_only(perf_mois_en_cours), delta=(f"{gain_total_mo:+,.2f} €".replace(",", " ").replace(".", ",") if not _hide_amt else "**,** €"))
-                    r2_c4.metric("Performance du jour", fmt_perf_text_only(perf_jour), delta=(f"{gain_total_j:+,.2f} €".replace(",", " ").replace(".", ",") if not _hide_amt else "**,** €"))
+                    r2_c1.metric("Perf. Globale", fmt_perf_text_only(perf_globale), delta=(f"{total_gains_cumules:+,.2f} €".replace(",", " ").replace(".", ",")))
+                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=(f"{gain_total_yr:+,.2f} €".replace(",", " ").replace(".", ",")))
+                    r2_c3.metric("Perf. Mois", fmt_perf_text_only(perf_mois_en_cours), delta=(f"{gain_total_mo:+,.2f} €".replace(",", " ").replace(".", ",")))
+                    r2_c4.metric("Performance du jour", fmt_perf_text_only(perf_jour), delta=(f"{gain_total_j:+,.2f} €".replace(",", " ").replace(".", ",")))
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>🏷️ Plus-values, Dividendes & Frais</p>", unsafe_allow_html=True)
                 with st.container(key="row_gains_wrap"):
@@ -4807,8 +4922,8 @@ if _tab_open(tab_overview):
                     # Plus-Value Actée : gain déjà réalisé rapporté à la valeur totale actuelle du
                     # portefeuille (actions + poche espèces).
                     pct_actee = (tot_realized_pnl / tot_value_globale * 100) if tot_value_globale > 0 else 0.0
-                    r3_c1.metric("Plus-Value Latente", fmt_eur(global_pnl), delta=(f"{pct_latente:+,.2f}%".replace(",", " ").replace(".", ",") if not _hide_amt else "**,**%"))
-                    r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",") if not _hide_amt else "**,**%"))
+                    r3_c1.metric("Plus-Value Latente", fmt_eur(global_pnl), delta=(f"{pct_latente:+,.2f}%".replace(",", " ").replace(".", ",")))
+                    r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")))
                     r3_c3.metric("Dividendes Reçus", fmt_eur(net_divs_total))
                     r3_c4.metric("Frais Totaux", fmt_eur(tot_fees))
 
@@ -4923,7 +5038,7 @@ if _tab_open(tab_overview):
                     badge_color = "#d97706"
                     badge_detail = "Nécessite une performance très supérieure à la moyenne du marché — peu probable en l'état."
 
-                pct_str = f"{prog_pct:,.1f}%".replace(".", ",") if not st.session_state.get("hide_amounts_toggle", False) else "**,**%"
+                pct_str = f"{prog_pct:,.1f}%".replace(".", ",")
                 pct_suffix = " du montant visé (épargne prévue incluse)" if apport_prevision > 0 else " du montant visé"
 
                 st.markdown(
@@ -4936,7 +5051,7 @@ if _tab_open(tab_overview):
                         {pct_str}{pct_suffix}
                     </div>
                 </div>
-                <div style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px; margin-top: 14px;">
+                <div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px; margin-top: 14px;">
                     <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:140px; text-align:center;">
                         <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Actuel</div>
                         <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(tot_value_globale)}</div>
@@ -5026,6 +5141,9 @@ if _tab_open(tab_positions):
             else:
                 st.info("Aucune position active pour le moment.")
 
+        with st.expander("🥧 Répartition du portefeuille", expanded=True):
+            _render_allocation(df_active, poche_especes)
+
         with st.expander("📜 Détail complet des transactions", expanded=True):
             if not df_transactions.empty:
                 min_db_date = df_transactions["Date_Heure"].min().date() if pd.notnull(df_transactions["Date_Heure"].min()) else date.today()
@@ -5072,43 +5190,53 @@ if _tab_open(tab_positions):
                 </style>
             """, unsafe_allow_html=True)
 
-                c_f1, c_f2 = st.columns(2)
-                with c_f1:
-                    filtre_debut = st.date_input("Du", value=min_db_date, min_value=min_db_date, max_value=max_db_date, format="DD-MM-YYYY", key="tx_filter_start")
-                with c_f2:
-                    filtre_fin = st.date_input("Au", value=max_db_date, min_value=min_db_date, max_value=max_db_date, format="DD-MM-YYYY", key="tx_filter_end")
+                filtre_periode = st.selectbox(
+                    "Période", _PERIODES_PRESETS + ["Période personnalisée"],
+                    index=len(_PERIODES_PRESETS) - 1, key="k_periode_tx",
+                )
+                if filtre_periode == "Période personnalisée":
+                    with st.container(key="compact_cols_tx_dates"):
+                        c_f1, c_f2 = st.columns(2)
+                        with c_f1:
+                            filtre_debut = st.date_input("Du", value=min_db_date, min_value=min_db_date, max_value=max_db_date, format="DD-MM-YYYY", key="tx_filter_start")
+                        with c_f2:
+                            filtre_fin = st.date_input("Au", value=max_db_date, min_value=min_db_date, max_value=max_db_date, format="DD-MM-YYYY", key="tx_filter_end")
+                else:
+                    _deb_tx = periode_debut(filtre_periode)
+                    filtre_debut = max(_deb_tx.date(), min_db_date) if _deb_tx is not None else min_db_date
+                    filtre_fin = max_db_date
 
-                c_f3, c_f4 = st.columns(2)
-                with c_f3:
-                    filtre_actions = st.multiselect(
-                        "Filtrer par action(s)",
-                        options=noms_actions_disponibles,
-                        default=[],
-                        placeholder="Toutes les actions",
-                        key="tx_filter_actions"
-                    )
-                with c_f4:
-                    filtre_types = st.multiselect(
-                        "Filtrer par type(s)",
-                        options=types_disponibles,
-                        default=[],
-                        placeholder="Tous les types",
-                        format_func=lambda t: _OP_TYPE_LABELS.get(t, t),
-                        key="tx_filter_types"
-                    )
+                with st.container(key="compact_cols_tx_filtres"):
+                    c_f3, c_f4 = st.columns(2)
+                    with c_f3:
+                        filtre_actions = st.multiselect(
+                            "Filtrer par action(s)",
+                            options=noms_actions_disponibles,
+                            default=[],
+                            placeholder="Toutes les actions",
+                            key="tx_filter_actions"
+                        )
+                    with c_f4:
+                        filtre_types = st.multiselect(
+                            "Filtrer par type(s)",
+                            options=types_disponibles,
+                            default=[],
+                            placeholder="Tous les types",
+                            format_func=lambda t: _OP_TYPE_LABELS.get(t, t),
+                            key="tx_filter_types"
+                        )
 
-                c_f5, c_f6 = st.columns(2)
-                with c_f5:
-                    filtre_montant_min = st.number_input(
-                        "Montant minimum (€)", value=None, step=10.0, format="%.2f",
-                        placeholder=f"Depuis {fmt_eur(_montant_min_dispo)}", key="tx_filter_montant_min"
-                    )
-                with c_f6:
-                    filtre_montant_max = st.number_input(
-                        "Montant maximum (€)", value=None, step=10.0, format="%.2f",
-                        placeholder=f"Jusqu'à {fmt_eur(_montant_max_dispo)}", key="tx_filter_montant_max"
-                    )
-
+                    c_f5, c_f6 = st.columns(2)
+                    with c_f5:
+                        filtre_montant_min = st.number_input(
+                            "Montant minimum (€)", value=None, step=10.0, format="%.2f",
+                            placeholder=f"Depuis {fmt_eur(_montant_min_dispo)}", key="tx_filter_montant_min"
+                        )
+                    with c_f6:
+                        filtre_montant_max = st.number_input(
+                            "Montant maximum (€)", value=None, step=10.0, format="%.2f",
+                            placeholder=f"Jusqu'à {fmt_eur(_montant_max_dispo)}", key="tx_filter_montant_max"
+                        )
                 st.markdown("<div style='margin-bottom: 8px;'></div>", unsafe_allow_html=True)
 
                 mask_dates = (df_transactions["Date_Heure"].dt.date >= filtre_debut) & (df_transactions["Date_Heure"].dt.date <= filtre_fin)
@@ -5438,34 +5566,156 @@ if _tab_open(tab_positions):
 # ------------------------------------------
 # ONGLÊT : CLASSEMENTS
 # ------------------------------------------
+# ------------------------------------------
+# ONGLET : APPORTS (versements)
+# ------------------------------------------
+if _tab_open(tab_apports):
+    with tab_apports:
+        PLAFOND_APPORTS = 150000.0
+        _df_mv = (
+            df_transactions[df_transactions["Type"].isin(["APPORT", "RETRAIT"])].copy()
+            if not df_transactions.empty else pd.DataFrame()
+        )
+        if _df_mv.empty:
+            st.info("Aucun apport enregistré pour le moment.")
+        else:
+            _df_mv = _df_mv.sort_values("Date_Heure")
+            _df_mv["Net"] = np.where(_df_mv["Type"] == "APPORT", _df_mv["Quantité"], -_df_mv["Quantité"])
+            _df_mv["Annee"] = _df_mv["Date_Heure"].dt.year
+            _annees_ap = sorted(_df_mv["Annee"].unique().tolist(), reverse=True)
+
+            with st.container(key="compact_cols_apports_filtres"):
+                _ca1, _ca2 = st.columns(2)
+                with _ca1:
+                    _annee_ap = st.selectbox("Année", _annees_ap, key="k_apports_annee")
+                with _ca2:
+                    _obj_saved = int(app_config.get("objectif_apports", 0))
+                    _objectif_ap = st.number_input(
+                        "Objectif de versements (€)", min_value=0, step=500, value=_obj_saved,
+                        format="%d", key="k_objectif_apports",
+                        help="Montant total de versements que vous souhaitez atteindre (0 = pas d'objectif).",
+                    )
+            if _objectif_ap != _obj_saved:
+                app_config["objectif_apports"] = int(_objectif_ap)
+                _ok_obj, _err_obj = save_config(app_config)
+                if not _ok_obj:
+                    st.warning(_err_obj)
+
+            _total_verse = float(_df_mv.loc[_df_mv["Type"] == "APPORT", "Quantité"].sum())
+            _total_retire = float(_df_mv.loc[_df_mv["Type"] == "RETRAIT", "Quantité"].sum())
+            _net_total = _total_verse - _total_retire
+            _verse_an = float(_df_mv.loc[(_df_mv["Type"] == "APPORT") & (_df_mv["Annee"] == _annee_ap), "Quantité"].sum())
+            _retire_an = float(_df_mv.loc[(_df_mv["Type"] == "RETRAIT") & (_df_mv["Annee"] == _annee_ap), "Quantité"].sum())
+
+            # Série quotidienne des apports nets cumulés (base du graphique et de l'estimation)
+            _net_jour = _df_mv.groupby(_df_mv["Date_Heure"].dt.normalize())["Net"].sum().cumsum()
+            _fin_serie = max(pd.Timestamp.today().normalize(), _net_jour.index.max())
+            _cumul = _net_jour.reindex(pd.date_range(_net_jour.index.min(), _fin_serie), method="ffill")
+
+            with st.container(key="scroll_cols_apports_kpi"):
+                _k1, _k2, _k3, _k4 = st.columns(4)
+                _k1.metric("Versements depuis le début", fmt_eur(_total_verse))
+                _k2.metric(f"Versements {_annee_ap}", fmt_eur(_verse_an))
+                _k3.metric("Retraits cumulés", fmt_eur(_total_retire))
+                _k4.metric("Apports nets", fmt_eur(_net_total))
+
+            _cards = ""
+            if _objectif_ap > 0:
+                _cards += _apports_progress_card(
+                    f"Objectif : {fmt_eur(_objectif_ap)}", _net_total / _objectif_ap * 100,
+                    max(_objectif_ap - _net_total, 0.0), _estimer_date_atteinte(_cumul, _objectif_ap), "#0891b2",
+                )
+            _cards += _apports_progress_card(
+                f"Plafond PEA : {fmt_eur(PLAFOND_APPORTS)}", _net_total / PLAFOND_APPORTS * 100,
+                max(PLAFOND_APPORTS - _net_total, 0.0), _estimer_date_atteinte(_cumul, PLAFOND_APPORTS), "#d97706",
+            )
+            st.markdown(
+                f'<div class="h-scroll" style="display:flex; flex-wrap:wrap; gap:12px; margin:10px 0 4px 0;">{_cards}</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("Dates estimées par régression linéaire sur l'historique de vos apports nets — à titre indicatif seulement.")
+
+            with st.expander("📈 Évolution des apports nets cumulés", expanded=True):
+                fig_ap = go.Figure()
+                fig_ap.add_trace(go.Scatter(
+                    x=_cumul.index, y=_cumul.values, mode="lines", name="",
+                    line=dict(color="#06b6d4", width=3, shape="hv"),
+                    fill="tozeroy", fillcolor="rgba(6, 182, 212, 0.18)",
+                    customdata=[fmt_eur(v) for v in _cumul.values],
+                    hovertemplate="<b>%{x|%d/%m/%Y}</b><br>Apports nets cumulés : %{customdata}<extra></extra>",
+                ))
+                if _objectif_ap > 0:
+                    fig_ap.add_hline(
+                        y=_objectif_ap, line_dash="dash", line_color="#0284c7", line_width=1.5,
+                        annotation_text="Objectif", annotation_position="top left",
+                        annotation_font_color="#0284c7",
+                    )
+                if _net_total >= 0.6 * PLAFOND_APPORTS:
+                    fig_ap.add_hline(
+                        y=PLAFOND_APPORTS, line_dash="dot", line_color="#d97706", line_width=1.5,
+                        annotation_text="Plafond PEA", annotation_position="top left",
+                        annotation_font_color="#d97706",
+                    )
+                fig_ap.update_layout(
+                    height=340, margin=dict(l=10, r=10, t=20, b=10), hovermode="x",
+                    yaxis=dict(title="Apports nets (€)", rangemode="tozero"),
+                    xaxis=dict(title="", tickformat="%m/%Y", showgrid=False),
+                )
+                apply_chart_theme(fig_ap)
+                _plotly_chart(fig_ap, use_container_width=True, theme=None, key="chart_apports_cumul")
+
+            with st.expander("📊 Versements et retraits par année", expanded=True):
+                _ann = sorted(_df_mv["Annee"].unique().tolist())
+                _v_an = [float(_df_mv.loc[(_df_mv["Type"] == "APPORT") & (_df_mv["Annee"] == a), "Quantité"].sum()) for a in _ann]
+                _r_an = [float(_df_mv.loc[(_df_mv["Type"] == "RETRAIT") & (_df_mv["Annee"] == a), "Quantité"].sum()) for a in _ann]
+                fig_ap_an = go.Figure()
+                fig_ap_an.add_trace(go.Bar(
+                    x=[str(a) for a in _ann], y=_v_an, name="Versements",
+                    marker=dict(color="#06b6d4"),
+                    text=[fmt_eur(v) if v > 0 else "" for v in _v_an], textposition="outside", cliponaxis=False,
+                    customdata=[fmt_eur(v) for v in _v_an],
+                    hovertemplate="<b>%{x}</b><br>Versements : %{customdata}<extra></extra>",
+                ))
+                if any(r > 0 for r in _r_an):
+                    fig_ap_an.add_trace(go.Bar(
+                        x=[str(a) for a in _ann], y=[-r for r in _r_an], name="Retraits",
+                        marker=dict(color="#f87171"),
+                        customdata=[fmt_eur(r) for r in _r_an],
+                        hovertemplate="<b>%{x}</b><br>Retraits : %{customdata}<extra></extra>",
+                    ))
+                fig_ap_an.update_layout(
+                    height=320, margin=dict(l=10, r=10, t=30, b=10), barmode="relative", bargap=0.35,
+                    yaxis=dict(title="Montant (€)", zeroline=True, zerolinewidth=2),
+                    xaxis=dict(title="", type="category"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                )
+                apply_chart_theme(fig_ap_an)
+                _plotly_chart(fig_ap_an, use_container_width=True, theme=None, key="chart_apports_annuels")
+
+            _df_app_only = _df_mv[_df_mv["Type"] == "APPORT"]
+            if not _df_app_only.empty:
+                with st.expander("🗓️ Cartographie mensuelle des versements", expanded=True):
+                    build_calendar_heatmap(
+                        _df_app_only, "Date_Heure", "Quantité",
+                        ["#ecfeff", "#0891b2"], "apports",
+                        date_ouverture=pea_opening_dt,
+                    )
+
 if _tab_open(tab_classements):
     with tab_classements:
         # Filtre de période commun à tout l'onglet Classements (ventes réalisées, journées, mois,
         # années) : appliqué APRÈS les calculs de P&L et d'historique (qui ont besoin de tout
         # l'historique pour rester exacts — PRU, cumuls...), en ne gardant que les lignes dont la
         # date tombe dans la période choisie. "Tout l'historique" ne filtre rien.
-        _PERIODES_CLASSEMENT = {
-            "Tout l'historique": None,
-            "12 derniers mois": relativedelta(months=12),
-            "6 derniers mois": relativedelta(months=6),
-            "3 derniers mois": relativedelta(months=3),
-            "Cette année": "annee_courante",
-        }
         _periode_classement_choisie = st.selectbox(
-            "Période du classement", list(_PERIODES_CLASSEMENT.keys()), index=0,
+            "Période du classement", _PERIODES_PRESETS, index=len(_PERIODES_PRESETS) - 1,
             key="k_periode_classements",
-            help="S'applique à tous les classements de cet onglet (ventes, journées, mois, années).",
+            help="S'applique à tous les classements de cet onglet. La journée en cours est incluse (cours en direct).",
         )
         @_cache_render
-        def _rendu_onglet_classements(df_transactions, periode_classement, hide_amounts, jour, market_epoch):
+        def _rendu_onglet_classements(df_transactions, periode_classement, jour, market_epoch):
             _periode_classement_choisie = periode_classement
-            _delta_periode_classement = _PERIODES_CLASSEMENT[_periode_classement_choisie]
-            if _delta_periode_classement is None:
-                _cutoff_classement = None
-            elif _delta_periode_classement == "annee_courante":
-                _cutoff_classement = pd.Timestamp(datetime.now().year, 1, 1)
-            else:
-                _cutoff_classement = pd.Timestamp.today().normalize() - _delta_periode_classement
+            _cutoff_classement = periode_debut(_periode_classement_choisie)
 
             # ---------------------------------------------------------------------------
             # Helpers communs aux classements "période" (journées / mois / années) : la
@@ -5596,7 +5846,7 @@ if _tab_open(tab_classements):
                     yaxis=dict(title=None, tickmode="array", tickvals=_y, ticktext=_labels, range=[-0.6, _n - 0.4]),
                 )
                 apply_chart_theme(fig)
-                st.plotly_chart(fig, use_container_width=True, key=f"chart_top10_{key_suffix}")
+                _plotly_chart(fig, use_container_width=True, key=f"chart_top10_{key_suffix}")
 
             def _build_period_rank(freq):
                 """Classement générique par période (mois 'ME' ou année 'YE') : même principe que le
@@ -5750,7 +6000,7 @@ if _tab_open(tab_classements):
                                 ),
                             )
                             apply_chart_theme(fig_gains_frise)
-                            st.plotly_chart(fig_gains_frise, use_container_width=True, key="chart_top10_gains")
+                            _plotly_chart(fig_gains_frise, use_container_width=True, key="chart_top10_gains")
 
                     with col_pertes_frise:
                         render_total_card("Total des moins-values actées", _total_moins_values_actees, "#dc2626")
@@ -5801,7 +6051,7 @@ if _tab_open(tab_classements):
                                 ),
                             )
                             apply_chart_theme(fig_pertes_frise)
-                            st.plotly_chart(fig_pertes_frise, use_container_width=True, key="chart_top10_pertes")
+                            _plotly_chart(fig_pertes_frise, use_container_width=True, key="chart_top10_pertes")
 
             with st.expander("🏆 Meilleures et pires journées du portefeuille", expanded=True):
                 history_df_days = get_portfolio_history(df_transactions)
@@ -5959,7 +6209,7 @@ if _tab_open(tab_classements):
                     with col_worst_y_pct:
                         st.markdown("**📉 Pires années**")
                         _render_years_ranking(df_worst_years_pct, "Impact_Pct", "#dc2626", "Impact (%)", True, "worst_pct")
-        _rendu_onglet_classements(df_transactions, _periode_classement_choisie, bool(st.session_state.get("hide_amounts_toggle", False)), datetime.now().strftime("%Y-%m-%d"), _epoch_now)
+        _rendu_onglet_classements(df_transactions, _periode_classement_choisie, datetime.now().strftime("%Y-%m-%d"), _epoch_now)
 
 
 # ------------------------------------------
@@ -5968,7 +6218,63 @@ if _tab_open(tab_classements):
 if _tab_open(tab_saisonnalite):
     with tab_saisonnalite:
         @_cache_render
-        def _rendu_onglet_saisonnalite(df_transactions, hide_amounts, jour, market_epoch):
+        def _rendu_onglet_saisonnalite(df_transactions, jour, market_epoch):
+            with st.expander("🗓️ Plus-Values Actées par Trimestre", expanded=True):
+                df_ventes_pnl_trim = compute_realized_pnl_par_vente(df_transactions)
+
+                if not df_ventes_pnl_trim.empty:
+                    df_ventes_pnl_trim = df_ventes_pnl_trim.copy()
+                    df_ventes_pnl_trim["_trim"] = (df_ventes_pnl_trim["Date_Heure"].dt.month - 1) // 3 + 1
+
+                    labels_trim = ["T1 (Jan–Mar)", "T2 (Avr–Juin)", "T3 (Juil–Sep)", "T4 (Oct–Déc)"]
+                    gains_par_trim = df_ventes_pnl_trim.groupby("_trim")["Gain Réalisé (€)"].sum()
+                    nb_par_trim = df_ventes_pnl_trim.groupby("_trim").size()
+
+                    valeurs_trim = [float(gains_par_trim.get(i + 1, 0.0)) for i in range(4)]
+                    comptes_trim = [int(nb_par_trim.get(i + 1, 0)) for i in range(4)]
+                    couleurs_barres_trim = ["#0d9488" if v >= 0 else "#ef4444" for v in valeurs_trim]
+                    couleurs_bordure_trim = ["#0f766e" if v >= 0 else "#dc2626" for v in valeurs_trim]
+
+                    y_max_trim = max(valeurs_trim)
+                    y_min_trim = min(valeurs_trim)
+                    spread_trim = (y_max_trim - y_min_trim) if y_max_trim != y_min_trim else max(abs(y_max_trim), 1.0)
+                    pad_trim = spread_trim * 0.18
+                    range_top_trim = (y_max_trim + pad_trim) if y_max_trim > 0 else pad_trim * 0.4
+                    range_bottom_trim = (y_min_trim - pad_trim) if y_min_trim < 0 else -pad_trim * 0.4
+
+                    _montants_html_trim = [
+                        f"<span style='color:{'#16a34a' if v >= 0 else '#dc2626'};'><b>{fmt_eur(v)}</b></span>"
+                        for v in valeurs_trim
+                    ]
+                    fig_trim = go.Figure(data=go.Bar(
+                        x=labels_trim,
+                        y=valeurs_trim,
+                        marker=dict(color=couleurs_barres_trim, line=dict(color=couleurs_bordure_trim, width=1)),
+                        customdata=list(zip(_montants_html_trim, comptes_trim)),
+                        hovertemplate="%{customdata[0]}<br>%{customdata[1]} vente(s) actée(s)<extra></extra>",
+                    ))
+                    fig_trim.update_layout(
+                        height=380,
+                        margin=dict(l=10, r=10, t=20, b=10),
+                        bargap=0.3,
+                        hovermode="x",
+                        yaxis=dict(
+                            title="Plus-value actée (€)", zeroline=True, zerolinewidth=2,
+                            range=[range_bottom_trim, range_top_trim],
+                        ),
+                        xaxis=dict(
+                            title="", showticklabels=True, tickmode="array",
+                            tickvals=labels_trim, ticktext=labels_trim,
+                            tickfont=dict(size=10, color="#475569"),
+                            showline=False, ticks="",
+                            showgrid=True, gridcolor="#e2e8f0", griddash="dot",
+                        ),
+                    )
+                    apply_chart_theme(fig_trim)
+                    _plotly_chart(fig_trim, use_container_width=True, key="gain_trimestre_chart")
+                else:
+                    st.info("Aucune vente enregistrée pour le moment.")
+
             with st.expander("🗓️ Plus-Values Actées par Mois de l'Année", expanded=True):
                 df_ventes_pnl_mois = compute_realized_pnl_par_vente(df_transactions)
 
@@ -6039,7 +6345,7 @@ if _tab_open(tab_saisonnalite):
                         ),
                     )
                     apply_chart_theme(fig_mois)
-                    st.plotly_chart(fig_mois, use_container_width=True, key="gain_mois_chart")
+                    _plotly_chart(fig_mois, use_container_width=True, key="gain_mois_chart")
                 else:
                     st.info("Aucune vente enregistrée pour le moment.")
 
@@ -6109,7 +6415,7 @@ if _tab_open(tab_saisonnalite):
                         ),
                     )
                     apply_chart_theme(fig_jours)
-                    st.plotly_chart(fig_jours, use_container_width=True, key="gain_jour_semaine_chart")
+                    _plotly_chart(fig_jours, use_container_width=True, key="gain_jour_semaine_chart")
 
                     if not df_hors_semaine.empty:
                         total_hors_semaine = df_hors_semaine["Gain Réalisé (€)"].sum()
@@ -6204,7 +6510,7 @@ if _tab_open(tab_saisonnalite):
                         ),
                     )
                     apply_chart_theme(fig_horaire)
-                    st.plotly_chart(fig_horaire, use_container_width=True, key="gain_horaire_chart")
+                    _plotly_chart(fig_horaire, use_container_width=True, key="gain_horaire_chart")
 
                     if not df_hors_seance.empty:
                         total_hors_seance = df_hors_seance["Gain Réalisé (€)"].sum()
@@ -6214,7 +6520,7 @@ if _tab_open(tab_saisonnalite):
                         )
                 else:
                     st.info("Aucune vente enregistrée pour le moment.")
-        _rendu_onglet_saisonnalite(df_transactions, bool(st.session_state.get("hide_amounts_toggle", False)), datetime.now().strftime("%Y-%m-%d"), _epoch_now)
+        _rendu_onglet_saisonnalite(df_transactions, datetime.now().strftime("%Y-%m-%d"), _epoch_now)
 # ------------------------------------------
 # ONGLÊT 3 : PERFORMANCES & INDICES
 # ------------------------------------------
@@ -6256,27 +6562,39 @@ if _tab_open(tab_perf):
                     _default_perf_date_fin = min(max(_default_perf_date_fin, min_graph_date), max_graph_date)
 
                     st.markdown("##### 🗓️ Période affichée")
-                    col_perf_date1, col_perf_date2 = st.columns(2)
-                    with col_perf_date1:
-                        graph_date_debut = st.date_input(
-                            "Date de début",
-                            value=_default_perf_date_debut,
-                            min_value=min_graph_date,
-                            max_value=max_graph_date,
-                            format="DD-MM-YYYY",
-                            key="k_perf_graph_date_debut",
-                            help="Par défaut : date du premier achat du PEA (hors apport). La performance est recalculée à partir de 0% à cette date pour votre portefeuille et pour les indices comparés."
-                        )
-                    with col_perf_date2:
-                        graph_date_fin = st.date_input(
-                            "Date de fin",
-                            value=_default_perf_date_fin,
-                            min_value=min_graph_date,
-                            max_value=max_graph_date,
-                            format="DD-MM-YYYY",
-                            key="k_perf_graph_date_fin",
-                            help="Par défaut : aujourd'hui, pour rester cohérent avec la performance affichée ailleurs sur le dashboard."
-                        )
+                    periode_perf = st.selectbox(
+                        "Période", _PERIODES_PRESETS + ["Période personnalisée"],
+                        index=len(_PERIODES_PRESETS) - 1, key="k_periode_perf",
+                        help="Par défaut : du premier achat du PEA jusqu'à aujourd'hui. La performance est recalculée à partir de 0% au début de la période, pour votre portefeuille et pour les indices comparés."
+                    )
+                    if periode_perf == "Période personnalisée":
+                        with st.container(key="compact_cols_perf_dates"):
+                            col_perf_date1, col_perf_date2 = st.columns(2)
+                            with col_perf_date1:
+                                graph_date_debut = st.date_input(
+                                    "Date de début",
+                                    value=_default_perf_date_debut,
+                                    min_value=min_graph_date,
+                                    max_value=max_graph_date,
+                                    format="DD-MM-YYYY",
+                                    key="k_perf_graph_date_debut",
+                                )
+                            with col_perf_date2:
+                                graph_date_fin = st.date_input(
+                                    "Date de fin",
+                                    value=_default_perf_date_fin,
+                                    min_value=min_graph_date,
+                                    max_value=max_graph_date,
+                                    format="DD-MM-YYYY",
+                                    key="k_perf_graph_date_fin",
+                                )
+                    else:
+                        _deb_perf = periode_debut(periode_perf)
+                        if _deb_perf is None:
+                            graph_date_debut = _default_perf_date_debut
+                        else:
+                            graph_date_debut = min(max(_deb_perf.date(), min_graph_date), max_graph_date)
+                        graph_date_fin = _default_perf_date_fin
                     if graph_date_debut > graph_date_fin:
                         st.warning("⚠️ La date de début est postérieure à la date de fin : les deux bornes ont été inversées.")
                         graph_date_debut, graph_date_fin = graph_date_fin, graph_date_debut
@@ -6521,7 +6839,7 @@ if _tab_open(tab_perf):
                         with col_graph:
                             apply_chart_theme(fig)
                             config_options = {"displayModeBar": True, "scrollZoom": True, "modeBarButtonsToRemove": ["lasso2d", "select2d"]}
-                            st.plotly_chart(fig, use_container_width=True, theme=None, config=config_options)
+                            _plotly_chart(fig, use_container_width=True, theme=None, config=config_options)
 
                         nb_curves = len(benchmarks)
                         # Toujours en colonne (vertical) : l'ancien passage en "row" (horizontal) à
@@ -6728,7 +7046,7 @@ if _tab_open(tab_perf):
 if _tab_open(tab_dividends):
     with tab_dividends:
         @_cache_render
-        def _rendu_onglet_dividendes(df_port, df_transactions, pea_opening_dt, hide_amounts, jour, market_epoch):
+        def _rendu_onglet_dividendes(df_port, df_transactions, pea_opening_dt, jour, market_epoch):
             with st.expander("💶 Section Dividendes & Cartographie", expanded=True):
                 df_divs_pure = df_transactions[df_transactions["Type"] == "DIVIDENDE"].copy()
                 if not df_divs_pure.empty:
@@ -7049,8 +7367,8 @@ if _tab_open(tab_dividends):
                                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
                             )
                             apply_chart_theme(fig_div_12m)
-                            st.plotly_chart(fig_div_12m, use_container_width=True, key="chart_div_12_mois")
-        _rendu_onglet_dividendes(df_port, df_transactions, pea_opening_dt, bool(st.session_state.get("hide_amounts_toggle", False)), datetime.now().strftime("%Y-%m-%d"), _epoch_now)
+                            _plotly_chart(fig_div_12m, use_container_width=True, key="chart_div_12_mois")
+        _rendu_onglet_dividendes(df_port, df_transactions, pea_opening_dt, datetime.now().strftime("%Y-%m-%d"), _epoch_now)
 
 
 # ------------------------------------------
@@ -7059,7 +7377,7 @@ if _tab_open(tab_dividends):
 if _tab_open(tab_history):
     with tab_history:
         @_cache_render
-        def _rendu_onglet_historique(df_transactions, tot_invested, hide_amounts, jour, market_epoch):
+        def _rendu_onglet_historique(df_transactions, tot_invested, jour, market_epoch):
             _fmt_eur_h = _fmt_eur_lecteur()
 
             def style_entire_row_gradient(df):
@@ -7303,7 +7621,7 @@ if _tab_open(tab_history):
                             df_y_res.style.apply(style_entire_row_gradient, axis=None),
                             use_container_width=True,
                         )
-        _rendu_onglet_historique(df_transactions, tot_invested, bool(st.session_state.get("hide_amounts_toggle", False)), datetime.now().strftime("%Y-%m-%d"), _epoch_now)
+        _rendu_onglet_historique(df_transactions, tot_invested, datetime.now().strftime("%Y-%m-%d"), _epoch_now)
 
 
 # ------------------------------------------
@@ -7660,7 +7978,7 @@ if _tab_open(tab_watchlist):
 
             st.markdown(
                 "<div style='overflow-x:auto;'>"
-                "<table style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
+                "<table style='width:100%; min-width:760px; border-collapse:collapse; font-size:0.9rem;'>"
                 f"<thead>{_header_html}</thead>"
                 f"<tbody>{''.join(_lignes_wl_html)}</tbody>"
                 "</table></div>",
@@ -7964,12 +8282,12 @@ if _tab_open(tab_simulateur):
                     ),
                 )
                 apply_chart_theme(fig_proj)
-                st.plotly_chart(fig_proj, use_container_width=True, key="projection_valeur_chart")
+                _plotly_chart(fig_proj, use_container_width=True, key="projection_valeur_chart")
 
                 _horizon_suffix = 's' if horizon_annees >= 2 else ''
                 st.markdown(
                     f"""
-                <div style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px;">
+                <div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px;">
                     <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:170px; text-align:center;">
                         <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Valeur actuelle</div>
                         <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(tot_value_globale)}</div>
@@ -8111,7 +8429,7 @@ if _tab_open(tab_simulateur):
                         grad_color = "linear-gradient(90deg, #d97706, #fbbf24)"
                         net_badge_color = "#d97706"
 
-                    net_str = f"{net_pct:,.1f}%".replace(".", ",") if not st.session_state.get("hide_amounts_toggle", False) else "**,**%"
+                    net_str = f"{net_pct:,.1f}%".replace(".", ",")
 
                     # Construite en Python (et non en placeholder direct dans le gros template
                     # ci-dessous) pour ne JAMAIS laisser de ligne vide au milieu du bloc HTML : une
@@ -8138,7 +8456,7 @@ if _tab_open(tab_simulateur):
                             {net_str} conservés après fiscalité
                         </div>
                     </div>
-                    <div style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px; margin-top: 14px;">
+                    <div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px; margin-top: 14px;">
                         <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:160px; text-align:center;">
                             <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Montant demandé</div>
                             <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(montant_retrait_souhaite)}</div>
@@ -8152,7 +8470,7 @@ if _tab_open(tab_simulateur):
                             <div style="font-size:1.05rem; font-weight:700; color:#0f172a;">{fmt_eur(part_pv_retrait)}</div>
                         </div>
                     </div>
-                    <div style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
+                    <div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap: wrap; gap: 8px; margin-top: 8px;">
                         <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:8px 14px; flex:1; min-width:160px; text-align:center;">
                             <div style="font-size:0.72rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Prélèvements sociaux ({taux_ps_str})</div>
                             <div style="font-size:1.05rem; font-weight:700; color:#d97706;">{fmt_eur(montant_ps)}</div>
