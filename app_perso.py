@@ -829,6 +829,20 @@ st.markdown(
     .pea-duo-item.hl { background: #f0f9ff; border-color: #7dd3fc; }
     .pea-duo-item.hl .v { font-size: 1.6rem; color: #0284c7; }
     .pea-pill b { font-weight: 800; white-space: nowrap; }
+    .pea-duo.tri { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .pea-duo.tri .pea-duo-item { padding: 8px 4px; min-width: 0; }
+    .pea-duo.tri .pea-duo-item .k { font-size: min(0.62rem, 2.4vw); letter-spacing: 0; line-height: 1.2; }
+    .pea-duo.tri .pea-duo-item .v { font-size: min(1.1rem, 4.2vw); white-space: nowrap; }
+    /* Tableaux HTML : toutes les valeurs (et les titres) centrées dans les cases. */
+    .pea-tbl-wrap { overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px; background: #ffffff; margin: 4px 0 8px 0; }
+    .pea-tbl { border-collapse: collapse; width: 100%; font-size: 0.8rem; color: #0f172a; }
+    .pea-tbl th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475569; text-transform: uppercase;
+                  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; padding: 8px 8px; text-align: center;
+                  white-space: nowrap; border-bottom: 1px solid #e2e8f0; }
+    .pea-tbl td, .pea-tbl th.ix { text-align: center; padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #f1f5f9; }
+    .pea-tbl th.ix { position: static; background: transparent; color: inherit; text-transform: none; font-size: inherit; font-weight: 600; }
+    .pea-tbl tbody tr:nth-child(even) { background: rgba(148,163,184,0.10); }
+    @media (max-width: 640px) { .pea-tbl { font-size: 0.72rem; } .pea-tbl td, .pea-tbl th { padding: 5px 5px; } }
     .pea-head { text-align: center; padding: 6px 0 2px 0; }
     .pea-head .k { font-size: 0.78rem; color: #64748b; font-weight: 600; }
     .pea-head .v { font-size: 2.3rem; font-weight: 800; color: #0f172a; line-height: 1.15; }
@@ -1807,6 +1821,86 @@ _GRADIENT_GREENS_TXT = ['#166534', '#166534', '#14532d']
 _GRADIENT_REDS_BG = ['#fef2f2', '#fee2e2', '#fecaca']
 _GRADIENT_REDS_TXT = ['#991b1b', '#991b1b', '#7f1d1d']
 
+import re
+
+_TBL_ZERO_RE = re.compile(r"^[▬▲▼\s+\-−]*0+([,.]0+)?\s*(€|%)?$")
+
+def _dash_if_empty(df):
+    """Remplace 0, N/A et valeurs vides d'un tableau déjà formaté par un « - »."""
+    def _f(v):
+        if v is None:
+            return "-"
+        try:
+            if pd.isna(v):
+                return "-"
+        except Exception:
+            pass
+        if isinstance(v, (int, float, np.integer, np.floating)):
+            return "-" if v == 0 else v
+        t = str(v).strip()
+        if t in ("", "N/A", "nan", "NaN", "None"):
+            return "-"
+        return "-" if _TBL_ZERO_RE.match(t) else v
+    return df.apply(lambda col: col.map(_f))
+
+def _row_styles_of(styles_df):
+    """Style de ligne (une chaîne CSS par ligne) à partir d'un DataFrame de styles uniformes par ligne."""
+    if styles_df is None or styles_df.shape[1] == 0:
+        return None
+    return [str(x) for x in styles_df.iloc[:, 0].tolist()]
+
+def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None):
+    """Tableau HTML avec toutes les valeurs centrées. row_styles : une chaîne CSS par ligne ;
+    cell_style(colonne, valeur) -> chaîne CSS d'une cellule. Défilement interne au-delà de 25 lignes."""
+    cols = list(df.columns)
+    head = ("<th>" + _esc(str(index_label)) + "</th>" if show_index else "") + "".join(f"<th>{_esc(str(c))}</th>" for c in cols)
+    idx = list(df.index)
+    rows = []
+    for i, row in enumerate(df.itertuples(index=False, name=None)):
+        rs = (row_styles[i] if row_styles is not None else "") or ""
+        tds = [f'<th class="ix">{_esc(str(idx[i]))}</th>'] if show_index else []
+        for c, v in zip(cols, row):
+            cs = (cell_style(c, v) if cell_style else "") or ""
+            tds.append(f'<td style="{cs}">{_esc(str(v))}</td>' if cs else f"<td>{_esc(str(v))}</td>")
+        rows.append(f'<tr style="{rs}">' + "".join(tds) + "</tr>" if rs else "<tr>" + "".join(tds) + "</tr>")
+    if max_height is None and len(df) > 25:
+        max_height = 620
+    wrap_style = f' style="max-height:{int(max_height)}px;"' if max_height else ""
+    html = (f'<div class="pea-tbl-wrap"{wrap_style}><table class="pea-tbl"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div>')
+    st.markdown(html, unsafe_allow_html=True)
+
+def _lerp_hex(c1, c2, t):
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
+
+def get_smooth_gradient_styles(vals_arr):
+    """Dégradé continu (et non par paliers) : plus la valeur est forte dans son signe, plus le vert / rouge est
+    soutenu. L'intensité mêle l'amplitude (racine du ratio au maximum) et le rang, pour rester lisible même
+    avec une valeur extrême. Léger -> moyen -> soutenu, texte foncé toujours lisible."""
+    vals = np.asarray(vals_arr, dtype=float)
+    stops = {
+        1: ("#f0fdf4", "#bbf7d0", "#4ade80", "#14532d"),
+        -1: ("#fef2f2", "#fecaca", "#fca5a5", "#7f1d1d"),
+    }
+    out = [""] * len(vals)
+    for sign in (1, -1):
+        mask = (~np.isnan(vals)) & (vals * sign > 0)
+        if not mask.any():
+            continue
+        mags = np.abs(vals[mask])
+        vmax = float(mags.max())
+        order = mags.argsort().argsort()
+        n = len(mags)
+        light, mid, strong, txt = stops[sign]
+        for k, pos in enumerate(np.flatnonzero(mask)):
+            rank_t = (order[k] / (n - 1)) if n > 1 else 1.0
+            t = 0.5 * (mags[k] / vmax) ** 0.5 + 0.5 * rank_t
+            bg = _lerp_hex(light, mid, t * 2) if t < 0.5 else _lerp_hex(mid, strong, (t - 0.5) * 2)
+            out[pos] = f"background-color: {bg}; color: {txt}; font-weight: 600;"
+    return out
+
 def _make_get_h_val(history_df):
     """Équivalent rapide de la fonction get_h_val des tableaux mensuel/annuel : renvoie
     (valeur portefeuille, apports, gain réalisé, dividendes, valeur actions, capital investi) au
@@ -1955,9 +2049,12 @@ def _breakdown_lines_for_kind(df_subset, kind, value_col=None):
             lines.append(f"Rompu : {fmt_eur(rompu_amt)}")
     return lines
 
-def _fmt_cell_heat(v):
+def _fmt_cell_heat(v, zero="-"):
     """Valeur compacte écrite dans une case (les cases sont petites sur téléphone) :
-    1,2k au-delà de 1000, entier de 10 à 999, sinon 1 décimale. Le détail complet reste au survol."""
+    1,2k au-delà de 1000, entier de 10 à 999, sinon 1 décimale ; « - » quand la valeur est nulle.
+    Le détail complet reste au survol."""
+    if abs(v) < 0.05:
+        return zero
     if v >= 1000:
         return f"{v / 1000:.1f}".replace(".", ",") + "k"
     if v >= 10:
@@ -2026,7 +2123,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
     plot_h = row_h * n
     top_m, bot_m = 28, 78
     tick_vals = [0.0, zmax / 2.0, zmax]
-    tick_text = [_fmt_cell_heat(v) for v in tick_vals]
+    tick_text = [_fmt_cell_heat(v, zero="0") for v in tick_vals]
 
     fig = go.Figure(data=go.Heatmap(
         z=z, x=list(range(12)), y=list(range(n)),
@@ -5561,16 +5658,12 @@ if _tab_open(tab_positions):
                 row_height = 35
                 header_height = 40
                 total_height = header_height + len(df_active_fmt) * row_height
-                _sty_active = df_active_fmt.style.apply(_zebra_rows, axis=None)
                 _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
                                        if c in df_active_fmt.columns]
-                if _cols_fleche_active:
-                    _sty_active = (_sty_active.map if hasattr(_sty_active, "map") else _sty_active.applymap)(
-                        _style_perf_cell, subset=_cols_fleche_active)
-                st.dataframe(
-                    _sty_active,
-                    use_container_width=True, hide_index=True,
-                    height=min(max(total_height, 100), 1000),
+                _html_table(
+                    df_active_fmt,
+                    cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_active else "",
+                    max_height=min(max(total_height, 100), 1000),
                 )
             else:
                 st.info("Aucune position active pour le moment.")
@@ -5800,10 +5893,8 @@ if _tab_open(tab_positions):
                             return ['background-color: #fff7ed;'] * len(row)
                         return [''] * len(row)
 
-                    st.dataframe(
-                        df_table.style.apply(color_transactions, axis=1),
-                        use_container_width=True,
-                    )
+                    _row_styles_tx = [color_transactions(_r)[0] for _, _r in df_table.iterrows()]
+                    _html_table(df_table, row_styles=_row_styles_tx, show_index=True, index_label="N°")
                 else:
                     st.info("Aucune transaction trouvée avec ces critères.")
 
@@ -5974,24 +6065,14 @@ if _tab_open(tab_positions):
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
                 df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)']).copy()
+                # Flèches ▲ / ▼ remises sur chaque montant en € et chaque pourcentage.
                 for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)']:
-                    df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur)
+                    df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur_arrow)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
 
-                def color_gain_rows(df_display):
-                    # Même dégradé (3 verts / 3 rouges, par quantiles) que les historiques mensuel et
-                    # annuel de l'onglet Historique, via get_quantile_level_styles.
-                    vals_arr_gain = df_gain_rank['Gain Total Global (€)'].to_numpy(dtype=float)
-                    row_styles = get_quantile_level_styles(vals_arr_gain)
-                    styles = pd.DataFrame('', index=df_display.index, columns=df_display.columns)
-                    for i, idx in enumerate(df_display.index):
-                        styles.loc[idx, :] = row_styles[i]
-                    return styles
-
-                st.dataframe(
-                    df_gain_rank_fmt.style.apply(color_gain_rows, axis=None),
-                    use_container_width=True, hide_index=True,
-                )
+                # Dégradé continu (vert / rouge) selon le gain total de chaque ligne.
+                _row_styles_gain = get_smooth_gradient_styles(df_gain_rank['Gain Total Global (€)'].to_numpy(dtype=float))
+                _html_table(df_gain_rank_fmt, row_styles=_row_styles_gain)
             else:
                 st.info("Aucune donnée disponible pour le classement des gains.")
 
@@ -6193,6 +6274,12 @@ if _tab_open(tab_classements):
                 """Rendu générique réutilisé pour les journées, les mois et les années : seule change la
         colonne triée/affichée sur la barre (montant € ou impact %) ; le survol montre toujours
         l'autre unité en complément, suivi du détail de la provenance du gain/de la perte."""
+                # Seules les vraies périodes gagnantes (vert) / perdantes (rouge) sont affichées : plus de lignes
+                # vides sur l'axe quand il y a peu de jours / mois / trimestres / années.
+                df_subset = df_subset[df_subset[value_col] > 0] if color == "#16a34a" else df_subset[df_subset[value_col] < 0]
+                if df_subset.empty:
+                    st.caption("Rien à afficher pour le moment.")
+                    return
                 _df_disp = df_subset.reset_index(drop=True)
                 _labels = [label_func(d) for d in _df_disp["Date"]]
                 _vals = _df_disp[value_col].tolist()
@@ -6309,6 +6396,11 @@ if _tab_open(tab_classements):
                             return "N/A"
                         return f"{pct:+.2f} %".replace(".", ",")
 
+                    def _tip_col(label, txt, v):
+                        # Montant coloré (vert / rouge clair, lisible sur l'infobulle sombre), comme pour les journées.
+                        c = "#4ade80" if v >= 0 else "#f87171"
+                        return f"{label} : <span style='color:{c};'>{txt}</span>"
+
                     def _build_bar_trace(x_vals, y_positions, color, customdata_list, montants_fmt):
                         # Barre pleine (go.Bar) au lieu de l'ancien nuage de petits points qui simulait
                         # une tige : plus lisible, et le survol fonctionne sur toute la longueur de la
@@ -6362,9 +6454,11 @@ if _tab_open(tab_classements):
                             _y_gains = list(range(_n_gains - 1, -1, -1))  # position 0 = tout en bas
                             _montants_fmt_gains = [fmt_eur(v) for v in _vals_gains]
                             _customdata_gains = [
-                                (lbl, date_str, montant_str, _pct_str_frise(pct_val))
-                                for lbl, date_str, montant_str, pct_val in zip(
-                                    _labels_gains, _df_gains_disp["Date_Str"], _montants_fmt_gains, _df_gains_disp["Gain Réalisé (%)"]
+                                (lbl, date_str, _tip_col("Plus-value", montant_str, val),
+                                 _tip_col("Performance", _pct_str_frise(pct_val), val if pd.isna(pct_val) else pct_val))
+                                for lbl, date_str, montant_str, pct_val, val in zip(
+                                    _labels_gains, _df_gains_disp["Date_Str"], _montants_fmt_gains,
+                                    _df_gains_disp["Gain Réalisé (%)"], _vals_gains
                                 )
                             ]
                             fig_gains_frise = go.Figure()
@@ -6412,9 +6506,11 @@ if _tab_open(tab_classements):
                             _y_pertes = list(range(_n_pertes - 1, -1, -1))  # position 0 = tout en bas
                             _montants_fmt_pertes = [fmt_eur(v) for v in _vals_pertes]
                             _customdata_pertes = [
-                                (lbl, date_str, montant_str, _pct_str_frise(pct_val))
-                                for lbl, date_str, montant_str, pct_val in zip(
-                                    _labels_pertes, _df_pertes_disp["Date_Str"], _montants_fmt_pertes, _df_pertes_disp["Gain Réalisé (%)"]
+                                (lbl, date_str, _tip_col("Moins-value", montant_str, val),
+                                 _tip_col("Performance", _pct_str_frise(pct_val), val if pd.isna(pct_val) else pct_val))
+                                for lbl, date_str, montant_str, pct_val, val in zip(
+                                    _labels_pertes, _df_pertes_disp["Date_Str"], _montants_fmt_pertes,
+                                    _df_pertes_disp["Gain Réalisé (%)"], _vals_pertes
                                 )
                             ]
                             fig_pertes_frise = go.Figure()
@@ -6555,6 +6651,48 @@ if _tab_open(tab_classements):
                     with col_worst_m_pct:
                         st.markdown("**📉 Top 10 des pires mois**")
                         _render_months_ranking(df_worst_months_pct, "Impact_Pct", "#dc2626", "Impact (%)", True, "worst_pct")
+
+            with st.expander("🏆 Meilleurs et pires trimestres du portefeuille", expanded=True):
+                df_quarters_rank = _build_period_rank('QE')
+                if df_quarters_rank.empty:
+                    st.info("Pas encore assez d'historique pour établir ce classement.")
+                else:
+                    def _label_trim(d):
+                        return f"T{(d.month - 1) // 3 + 1} {d.year}"
+
+                    def _debut_trim(d):
+                        return pd.Timestamp(d.year, 3 * ((d.month - 1) // 3) + 1, 1)
+
+                    def _render_quarters_ranking(df_subset, value_col, color, axis_title, is_pct, key_suffix):
+                        _render_period_ranking(
+                            df_subset, value_col, "PnL_Periode", color, axis_title, is_pct,
+                            f"quarters_{key_suffix}", _label_trim, _debut_trim,
+                            label_variation="Variation sur le trimestre",
+                        )
+
+                    st.markdown("#### Meilleurs et pires trimestres du portefeuille (en €)")
+                    df_best_q_eur = df_quarters_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
+                    df_worst_q_eur = df_quarters_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
+                    col_best_q_eur, col_worst_q_eur = _paired_columns("onecol_rank_col_best_q_eur")
+                    with col_best_q_eur:
+                        st.markdown("**📈 Top 10 des meilleurs trimestres**")
+                        _render_quarters_ranking(df_best_q_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
+                    with col_worst_q_eur:
+                        st.markdown("**📉 Top 10 des pires trimestres**")
+                        _render_quarters_ranking(df_worst_q_eur, "PnL_Periode", "#dc2626", "Perte (€)", False, "worst_eur")
+
+                    st.markdown("<hr style='margin: 18px 0;'>", unsafe_allow_html=True)
+
+                    st.markdown("#### Meilleurs et pires trimestres du portefeuille (en %)")
+                    df_best_q_pct = df_quarters_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
+                    df_worst_q_pct = df_quarters_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
+                    col_best_q_pct, col_worst_q_pct = _paired_columns("onecol_rank_col_best_q_pct")
+                    with col_best_q_pct:
+                        st.markdown("**📈 Top 10 des meilleurs trimestres**")
+                        _render_quarters_ranking(df_best_q_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
+                    with col_worst_q_pct:
+                        st.markdown("**📉 Top 10 des pires trimestres**")
+                        _render_quarters_ranking(df_worst_q_pct, "Impact_Pct", "#dc2626", "Impact (%)", True, "worst_pct")
 
             with st.expander("🏆 Meilleures et pires années du portefeuille", expanded=True):
                 df_years_rank = _build_period_rank('YE')
@@ -7403,13 +7541,9 @@ if _tab_open(tab_perf):
                             ]
 
                             st.markdown("#### 📊 Résultats de la Comparaison")
-                            _sty_comp = df_comp_res[cols_final_comp].style
-                            _sty_comp = (_sty_comp.map if hasattr(_sty_comp, "map") else _sty_comp.applymap)(
-                                _style_perf_bg_cell, subset=cols_final_comp[1:])
-                            st.dataframe(
-                                _sty_comp,
-                                use_container_width=True,
-                                hide_index=True,
+                            _html_table(
+                                df_comp_res[cols_final_comp],
+                                cell_style=lambda c, v: _style_perf_bg_cell(v) if c in cols_final_comp[1:] else "",
                             )
                         else:
                             st.warning("Aucune donnée disponible dans l'historique.")
@@ -7879,10 +8013,8 @@ if _tab_open(tab_history):
                             df_q_res = df_q_res.reset_index(drop=True)
                             _total_q = len(df_q_res)
                             df_q_res.index = _total_q - df_q_res.index
-                            st.dataframe(
-                                df_q_res.style.apply(style_entire_row_gradient, axis=None),
-                                use_container_width=True,
-                            )
+                            _rs_q = _row_styles_of(style_entire_row_gradient(df_q_res))
+                            _html_table(_dash_if_empty(df_q_res), row_styles=_rs_q, show_index=True, index_label="N°")
                         else:
                             st.info("Pas encore assez d'historique pour établir ce tableau.")
 
@@ -7934,10 +8066,8 @@ if _tab_open(tab_history):
                         df_m_res = df_m_res.reset_index(drop=True)
                         _total_m = len(df_m_res)
                         df_m_res.index = _total_m - df_m_res.index
-                        st.dataframe(
-                            df_m_res.style.apply(style_entire_row_gradient, axis=None),
-                            use_container_width=True,
-                        )
+                        _rs_m = _row_styles_of(style_entire_row_gradient(df_m_res))
+                        _html_table(_dash_if_empty(df_m_res), row_styles=_rs_m, show_index=True, index_label="N°")
 
             with st.expander("📅 Historique des performances annuelles", expanded=True):
                 if not df_transactions.empty:
@@ -7992,10 +8122,8 @@ if _tab_open(tab_history):
                         df_y_res = df_y_res.reset_index(drop=True)
                         _total_y = len(df_y_res)
                         df_y_res.index = _total_y - df_y_res.index
-                        st.dataframe(
-                            df_y_res.style.apply(style_entire_row_gradient, axis=None),
-                            use_container_width=True,
-                        )
+                        _rs_y = _row_styles_of(style_entire_row_gradient(df_y_res))
+                        _html_table(_dash_if_empty(df_y_res), row_styles=_rs_y, show_index=True, index_label="N°")
         _rendu_onglet_historique(df_transactions, tot_invested, _now_paris().strftime("%Y-%m-%d"), _epoch_now)
 
 
@@ -8431,12 +8559,17 @@ def _sim_stats(*cards, small=False):
 
 def _sim_headline_duo(items):
     """Deux indicateurs côte à côte (y compris sur téléphone) ; items = (libellé, valeur, sous-texte, mis_en_avant)."""
-    html = "".join(
-        f'<div class="pea-duo-item{" hl" if hl else ""}"><div class="k">{k}</div><div class="v">{v}</div>'
-        + (f'<div class="s">{s}</div>' if s else "") + "</div>"
-        for k, v, s, hl in items
-    )
-    st.markdown(f'<div class="pea-duo">{html}</div>', unsafe_allow_html=True)
+    parts = []
+    for it in items:
+        k, v, sub, hl = it[:4]
+        col = it[4] if len(it) > 4 else None
+        sty = f' style="color:{col};"' if col else ""
+        parts.append(
+            f'<div class="pea-duo-item{" hl" if hl else ""}"><div class="k">{k}</div><div class="v"{sty}>{v}</div>'
+            + (f'<div class="s">{sub}</div>' if sub else "") + "</div>"
+        )
+    cls = " tri" if len(items) == 3 else ""
+    st.markdown(f'<div class="pea-duo{cls}">{"".join(parts)}</div>', unsafe_allow_html=True)
 
 
 def _sim_headline(label, value, sub="", color="#0f172a"):
@@ -8645,13 +8778,11 @@ def _render_sim_projection():
         fig_proj = _stacked_growth_chart(n_ans, None, verses, interets, "")
         _plotly_chart(fig_proj, use_container_width=True, theme=None, key="projection_valeur_chart")
 
-        if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n_ans and apport_annuel_proj > 0:
-            st.caption(f"⚠️ Au rythme prévu, le plafond de versements du PEA ({fmt_eur(PLAFOND_PEA_VERSEMENTS)}) serait atteint avant la fin de l'horizon : les apports sont plafonnés à partir de cette échéance.")
         # Plafond de versements : la barre reflète les apports cumulés PROJETÉS en fin d'horizon.
         pct_plafond = min(max((apports_cumules_finaux / PLAFOND_PEA_VERSEMENTS) * 100, 0.0), 100.0)
         grad_plafond = "linear-gradient(90deg, #d97706, #fbbf24)" if pct_plafond < 90 else "linear-gradient(90deg, #dc2626, #f87171)"
         st.markdown(
-            '<div style="margin-top: 10px; padding: 12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">'
+            '<div style="margin-top: -12px; padding: 12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">'
             '<div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:4px; margin-bottom:8px;">'
             '<div style="font-size:0.74rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">🏦 Plafond de versements PEA</div>'
             f'<div style="font-size:0.82rem; font-weight:700; color:#0f172a;">{fmt_eur(apports_cumules_finaux)} / {fmt_eur(PLAFOND_PEA_VERSEMENTS)}</div></div>'
@@ -8661,6 +8792,9 @@ def _render_sim_projection():
             f'📅 Atteinte estimée du plafond : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
             unsafe_allow_html=True,
         )
+        if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n_ans and apport_annuel_proj > 0:
+            st.caption(f"⚠️ Au rythme prévu, le plafond de versements du PEA ({fmt_eur(PLAFOND_PEA_VERSEMENTS)}) serait atteint avant la fin de l'horizon : les apports sont plafonnés à partir de cette échéance.")
+        st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
 
 
 @fragment_wrapper
@@ -8745,12 +8879,16 @@ def _render_sim_revenu_passif(valeur_depart, apport_mensuel_defaut, rendement_de
             (f"Valeur nette dans {n} {_plural(n)}", fmt_eur(valeur_nette_reelle), "", False),
             ("Revenu passif / mois", fmt_eur(revenu_mensuel), "", True),
         ])
-        _sim_pills([
-            ("Portefeuille initial", fmt_eur(pf0), "#94a3b8", "#f1f5f9", "#e2e8f0", "#475569"),
-            ("Versements", fmt_eur(verses_nominaux[-1]), "#38bdf8", "#f0f9ff", "#bae6fd", "#075985"),
-            ("Intérêts nets", fmt_eur(interets_nets), "#f59e0b", "#fffbeb", "#fde68a", "#92400e"),
+        _sim_headline_duo([
+            ("Portefeuille initial", fmt_eur(pf0), "", False, "#475569"),
+            ("Versements", fmt_eur(verses_nominaux[-1]), "", False, "#0284c7"),
+            ("Intérêts nets", fmt_eur(interets_nets), "", False, "#d97706"),
         ])
-        fig_rp = _stacked_growth_chart(n, None, verses_nominaux, interets_chart, "")
+        # Point de départ du graphique (aujourd'hui) : versements et intérêts ACTUELS du portefeuille.
+        verses0 = min(max(float(apports_totaux), 0.0), pf0)
+        verses_chart = [verses0 + inv * k for k in range(n + 1)]
+        interets_chart = [nr - vc for nr, vc in zip(nettes_reelles, verses_chart)]
+        fig_rp = _stacked_growth_chart(n, None, verses_chart, interets_chart, "")
         _plotly_chart(fig_rp, use_container_width=True, theme=None, key="chart_sim_revenu_passif")
 
         _sim_stats(
