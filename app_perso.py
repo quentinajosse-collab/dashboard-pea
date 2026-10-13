@@ -5681,7 +5681,7 @@ if _tab_open(tab_positions):
                 _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
                                        if c in df_active_fmt.columns]
                 _html_table(
-                    df_active_fmt,
+                    _dash_if_empty(df_active_fmt),
                     cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_active else "",
                     max_height=min(max(total_height, 100), 1000),
                 )
@@ -6094,7 +6094,7 @@ if _tab_open(tab_positions):
 
                 # Dégradé continu (vert / rouge) selon le gain total de chaque ligne.
                 _row_styles_gain = get_smooth_gradient_styles(df_gain_rank['Gain Total Global (€)'].to_numpy(dtype=float))
-                _html_table(df_gain_rank_fmt, row_styles=_row_styles_gain)
+                _html_table(_dash_if_empty(df_gain_rank_fmt), row_styles=_row_styles_gain)
             else:
                 st.info("Aucune donnée disponible pour le classement des gains.")
 
