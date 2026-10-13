@@ -27,6 +27,29 @@ import inspect
 import urllib.parse
 from html import escape as _esc
 try:
+    from zoneinfo import ZoneInfo as _ZoneInfo
+except Exception:  # Python < 3.9
+    _ZoneInfo = None
+
+
+def _now_paris():
+    """Heure actuelle à Paris (sans fuseau attaché). Le serveur Streamlit Cloud tourne en UTC : sans cela, la
+    « date du jour » et l'ouverture de la bourse seraient décalées de 1 à 2 h."""
+    try:
+        return pd.Timestamp.now(tz=_ZoneInfo("Europe/Paris")).tz_localize(None)
+    except Exception:
+        return pd.Timestamp.now()
+
+
+def _today_paris():
+    return _now_paris().normalize()
+
+
+def _marche_ouvert_aujourdhui():
+    """Euronext Paris : séance du lundi au vendredi, ouverture à 9 h (heure de Paris)."""
+    n = _now_paris()
+    return n.weekday() < 5 and n.hour >= 9
+try:
     import doc_import as di  # lecture des avis d'opéré / relevés (fichier doc_import.py à côté de ce script)
     _IMPORT_ERR = None
 except Exception as _e:  # module absent ou dépendance manquante : l'appli démarre quand même, sans l'encart d'import
@@ -797,7 +820,14 @@ st.markdown(
     .pea-stat .v { font-size: 1.05rem; font-weight: 700; color: #0f172a; margin-top: 2px; }
     .pea-pills { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 6px 0; }
     .pea-pill { display: flex; justify-content: space-between; align-items: center; gap: 10px; border-radius: 10px;
-                padding: 7px 14px; font-size: 0.85rem; }
+                padding: 4px 12px; font-size: 0.8rem; }
+    .pea-duo { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0 4px 0; }
+    .pea-duo-item { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 8px 8px; text-align: center; }
+    .pea-duo-item .k { font-size: 0.66rem; color: #64748b; text-transform: uppercase; font-weight: 700; letter-spacing: 0.04em; }
+    .pea-duo-item .v { font-size: 1.3rem; font-weight: 800; color: #0f172a; line-height: 1.25; }
+    .pea-duo-item .s { font-size: 0.68rem; color: #64748b; }
+    .pea-duo-item.hl { background: #f0f9ff; border-color: #7dd3fc; }
+    .pea-duo-item.hl .v { font-size: 1.6rem; color: #0284c7; }
     .pea-pill b { font-weight: 800; white-space: nowrap; }
     .pea-head { text-align: center; padding: 6px 0 2px 0; }
     .pea-head .k { font-size: 0.78rem; color: #64748b; font-weight: 600; }
@@ -830,7 +860,16 @@ st.markdown(
             flex: 1 1 calc(50% - 0.6rem) !important; min-width: calc(50% - 0.6rem) !important; width: auto !important;
         }
         .pea-stats { grid-template-columns: 1fr; }
+        .pea-stats.sm { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+        .pea-stats.sm .pea-stat { padding: 6px 4px; }
+        .pea-stats.sm .k { font-size: 0.6rem; }
+        .pea-stats.sm .v { font-size: 0.9rem; }
+        .pea-duo-item .v { font-size: 1.15rem; }
+        .pea-duo-item.hl .v { font-size: 1.4rem; }
         .pea-head .v { font-size: 1.9rem; }
+        div[class*="st-key-onecol_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            flex: 1 1 100% !important; min-width: 100% !important;
+        }
         .pea-wl .hm { display: none; }
         .pea-wl th, .pea-wl td { padding: 5px 3px !important; font-size: 0.7rem !important; white-space: normal !important; }
         .pea-cards { grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -1076,6 +1115,13 @@ _TIP_JS = r"""
 """
 
 
+def _paired_columns(key):
+    """Deux colonnes côte à côte sur ordinateur ; empilées (une par ligne, pleine largeur) sur téléphone grâce au
+    conteneur « onecol_* » : les deux graphiques d'une paire ne se décalent plus quand un titre passe à la ligne."""
+    with st.container(key=key):
+        return st.columns(2, gap="small")
+
+
 def _plotly_chart(fig, **kwargs):
     """st.plotly_chart sans barre d'outils ni zoom : le graphique ne peut pas être déformé ou déplacé.
     Doigt maintenu puis glissé = l'infobulle suit le doigt sur tout le graphique (y compris sous la
@@ -1129,7 +1175,7 @@ _PERIODES_PRESETS = [
 def periode_debut(label):
     """Date de début (Timestamp) correspondant à une période prédéfinie ; None = tout l'historique.
     La période court toujours jusqu'à aujourd'hui (jour en cours inclus)."""
-    today = pd.Timestamp.today().normalize()
+    today = _today_paris()
     if label == "Mois en cours":
         return today.replace(day=1)
     if label == "3 derniers mois":
@@ -1304,7 +1350,7 @@ def generate_transactions_xml(df, valeur=0.0, cash=0.0, total_apport=0.0, perfor
     root = ET.Element("Extrait_PEA")
 
     # --- Synthèse globale, tout en haut de l'export ---
-    _now_export = datetime.now()
+    _now_export = _now_paris()
     ET.SubElement(root, "Date").text = _now_export.strftime("%d-%m-%Y")
     ET.SubElement(root, "Heure").text = _now_export.strftime("%H-%M-%S")
     ET.SubElement(root, "Valeur").text = _xml_num_str(valeur, unit="€")
@@ -1467,7 +1513,7 @@ def generate_transactions_pdf(df, df_port, valeur=0.0, cash=0.0, total_apport=0.
 
     story = []
     story.append(Paragraph("Export PEA — Vue d'ensemble", styles["pdf_title"]))
-    sous_titre = f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M:%S')}"
+    sous_titre = f"Généré le {_now_paris().strftime('%d/%m/%Y à %H:%M:%S')}"
     if broker_name:
         sous_titre += f" — Courtier : {broker_name}"
     if pea_opening_date_str:
@@ -1646,7 +1692,7 @@ def _memo_export(kind, signature, builder):
             and (now - slot["ts"]) < _EXPORT_MEMO_MAX_AGE):
         return slot["data"], slot["stamp"]
     data = builder()
-    stamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    stamp = _now_paris().strftime("%d-%m-%Y_%H-%M-%S")
     store[kind] = {"sig": signature, "ts": now, "data": data, "stamp": stamp}
     return data, stamp
 
@@ -1673,7 +1719,7 @@ def _export_payload(kind, signature_parts, builder):
     callable sans argument qui fabrique les octets du fichier (et n'utilise ni st ni la session,
     car Streamlit l'exécute hors du script lors d'un téléchargement différé)."""
     if _DEFERRED_DOWNLOAD:
-        return builder, datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+        return builder, _now_paris().strftime("%d-%m-%Y_%H-%M-%S")
     return _memo_export(kind, _export_signature(*signature_parts), builder)
 
 def fmt_perf(val):
@@ -1880,7 +1926,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
     dates = df_source[date_col]
     monthly_sum = df_source.groupby([dates.dt.year, dates.dt.month])[value_col].sum()
 
-    today = pd.Timestamp.today().normalize()
+    today = _today_paris()
     if date_ouverture is not None and not pd.isna(date_ouverture):
         first_year = int(date_ouverture.year)
         first_month_ouverture = int(date_ouverture.month)
@@ -1979,14 +2025,10 @@ _ALLOC_HTML = r"""
   html, body { margin: 0; padding: 0; background: transparent; }
   #root { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center;
           font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); padding: 4px 2px; }
-  #wrap { position: relative; width: 250px; flex: 0 0 250px; margin-top: 6px; }
+  #wrap { position: relative; width: 250px; flex: 0 0 250px; margin-top: 0; }
   svg { width: 250px; height: 250px; display: block; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
   .slice.dim { opacity: .28; }
-  #tip { position: absolute; pointer-events: none; background: #0f172a; color: #fff; border-radius: 8px;
-         padding: 6px 10px; font-size: 12px; line-height: 1.35; white-space: nowrap; opacity: 0;
-         transition: opacity .15s ease; transform: translate(-50%, -115%); z-index: 5; }
-  #tip.on { opacity: 1; }
   #legend { flex: 1 1 220px; min-width: 200px; max-width: 420px; }
   .row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer;
          transition: opacity .18s ease, background .18s ease; -webkit-tap-highlight-color: transparent; }
@@ -2000,7 +2042,7 @@ _ALLOC_HTML = r"""
   .mono { font-family: Manrope, Inter, system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
 </style>
 <div id="root">
-  <div id="wrap"><svg id="svg" viewBox="0 0 250 250"></svg><div id="tip"></div></div>
+  <div id="wrap"><svg id="svg" viewBox="0 0 250 250"></svg></div>
   <div id="legend"></div>
 </div>
 <script>
@@ -2011,7 +2053,7 @@ _ALLOC_HTML = r"""
   document.documentElement.style.setProperty('--fg', fg);
 
   var NS = 'http://www.w3.org/2000/svg', C = 125, R = 108, r = 78, sel = -1, mute = 0;
-  var svg = document.getElementById('svg'), tip = document.getElementById('tip'), legend = document.getElementById('legend');
+  var svg = document.getElementById('svg'), legend = document.getElementById('legend');
 
   // Angle minimal visible pour que même les toutes petites positions restent présentes et cliquables.
   var MIN = 2.2, raw = D.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
@@ -2061,16 +2103,10 @@ _ALLOC_HTML = r"""
     rows.forEach(function (rw, j) { rw.className = 'row' + (j === i ? ' sel' : '') + (i >= 0 && j !== i ? ' dim' : ''); });
     if (i < 0) {
       t1.textContent = 'Total portefeuille'; t2.textContent = TOTAL; t3.textContent = D.length + ' position' + (D.length > 1 ? 's' : '');
-      tip.className = ''; return;
+      return;
     }
     var d = D[i];
-    t1.textContent = cut(d.n, 18); t2.textContent = d.v; t3.textContent = d.pt + ' %';
-    // infobulle posée sur le bord extérieur de la part cliquée
-    var mid = (ang[i][0] + ang[i][1]) / 2, p = pt(R + 4, mid), box = svg.getBoundingClientRect(), sc = box.width / 250;
-    tip.innerHTML = '<b></b><br>' + d.v + ' · ' + d.pt + ' %'; tip.querySelector('b').textContent = d.n;
-    var x = p[0] * sc, y = p[1] * sc;
-    tip.style.left = Math.min(Math.max(x, 60), box.width - 60) + 'px'; tip.style.top = Math.max(y, 46) + 'px';
-    tip.className = 'on';
+    t1.textContent = cut(d.n, 22); t2.textContent = d.v; t3.textContent = d.pt + ' %';
   }
   document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (sel >= 0) select(-1); });
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
@@ -2158,7 +2194,7 @@ def _render_allocation(df_active, cash):
             .replace("__TOTAL__", json.dumps(fmt_eur(total_centre), ensure_ascii=False)))
     # Hauteur « pire cas » (anneau au-dessus de la légende, écran étroit) ; le script la réduit
     # automatiquement à la hauteur réelle dès que le composant est affiché.
-    components.html(page, height=260 + 34 * len(rows))
+    components.html(page, height=250 + 34 * len(rows))
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
@@ -2200,6 +2236,19 @@ def _get_live_price_real(ticker):
     except Exception:
         _FAILED_TICKERS.add(ticker)
         return None
+
+@st.cache_data(ttl=600)
+def get_previous_close(ticker):
+    """Clôture de la séance précédente donnée par Yahoo (fast_info). Sert uniquement à combler la clôture de la
+    veille quand la bougie journalière correspondante manque dans l'historique."""
+    if not ticker or ticker in _FAILED_TICKERS:
+        return None
+    try:
+        v = yf.Ticker(ticker).fast_info["previous_close"]
+        return float(v) if v is not None and not np.isnan(v) and v > 0 else None
+    except Exception:
+        return None
+
 
 # Le secteur et le pays d'une valeur ne changent pratiquement jamais, mais la requête qui les
 # donne (t.info) est la plus lourde de Yahoo Finance, et elle était refaite pour CHAQUE ticker
@@ -2498,7 +2547,7 @@ def get_watchlist_variations(ticker):
     # 400 jours calendaires en arrière : large marge au-delà des 365 jours nécessaires pour
     # l'horizon "12 mois", pour être sûr d'avoir au moins une clôture disponible à/avant cette
     # date même en tenant compte des jours sans cotation (week-ends, jours fériés).
-    start_str = (pd.Timestamp.today() - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
+    start_str = (_now_paris() - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
     hist_df = get_ticker_history(ticker, start_str)
     if hist_df is None or hist_df.empty or "Close" not in hist_df.columns:
         return result
@@ -2509,7 +2558,7 @@ def get_watchlist_variations(ticker):
         closes.index = closes.index.tz_localize(None)
     closes.index = closes.index.normalize()
 
-    today_norm = pd.Timestamp.today().normalize()
+    today_norm = _today_paris()
     prix_actuel = get_live_price(ticker)
 
     # Variation du jour : prix actuel (quasi temps réel) contre la dernière clôture disponible
@@ -2814,7 +2863,7 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
                 _date_rompu_row = row.get("Date_Rompus")
                 if pd.isnull(_date_rompu_row):
                     _date_rompu_row = row["Date_Heure"]
-                _rompu_deja_verse = _date_rompu_row <= pd.Timestamp.today()
+                _rompu_deja_verse = _date_rompu_row <= _now_paris()
                 if total_shares > 0:
                     brute_shares = total_shares * qty
                     integer_shares = int(brute_shares)
@@ -3725,7 +3774,7 @@ def dialog_saisie_operation():
         retenue_etrangere = retenue_etrangere if retenue_etrangere is not None else 0.0
         remboursement_capital = remboursement_capital if remboursement_capital is not None else 0.0
         arrondi_courtier = arrondi_courtier if arrondi_courtier is not None else 0.0
-        tx_date = tx_date if tx_date is not None else date.today()
+        tx_date = tx_date if tx_date is not None else _today_paris().date()
         tx_time = tx_time if tx_time is not None else time(12, 0, 0)
 
         st.markdown('<div style="margin-top: 6px;"></div>', unsafe_allow_html=True)
@@ -4537,6 +4586,24 @@ def _compute_ticker_daily_history_cached(ticker, df_ticker, start_date_str, end_
 
         aligned_hist = hist.reindex(all_dates).ffill().bfill()
 
+        # Bougie de la veille absente de l'historique Yahoo (cache, retard de publication) : sans correctif, la
+        # veille recopie une clôture plus ancienne, sa variation est nulle (journée masquée dans l'historique) et
+        # le mouvement des deux jours se retrouve sur « aujourd'hui ». Une fois la séance ouverte (9 h à Paris),
+        # on comble avec la clôture précédente fournie par Yahoo.
+        try:
+            _bars = hist.dropna()
+            _today_n = all_dates[-1]
+            if len(_bars) and _marche_ouvert_aujourdhui() and _today_n == _today_paris():
+                _veille = _today_n - pd.Timedelta(days=1)
+                while _veille.weekday() >= 5:
+                    _veille -= pd.Timedelta(days=1)
+                if _bars.index.max().normalize() < _veille and _veille >= all_dates[0]:
+                    _pc = get_previous_close(ticker)
+                    if _pc:
+                        aligned_hist.loc[_veille:_today_n - pd.Timedelta(days=1)] = _pc
+        except Exception:
+            pass
+
         live_p = get_live_price(ticker)
         if live_p is not None and not np.isnan(live_p):
             aligned_hist.iloc[-1] = live_p
@@ -4565,7 +4632,7 @@ def get_portfolio_history_cached(df_in):
         return None
     
     start_date = df["Date_Heure"].min().normalize()
-    end_date = pd.Timestamp.today().normalize()
+    end_date = _today_paris()
     all_dates = pd.date_range(start=start_date, end=end_date)
     end_date_str = end_date.strftime("%Y-%m-%d")
     
@@ -4694,7 +4761,7 @@ if not df_transactions.empty:
     pea_opening_dt = df_transactions["Date_Heure"].min()
     pea_opening_date = pea_opening_dt.strftime("%d-%m-%Y")
     
-    today_date = pd.Timestamp.now().normalize()
+    today_date = _today_paris()
     diff = relativedelta(today_date, pea_opening_dt.normalize())
     anciennete_str = f"{diff.years} an(s) {diff.months} mois {diff.days} jour(s)"
 
@@ -5008,7 +5075,7 @@ if not df_rompus_calc.empty:
     # "perçu", sous peine de gonfler ce total (et le solde espèces qui en découle) par rapport
     # au compte réel tant que le versement n'a pas eu lieu.
     _date_rompus_calc = df_rompus_calc["Date_Rompus"].fillna(df_rompus_calc["Date_Heure"]) if "Date_Rompus" in df_rompus_calc.columns else df_rompus_calc["Date_Heure"]
-    net_divs_total += df_rompus_calc.loc[_date_rompus_calc <= pd.Timestamp.today(), "Rompu"].sum()
+    net_divs_total += df_rompus_calc.loc[_date_rompus_calc <= _now_paris(), "Rompu"].sum()
 
 total_gains_cumules = global_pnl + tot_realized_pnl + net_divs_total
 # Dénominateur = capital total réellement engagé sur toute la durée de vie du portefeuille
@@ -5031,8 +5098,8 @@ gain_total_mo = 0.0
 gain_total_j = 0.0
 
 if history_df_global is not None and not history_df_global.empty:
-    current_year = datetime.now().year
-    current_month = datetime.now().month
+    current_year = _now_paris().year
+    current_month = _now_paris().month
     
     start_of_month_ts = pd.Timestamp(datetime(current_year, current_month, 1))
     start_ytd_ts = pd.Timestamp(datetime(current_year, 1, 1))
@@ -5057,7 +5124,7 @@ if history_df_global is not None and not history_df_global.empty:
             row["Valeur Actions (€)"], row["Capital Investi Total (€)"],
         )
 
-    today_ts = pd.Timestamp.today().normalize()
+    today_ts = _today_paris()
     val_now, app_now, real_now, div_now, act_now, inv_now = get_h_val_dashboard(today_ts)
 
     val_mo_i, app_mo_i, real_mo_i, div_mo_i, act_mo_i, inv_mo_i = get_h_val_dashboard(start_of_month_ts - pd.Timedelta(seconds=1))
@@ -5185,7 +5252,7 @@ _TAB_STATE_KEYS = {
     "tab_classements": ("k_periode_classements", ),
     "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
     "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
-    "tab_simulateur": ("k_horizon_projection", "k_apport_annuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_invest", "k_rp_annees", "k_rp_rend", "k_rp_impot", "k_rp_retrait", ),
+    "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_invest_mensuel", "k_rp_annees", "k_rp_rend", "k_rp_impot", "k_rp_retrait", "k_rp_infl", ),
 }
 _tab_objs_by_name = {
     "tab_overview": tab_overview, "tab_positions": tab_positions, "tab_apports": tab_apports, "tab_classements": tab_classements,
@@ -5315,7 +5382,7 @@ if _tab_open(tab_overview):
             # au temps qu'il reste réellement d'ici la fin de l'année pour rester comparable à
             # une performance qui, elle, ne porte que sur les mois restants.
             RENDEMENT_MARCHE_ANNUEL = 8.0
-            today_ts = pd.Timestamp.today().normalize()
+            today_ts = _today_paris()
             jours_restants_annee = max((pd.Timestamp(today_ts.year, 12, 31) - today_ts).days, 1)
             repere_marche_periode = RENDEMENT_MARCHE_ANNUEL * (jours_restants_annee / 365.0)
 
@@ -5445,8 +5512,8 @@ if _tab_open(tab_positions):
 
         with st.expander("📜 Détail complet des transactions", expanded=True):
             if not df_transactions.empty:
-                min_db_date = df_transactions["Date_Heure"].min().date() if pd.notnull(df_transactions["Date_Heure"].min()) else date.today()
-                max_db_date = date.today()
+                min_db_date = df_transactions["Date_Heure"].min().date() if pd.notnull(df_transactions["Date_Heure"].min()) else _today_paris().date()
+                max_db_date = _today_paris().date()
             
                 noms_actions_disponibles = sorted([
                     nom for nom in df_transactions["Nom"].dropna().unique() 
@@ -5891,7 +5958,7 @@ if _tab_open(tab_apports):
 
             # Série quotidienne des apports nets cumulés (base du graphique)
             _net_jour = _df_mv.groupby(_df_mv["Date_Heure"].dt.normalize())["Net"].sum().cumsum()
-            _fin_serie = max(pd.Timestamp.today().normalize(), _net_jour.index.max())
+            _fin_serie = max(_today_paris(), _net_jour.index.max())
             _cumul = _net_jour.reindex(pd.date_range(_net_jour.index.min(), _fin_serie), method="ffill")
 
             with st.expander("📈 Évolution des apports cumulés", expanded=True):
@@ -6093,10 +6160,9 @@ if _tab_open(tab_classements):
                     _edge = 1 if color == "#16a34a" else -1
                 fig.update_layout(
                     height=max(220, 34 * _n + 40),
-                    margin=dict(l=10, r=70, t=10, b=10),
+                    margin=dict(l=14, r=64, t=6, b=6),
                     bargap=0.35,
-                    xaxis=dict(title=None, showgrid=True, gridcolor="#f1f5f9", zeroline=True, range=[0, _edge * 1.25],
-                               nticks=4, tickformat=",.0f", ticksuffix=" €", tickfont=dict(size=11)),
+                    xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _edge * 1.25], showticklabels=False),
                     yaxis=dict(title=None, tickmode="array", tickvals=_y, ticktext=_labels, range=[-0.6, _n - 0.4]),
                 )
                 apply_chart_theme(fig)
@@ -6196,7 +6262,7 @@ if _tab_open(tab_classements):
                             showlegend=False,
                         )
 
-                    col_gains_frise, col_pertes_frise = st.columns(2, gap="small")
+                    col_gains_frise, col_pertes_frise = _paired_columns("onecol_rank_col_gains_frise")
 
                     # Totaux sur l'ENSEMBLE des ventes réalisées (pas seulement les 10 affichées dans
                     # chaque classement ci-dessous), sous la même forme de petite carte que "Total
@@ -6244,9 +6310,9 @@ if _tab_open(tab_classements):
                             _max_gains = max(_vals_gains) if _vals_gains else 0
                             fig_gains_frise.update_layout(
                                 height=max(220, 34 * _n_gains + 40),
-                                margin=dict(l=10, r=70, t=10, b=10),
+                                margin=dict(l=14, r=64, t=6, b=6),
                                 bargap=0.35,
-                                xaxis=dict(title="Gain (€)", showgrid=True, gridcolor=_grid_color_top10, zeroline=True, range=[0, _max_gains * 1.25]),
+                                xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _max_gains * 1.25], showticklabels=False),
                                 yaxis=dict(
                                     title=None,
                                     tickmode="array", tickvals=_y_gains, ticktext=_labels_gains,
@@ -6295,9 +6361,9 @@ if _tab_open(tab_classements):
                             _min_pertes = min(_vals_pertes) if _vals_pertes else 0
                             fig_pertes_frise.update_layout(
                                 height=max(220, 34 * _n_pertes + 40),
-                                margin=dict(l=10, r=70, t=10, b=10),
+                                margin=dict(l=14, r=64, t=6, b=6),
                                 bargap=0.35,
-                                xaxis=dict(title="Perte (€)", showgrid=True, gridcolor=_grid_color_top10p, zeroline=True, range=[0, _min_pertes * 1.25]),
+                                xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _min_pertes * 1.25], showticklabels=False),
                                 yaxis=dict(
                                     title=None,
                                     tickmode="array", tickvals=_y_pertes, ticktext=_labels_pertes,
@@ -6359,7 +6425,7 @@ if _tab_open(tab_classements):
                         st.markdown("#### Meilleures et pires journées du portefeuille (en €)")
                         df_best_days_eur = df_days_rank.nlargest(10, "PnL_Jour").sort_values("PnL_Jour", ascending=False)
                         df_worst_days_eur = df_days_rank.nsmallest(10, "PnL_Jour").sort_values("PnL_Jour", ascending=True)
-                        col_best_eur, col_worst_eur = st.columns(2, gap="small")
+                        col_best_eur, col_worst_eur = _paired_columns("onecol_rank_col_best_eur")
                         with col_best_eur:
                             st.markdown("**📈 Top 10 des meilleures journées**")
                             _render_days_ranking(df_best_days_eur, "PnL_Jour", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6372,7 +6438,7 @@ if _tab_open(tab_classements):
                         st.markdown("#### Meilleures et pires journées du portefeuille (en %)")
                         df_best_days_pct = df_days_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                         df_worst_days_pct = df_days_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                        col_best_pct, col_worst_pct = st.columns(2, gap="small")
+                        col_best_pct, col_worst_pct = _paired_columns("onecol_rank_col_best_pct")
                         with col_best_pct:
                             st.markdown("**📈 Top 10 des meilleures journées**")
                             _render_days_ranking(df_best_days_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -6401,7 +6467,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires mois du portefeuille (en €)")
                     df_best_months_eur = df_months_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_months_eur = df_months_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_m_eur, col_worst_m_eur = st.columns(2, gap="small")
+                    col_best_m_eur, col_worst_m_eur = _paired_columns("onecol_rank_col_best_m_eur")
                     with col_best_m_eur:
                         st.markdown("**📈 Top 10 des meilleurs mois**")
                         _render_months_ranking(df_best_months_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6414,7 +6480,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires mois du portefeuille (en %)")
                     df_best_months_pct = df_months_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_months_pct = df_months_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_m_pct, col_worst_m_pct = st.columns(2, gap="small")
+                    col_best_m_pct, col_worst_m_pct = _paired_columns("onecol_rank_col_best_m_pct")
                     with col_best_m_pct:
                         st.markdown("**📈 Top 10 des meilleurs mois**")
                         _render_months_ranking(df_best_months_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -6443,7 +6509,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires années du portefeuille (en €)")
                     df_best_years_eur = df_years_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_years_eur = df_years_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_y_eur, col_worst_y_eur = st.columns(2, gap="small")
+                    col_best_y_eur, col_worst_y_eur = _paired_columns("onecol_rank_col_best_y_eur")
                     with col_best_y_eur:
                         st.markdown("**📈 Meilleures années**")
                         _render_years_ranking(df_best_years_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6456,14 +6522,14 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires années du portefeuille (en %)")
                     df_best_years_pct = df_years_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_years_pct = df_years_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_y_pct, col_worst_y_pct = st.columns(2, gap="small")
+                    col_best_y_pct, col_worst_y_pct = _paired_columns("onecol_rank_col_best_y_pct")
                     with col_best_y_pct:
                         st.markdown("**📈 Meilleures années**")
                         _render_years_ranking(df_best_years_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
                     with col_worst_y_pct:
                         st.markdown("**📉 Pires années**")
                         _render_years_ranking(df_worst_years_pct, "Impact_Pct", "#dc2626", "Impact (%)", True, "worst_pct")
-        _rendu_onglet_classements(df_transactions, _periode_classement_choisie, datetime.now().strftime("%Y-%m-%d"), _epoch_now)
+        _rendu_onglet_classements(df_transactions, _periode_classement_choisie, _now_paris().strftime("%Y-%m-%d"), _epoch_now)
 
 
 # ------------------------------------------
@@ -6774,7 +6840,7 @@ if _tab_open(tab_saisonnalite):
                         )
                 else:
                     st.info("Aucune vente enregistrée pour le moment.")
-        _rendu_onglet_saisonnalite(df_transactions, datetime.now().strftime("%Y-%m-%d"), _epoch_now)
+        _rendu_onglet_saisonnalite(df_transactions, _now_paris().strftime("%Y-%m-%d"), _epoch_now)
 # ------------------------------------------
 # ONGLÊT 3 : PERFORMANCES & INDICES
 # ------------------------------------------
@@ -6956,16 +7022,6 @@ if _tab_open(tab_perf):
                         )
                         chart_slot = st.container()          # graphique (rempli plus bas)
                         placeholder_legende = st.empty()     # légende (remplie plus bas)
-                        desc_html = "".join([f"<p style='margin-bottom: 6px; font-size: 0.85rem;'><b>{k}</b> : {v}</p>" for k, v in available_indices_help.items()])
-                        st.markdown(
-                            f"""
-                        <div style="font-size: 0.85rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 6px 0;">📖 Descriptions des indices</div>
-                        <div style="max-height: 140px; overflow-y: auto; padding-right: 6px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; background-color: #ffffff;">
-                            {desc_html}
-                        </div>
-                        """,
-                            unsafe_allow_html=True
-                        )
 
                         for b_name in selected_benchmarks:
                             if b_name in available_indices_dict:
@@ -7173,7 +7229,7 @@ if _tab_open(tab_perf):
                                 base_denom_comp = val_i if val_i > 0 else (app_i if app_i > 0 else (tot_invested if tot_invested > 0 else 1.0))
                                 perf_port_comp = (gain_periode / base_denom_comp) * 100 if base_denom_comp > 0 else 0.0
 
-                            today_dt = pd.Timestamp.today().normalize()
+                            today_dt = _today_paris()
                             is_market_closed = today_dt.dayofweek >= 5
 
                             if is_market_closed:
@@ -7187,14 +7243,14 @@ if _tab_open(tab_perf):
                                 gain_jour = (act_j0 - inv_j0) - (act_j1 - inv_j1) + (real_j0 - real_j1) + (div_j0 - div_j1)
                                 perf_port_jour = (gain_jour / base_j) * 100 if base_j > 0 else 0.0
 
-                            start_month_ts = pd.Timestamp(datetime.now().year, datetime.now().month, 1)
+                            start_month_ts = pd.Timestamp(_now_paris().year, _now_paris().month, 1)
                             val_mo_f, app_mo_f, real_mo_f, div_mo_f, act_mo_f, inv_mo_f = get_h_val_comp(today_dt)
                             val_mo_i, app_mo_i, real_mo_i, div_mo_i, act_mo_i, inv_mo_i = get_h_val_comp(start_month_ts - pd.Timedelta(seconds=1))
                             base_mo = val_mo_i if val_mo_i > 0 else (app_mo_i if app_mo_i > 0 else (tot_invested if tot_invested > 0 else 1.0))
                             gain_mo = (act_mo_f - inv_mo_f) - (act_mo_i - inv_mo_i) + (real_mo_f - real_mo_i) + (div_mo_f - div_mo_i)
                             perf_port_mois = (gain_mo / base_mo) * 100 if base_mo > 0 else 0.0
 
-                            start_year_ts = pd.Timestamp(datetime.now().year, 1, 1)
+                            start_year_ts = pd.Timestamp(_now_paris().year, 1, 1)
                             val_yr_f, app_yr_f, real_yr_f, div_yr_f, act_yr_f, inv_yr_f = get_h_val_comp(today_dt)
                             val_yr_i, app_yr_i, real_yr_i, div_yr_i, act_yr_i, inv_yr_i = get_h_val_comp(start_year_ts - pd.Timedelta(seconds=1))
                             base_yr = val_yr_i if val_yr_i > 0 else (app_yr_i if app_yr_i > 0 else (tot_invested if tot_invested > 0 else 1.0))
@@ -7313,7 +7369,7 @@ if _tab_open(tab_dividends):
                     # compté comme "déjà perçu" alors qu'il ne l'est pas encore.
                     if "Date_Rompus" in df_rompus.columns:
                         df_rompus["Date_Heure"] = df_rompus["Date_Rompus"].fillna(df_rompus["Date_Heure"])
-                    df_rompus = df_rompus[df_rompus["Date_Heure"] <= pd.Timestamp.today()]
+                    df_rompus = df_rompus[df_rompus["Date_Heure"] <= _now_paris()]
                 if not df_rompus.empty:
                     df_rompus["Montant_Net"] = df_rompus["Rompu"]
                     df_rompus["Prix Unitaire (€)"] = df_rompus["Rompu"]
@@ -7417,7 +7473,7 @@ if _tab_open(tab_dividends):
 
                         next_date_est = last_date_cal + pd.Timedelta(days=avg_interval_cal)
                         _garde_fou = 0
-                        while next_date_est < pd.Timestamp.today() and _garde_fou < 50:
+                        while next_date_est < _now_paris() and _garde_fou < 50:
                             next_date_est += pd.Timedelta(days=avg_interval_cal)
                             _garde_fou += 1
 
@@ -7456,7 +7512,7 @@ if _tab_open(tab_dividends):
                         # occurrences_div_12m : son mois n'affichait alors aucune info-bulle (ou une
                         # info-bulle incomplète, sans ce versement). La fin du 12e mois calendaire laisse
                         # systématiquement assez de marge pour l'inclure.
-                        horizon_12m = (pd.Timestamp.today().replace(day=1) + pd.DateOffset(months=12)) - pd.Timedelta(days=1)
+                        horizon_12m = (_now_paris().replace(day=1) + pd.DateOffset(months=12)) - pd.Timedelta(days=1)
                         while occ_date <= horizon_12m and _garde_fou_occ < 50:
                             occurrences_div_12m.append({
                                 "Ticker": ticker_cal,
@@ -7471,7 +7527,7 @@ if _tab_open(tab_dividends):
                         st.info("Historique trop court (il faut au moins 2 versements passés) sur une position encore détenue : aucune estimation fiable disponible pour le moment.")
                     else:
                         df_prev_div = pd.DataFrame(previsions_div).sort_values("Prochaine date estimée")
-                        today_ts_div = pd.Timestamp.today()
+                        today_ts_div = _now_paris()
                         total_estime_12m = df_prev_div[df_prev_div["Prochaine date estimée"] <= today_ts_div + pd.Timedelta(days=365)]["Montant net moyen estimé"].sum()
 
                         # Les grandes cartes détaillées par valeur (une par action, avec fréquence, badge
@@ -7506,7 +7562,7 @@ if _tab_open(tab_dividends):
                             # forcément Janvier à Décembre), pour rester cohérent avec la fenêtre
                             # "12 prochains mois" utilisée pour le total ci-dessus.
                             mois_ordre = []
-                            _cursor = pd.Timestamp.today().replace(day=1)
+                            _cursor = _now_paris().replace(day=1)
                             for _ in range(12):
                                 mois_ordre.append((_cursor.year, _cursor.month))
                                 _cursor = _cursor + pd.DateOffset(months=1)
@@ -7617,7 +7673,7 @@ if _tab_open(tab_dividends):
                             )
                             apply_chart_theme(fig_div_12m)
                             _plotly_chart(fig_div_12m, use_container_width=True, key="chart_div_12_mois")
-        _rendu_onglet_dividendes(df_port, df_transactions, pea_opening_dt, datetime.now().strftime("%Y-%m-%d"), _epoch_now)
+        _rendu_onglet_dividendes(df_port, df_transactions, pea_opening_dt, _now_paris().strftime("%Y-%m-%d"), _epoch_now)
 
 
 # ------------------------------------------
@@ -7826,8 +7882,8 @@ if _tab_open(tab_history):
                             current_year = current_date.year
                             current_val = yearly_df.iloc[i]["Valeur Actions (€)"]
                     
-                            if current_year == datetime.now().year:
-                                end_of_year_dt = pd.Timestamp(datetime.now())
+                            if current_year == _now_paris().year:
+                                end_of_year_dt = pd.Timestamp(_now_paris())
                             else:
                                 end_of_year_dt = pd.Timestamp(current_year, 12, 31, 23, 59, 59)
                     
@@ -7870,7 +7926,7 @@ if _tab_open(tab_history):
                             df_y_res.style.apply(style_entire_row_gradient, axis=None),
                             use_container_width=True,
                         )
-        _rendu_onglet_historique(df_transactions, tot_invested, datetime.now().strftime("%Y-%m-%d"), _epoch_now)
+        _rendu_onglet_historique(df_transactions, tot_invested, _now_paris().strftime("%Y-%m-%d"), _epoch_now)
 
 
 # ------------------------------------------
@@ -8296,8 +8352,18 @@ def _sim_stat(label, value, color="#0f172a"):
     return f'<div class="pea-stat"><div class="k">{label}</div><div class="v" style="color:{color};">{value}</div></div>'
 
 
-def _sim_stats(*cards):
-    st.markdown('<div class="pea-stats">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+def _sim_stats(*cards, small=False):
+    st.markdown(f'<div class="pea-stats{" sm" if small else ""}">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+
+
+def _sim_headline_duo(items):
+    """Deux indicateurs côte à côte (y compris sur téléphone) ; items = (libellé, valeur, sous-texte, mis_en_avant)."""
+    html = "".join(
+        f'<div class="pea-duo-item{" hl" if hl else ""}"><div class="k">{k}</div><div class="v">{v}</div>'
+        + (f'<div class="s">{s}</div>' if s else "") + "</div>"
+        for k, v, s, hl in items
+    )
+    st.markdown(f'<div class="pea-duo">{html}</div>', unsafe_allow_html=True)
 
 
 def _sim_headline(label, value, sub="", color="#0f172a"):
@@ -8328,6 +8394,11 @@ def _sim_info_box(titre, texte_html):
     )
 
 
+def _fr_num(v, d=2, signed=False):
+    """Nombre au format français (espace pour les milliers, virgule décimale)."""
+    return f"{v:{'+' if signed else ''},.{d}f}".replace(",", " ").replace(".", ",")
+
+
 def _plural(n, mot="an"):
     return f"{mot}s" if n >= 2 else mot
 
@@ -8335,110 +8406,130 @@ def _plural(n, mot="an"):
 def _anciennete_et_perf_annualisee():
     """(années écoulées depuis l'ouverture, performance annualisée composée). La performance est déduite de
     « Perf. Globale » (cumul depuis l'origine) ramenée à un taux ANNUEL ; 0 si l'historique fait moins de 3 mois."""
-    annees = max((pd.Timestamp.today() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
+    annees = max((_now_paris() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
     if annees >= 0.25 and (1 + perf_globale / 100) > 0:
         return annees, (1 + perf_globale / 100) ** (1 / annees) - 1
     return annees, 0.0
 
 
+def _apport_mensuel_moyen_hist():
+    """Moyenne mensuelle des apports nets depuis l'ouverture du PEA."""
+    annees = _anciennete_et_perf_annualisee()[0]
+    annuel = (apports_totaux / annees) if annees >= 0.08 else apports_totaux
+    return annuel / 12.0
+
+
+def _apport_mensuel_defaut():
+    """Apport mensuel proposé dans les simulateurs : valeur mémorisée dans la config ; à défaut l'ancienne valeur
+    annuelle ÷ 12 ; à défaut la moyenne historique (arrondie à 10 €)."""
+    if "apport_mensuel_projection" in app_config:
+        return max(0, int(app_config["apport_mensuel_projection"]))
+    if "apport_annuel_projection" in app_config:
+        return max(0, int(round(float(app_config["apport_annuel_projection"]) / 12.0)))
+    return max(0, int(round(_apport_mensuel_moyen_hist() / 10.0) * 10))
+
+
+def _tick_labels(n):
+    """3 à 4 graduations (numériques, sans unité) régulièrement réparties sur 1..n années."""
+    return sorted({max(1, round(n * i / 4)) for i in range(1, 5)})
+
+
+def _an_label(k):
+    return f"{k} an" if k < 2 else f"{k} ans"
+
+
+def _stacked_growth_chart(n, base, verses, interets, base_name, height=260):
+    """Aires empilées : montant de départ, versements cumulés, intérêts/plus-values cumulés. Abscisses en
+    catégories « k an(s) » (le survol affiche donc « 5 ans »), 3 à 4 repères numériques seulement."""
+    cats = [_an_label(k) for k in range(n + 1)]
+    ticks = _tick_labels(n)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=cats, y=[base] * (n + 1), name=base_name, mode="lines", stackgroup="s",
+        line=dict(color="#94a3b8", width=1.5), fill="tozeroy", fillcolor="rgba(148,163,184,0.28)",
+        customdata=[fmt_eur(base)] * (n + 1), hovertemplate=base_name + " : %{customdata}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=cats, y=verses, name="Versements", mode="lines", stackgroup="s",
+        line=dict(color="#38bdf8", width=1.5), fill="tonexty", fillcolor="rgba(56,189,248,0.30)",
+        customdata=[fmt_eur(v) for v in verses], hovertemplate="Versements cumulés : %{customdata}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=cats, y=[max(i, 0.0) for i in interets], name="Plus-values", mode="lines", stackgroup="s",
+        line=dict(color="#f59e0b", width=2.2), fill="tonexty", fillcolor="rgba(245,158,11,0.30)",
+        customdata=[fmt_eur(v) for v in interets], hovertemplate="Plus-values cumulées : %{customdata}<extra></extra>",
+    ))
+    fig.update_layout(
+        height=height, margin=dict(l=8, r=12, t=6, b=6), hovermode="x unified", showlegend=False,
+        yaxis=dict(title="", rangemode="tozero", tickformat=".2s", ticksuffix=" €", nticks=4, automargin=True),
+        xaxis=dict(title="", type="category", tickmode="array", tickvals=[cats[k] for k in ticks],
+                   ticktext=[str(k) for k in ticks], showgrid=False),
+    )
+    apply_chart_theme(fig)
+    return fig
+
+
 def _render_sim_projection():
-    """Projection de la valeur du portefeuille : croissance d'abord, apport ajouté en fin d'année (hypothèse
-    prudente), apports bornés par le plafond de versements du PEA (150 000 €)."""
+    """Projection de la valeur du portefeuille : croissance d'abord, apports mensuels versés en fin d'année
+    (hypothèse prudente), apports bornés par le plafond de versements du PEA (150 000 €)."""
     st.markdown("### 📈 Projection de la Valeur du Portefeuille")
     with st.expander("🔮 Simulation de croissance à long terme", expanded=True):
         annees_ecoulees, perf_annualisee = _anciennete_et_perf_annualisee()
-
-        # Moyenne historique des apports : valeur de départ de la projection des versements futurs.
-        avg_apport_annuel_hist = (apports_totaux / annees_ecoulees) if annees_ecoulees >= 0.08 else apports_totaux
-        avg_apport_mensuel_hist = avg_apport_annuel_hist / 12.0
-        _default_apport_proj_hist = max(0, int(round(avg_apport_annuel_hist / 50.0) * 50))
+        moy_mensuel = _apport_mensuel_moyen_hist()
         _default_perf_proj_hist = round(perf_annualisee * 100, 2)
-
-        # Boutons « Revenir à la moyenne historique » : le drapeau posé par le bouton est consommé ICI, avant
-        # l'instanciation des widgets portant ces clés (sinon StreamlitAPIException).
-        if st.session_state.pop("_reset_apport_proj_pending", False):
-            app_config["apport_annuel_projection"] = _default_apport_proj_hist
-            st.session_state["k_apport_annuel_projection"] = _default_apport_proj_hist
-            _ok_r1, _err_r1 = save_config(app_config)
-            if not _ok_r1:
-                st.warning(_err_r1)
-        if st.session_state.pop("_reset_perf_proj_pending", False):
-            app_config["perf_annuelle_projection"] = _default_perf_proj_hist
-            st.session_state["k_perf_annuelle_projection"] = _default_perf_proj_hist
-            _ok_r2, _err_r2 = save_config(app_config)
-            if not _ok_r2:
-                st.warning(_err_r2)
 
         # ---- Valeurs modifiables (en haut)
         with st.container(border=True):
-            st.markdown("**📆 Horizon & ➕ apports**")
-            with st.container(key="compact_cols_proj_apports"):
+            with st.container(key="compact_cols_proj"):
                 col_h, col_a = st.columns(2)
                 horizon_annees = col_h.number_input(
                     "Nombre d'années", min_value=1, max_value=50, step=1, format="%d",
                     value=int(app_config.get("horizon_projection_annees", 10)), key="k_horizon_projection",
                 )
-                apport_annuel_proj = col_a.number_input(
-                    "Apport prévu par an (€)", min_value=0, step=1, format="%d",
-                    value=int(app_config.get("apport_annuel_projection", _default_apport_proj_hist)),
-                    key="k_apport_annuel_projection",
-                    help="Pré-rempli avec la moyenne historique de vos apports passés. Ajouté en une fois à la fin de chaque année simulée, en plus de la croissance du portefeuille.",
+                apport_mensuel = col_a.number_input(
+                    "Apport prévu par mois (€)", min_value=0, step=10, format="%d",
+                    value=_apport_mensuel_defaut(), key="k_apport_mensuel_projection",
+                    help="Ajouté chaque mois (cumulé et versé en fin d'année dans la simulation), en plus de la croissance du portefeuille.",
                 )
-            if horizon_annees != int(app_config.get("horizon_projection_annees", 10)):
-                app_config["horizon_projection_annees"] = int(horizon_annees)
-                _ok1, _err1 = save_config(app_config)
-                if not _ok1:
-                    st.warning(_err1)
-            if apport_annuel_proj != int(app_config.get("apport_annuel_projection", _default_apport_proj_hist)):
-                app_config["apport_annuel_projection"] = int(apport_annuel_proj)
-                _ok2, _err2 = save_config(app_config)
-                if not _ok2:
-                    st.warning(_err2)
-            st.caption(f"↔️ Soit environ **{fmt_eur(apport_annuel_proj / 12.0)} / mois**")
-            _sim_info_box(
-                "📊 Moyenne des apports passés",
-                f'{fmt_eur(avg_apport_annuel_hist)} / an <span style="font-weight:500; color:#64748b;">(~{fmt_eur(avg_apport_mensuel_hist)} / mois)</span>',
+                col_p, col_i = st.columns(2)
+                perf_annuelle_proj_pct = col_p.number_input(
+                    "Performance annuelle retenue (%)", step=0.01, format="%.2f",
+                    value=float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)),
+                    key="k_perf_annuelle_projection",
+                    help="Utilisée pour faire croître le portefeuille d'une année sur l'autre.",
+                )
+            _fiable = "" if annees_ecoulees >= 1 else " ⚠️ historique court, peu fiable"
+            st.caption(
+                f"Moyenne depuis l'ouverture du PEA : **{fmt_eur(moy_mensuel)} / mois** d'apports · "
+                f"**{_fr_num(perf_annualisee * 100, 2, signed=True)} % / an** de performance "
+                f"({_fr_num(annees_ecoulees, 1)} {_plural(annees_ecoulees)}).{_fiable}"
             )
-            with st.container(key="btn_reset_apport_hist_wrap"):
-                if st.button("↺ Revenir à la moyenne historique", key="btn_reset_apport_hist", use_container_width=True):
-                    st.session_state["_reset_apport_proj_pending"] = True
-                    st.rerun()
+        if horizon_annees != int(app_config.get("horizon_projection_annees", 10)):
+            app_config["horizon_projection_annees"] = int(horizon_annees)
+            _ok1, _err1 = save_config(app_config)
+            if not _ok1:
+                st.warning(_err1)
+        if apport_mensuel != _apport_mensuel_defaut():
+            app_config["apport_mensuel_projection"] = int(apport_mensuel)
+            app_config.pop("apport_annuel_projection", None)
+            _ok2, _err2 = save_config(app_config)
+            if not _ok2:
+                st.warning(_err2)
+        if round(perf_annuelle_proj_pct, 2) != round(float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)), 2):
+            app_config["perf_annuelle_projection"] = float(perf_annuelle_proj_pct)
+            _ok3, _err3 = save_config(app_config)
+            if not _ok3:
+                st.warning(_err3)
 
-        with st.container(border=True):
-            st.markdown(
-                "**📊 Performance annuelle retenue**",
-                help="Pré-remplie avec la performance annualisée moyenne constatée depuis l'ouverture du PEA, modifiable librement pour la projection.",
-            )
-            perf_annuelle_proj_pct = st.number_input(
-                "Performance annuelle retenue (%)", step=0.01, format="%.2f",
-                value=float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)),
-                key="k_perf_annuelle_projection",
-                help="Utilisée pour faire croître le portefeuille d'une année sur l'autre dans la projection.",
-            )
-            if round(perf_annuelle_proj_pct, 2) != round(float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)), 2):
-                app_config["perf_annuelle_projection"] = float(perf_annuelle_proj_pct)
-                _ok3, _err3 = save_config(app_config)
-                if not _ok3:
-                    st.warning(_err3)
-            perf_annuelle_retenue = perf_annuelle_proj_pct / 100.0
-            _annees_str = f"{annees_ecoulees:.1f}".replace(".", ",")
-            _perf_hist_str = f"{perf_annualisee * 100:+.2f}".replace(".", ",")
-            _sim_info_box(
-                "📊 Moyenne historique constatée",
-                f'{_perf_hist_str} % / an <span style="font-weight:500; color:#64748b;">(depuis l\'ouverture, {_annees_str} {_plural(annees_ecoulees)})</span>',
-            )
-            if annees_ecoulees < 1:
-                st.caption("⚠️ Historique court : ce taux annualisé est peu fiable sur si peu de recul.")
-            with st.container(key="btn_reset_perf_hist_wrap"):
-                if st.button("↺ Revenir à la moyenne historique", key="btn_reset_perf_hist", use_container_width=True):
-                    st.session_state["_reset_perf_proj_pending"] = True
-                    st.rerun()
+        apport_annuel_proj = apport_mensuel * 12.0
+        perf_annuelle_retenue = perf_annuelle_proj_pct / 100.0
 
-        # ---- Calcul année par année : croissance, puis apport en fin d'année ; le plafond de versements
-        # (150 000 €) porte sur le cumul des APPORTS nets : une fois atteint, seule la performance joue.
+        # ---- Calcul année par année : croissance, puis apports de l'année ; le plafond de versements (150 000 €)
+        # porte sur le cumul des APPORTS nets : une fois atteint, seule la performance joue.
         n_ans = int(horizon_annees)
         valeurs_annuelles = [tot_value_globale]
-        apports_cumules_annuels = [min(apports_totaux, PLAFOND_PEA_VERSEMENTS)]
+        verses = [0.0]
+        interets = [0.0]
         v_courant, ap_courant = tot_value_globale, apports_totaux
         for _an in range(1, n_ans + 1):
             place_restante = max(PLAFOND_PEA_VERSEMENTS - ap_courant, 0.0)
@@ -8446,204 +8537,141 @@ def _render_sim_projection():
             v_courant = v_courant * (1 + perf_annuelle_retenue) + apport_reel_annee
             ap_courant += apport_reel_annee
             valeurs_annuelles.append(v_courant)
-            apports_cumules_annuels.append(min(ap_courant, PLAFOND_PEA_VERSEMENTS))
+            verses.append(verses[-1] + apport_reel_annee)
+            interets.append(v_courant - tot_value_globale - verses[-1])
 
         valeur_projetee_finale = valeurs_annuelles[-1]
         apports_cumules_finaux = min(ap_courant, PLAFOND_PEA_VERSEMENTS)
-        apports_projetes_periode = apports_cumules_finaux - apports_totaux
+        plus_values_estimees = interets[-1]
 
-        # Échéance d'atteinte du plafond au rythme de l'apport annuel prévu (versement continu et régulier).
+        # Échéance d'atteinte du plafond au rythme de l'apport prévu (versement continu et régulier).
         montant_restant_plafond = PLAFOND_PEA_VERSEMENTS - apports_totaux
         annees_avant_plafond = None
         if montant_restant_plafond <= 0:
             date_plafond_str = "Déjà atteint"
         elif apport_annuel_proj > 0:
             annees_avant_plafond = montant_restant_plafond / apport_annuel_proj
-            date_plafond_str = (pd.Timestamp.today() + pd.Timedelta(days=annees_avant_plafond * 365.25)).strftime("%d/%m/%Y")
+            date_plafond_str = (_now_paris() + pd.Timedelta(days=annees_avant_plafond * 365.25)).strftime("%d/%m/%Y")
         else:
             date_plafond_str = "Jamais (aucun apport prévu)"
 
-        # ---- Résultats (en dessous)
-        _sim_headline(
-            f"Valeur projetée dans {n_ans} {_plural(n_ans)}", fmt_eur(valeur_projetee_finale),
-            f"à partir de {fmt_eur(tot_value_globale)} aujourd'hui", color="#0284c7",
-        )
+        # ---- Résultats (en dessous) : même gabarit que le simulateur de revenu passif
+        _sim_headline(f"Valeur projetée dans {n_ans} {_plural(n_ans)}", fmt_eur(valeur_projetee_finale), color="#0284c7")
+        _sim_pills([
+            ("Valeur actuelle", fmt_eur(tot_value_globale), "#94a3b8", "#f1f5f9", "#e2e8f0", "#475569"),
+            (f"Apports prévus sur {n_ans} {_plural(n_ans)}", fmt_eur(verses[-1]), "#38bdf8", "#f0f9ff", "#bae6fd", "#075985"),
+            ("Plus-values estimées", fmt_eur(plus_values_estimees), "#f59e0b", "#fffbeb", "#fde68a", "#92400e"),
+        ])
+        fig_proj = _stacked_growth_chart(n_ans, tot_value_globale, verses, interets, "Valeur actuelle")
+        _plotly_chart(fig_proj, use_container_width=True, theme=None, key="projection_valeur_chart")
 
-        annees_x = list(range(0, n_ans + 1))
-        fig_proj = go.Figure()
-        fig_proj.add_trace(go.Scatter(
-            x=annees_x, y=apports_cumules_annuels, mode="lines", name="Apports cumulés",
-            line=dict(color="#94a3b8", width=2, dash="dot", shape="spline"),
-            customdata=[fmt_eur(v) for v in apports_cumules_annuels],
-            hovertemplate="Apports cumulés : <b>%{customdata}</b><extra></extra>",
-        ))
-        fig_proj.add_trace(go.Scatter(
-            x=annees_x, y=valeurs_annuelles, mode="lines+markers", name="Valeur projetée",
-            line=dict(color="#0284c7", width=3.5, shape="spline"),
-            marker=dict(size=6, color="#0284c7", line=dict(width=1.5, color="#ffffff")),
-            fill="tonexty", fillcolor="rgba(2, 132, 199, 0.14)",
-            customdata=[fmt_eur(v) for v in valeurs_annuelles],
-            hovertemplate="Valeur projetée : <b>%{customdata}</b><extra></extra>",
-        ))
-        if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n_ans:
-            fig_proj.add_vline(x=annees_avant_plafond, line_width=2, line_dash="dash", line_color="#f59e0b")
-            fig_proj.add_annotation(
-                x=annees_avant_plafond, y=max(valeurs_annuelles), yshift=18,
-                text=f"🏦 Plafond atteint (~{date_plafond_str})", showarrow=False,
-                font=dict(size=11, color="#b45309"),
-                bgcolor="rgba(245, 158, 11, 0.14)", bordercolor="#f59e0b", borderwidth=1, borderpad=4,
-            )
-        _tick_step = max(1, (len(annees_x) - 1) // 12 or 1)
-        _tickvals = annees_x[::_tick_step]
-        if annees_x[-1] not in _tickvals:
-            _tickvals = _tickvals + [annees_x[-1]]
-        fig_proj.update_layout(
-            height=340, margin=dict(l=8, r=12, t=36, b=8), hovermode="x unified",
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=11)),
-            yaxis=dict(title="", zeroline=False, showgrid=True, tickformat=".2s", ticksuffix=" €", nticks=5, automargin=True),
-            xaxis=dict(
-                title="", tickmode="array", tickvals=_tickvals,
-                ticktext=["Auj." if a == 0 else f"{a} an{'s' if a >= 2 else ''}" for a in _tickvals],
-                tickfont=dict(size=10, color="#475569"), showline=False, ticks="", showgrid=True,
-            ),
-        )
-        apply_chart_theme(fig_proj)
-        _plotly_chart(fig_proj, use_container_width=True, key="projection_valeur_chart")
-
-        _sim_stats(
-            _sim_stat("Valeur actuelle", fmt_eur(tot_value_globale)),
-            _sim_stat(f"Apports prévus sur {n_ans} {_plural(n_ans)}", fmt_eur(apports_projetes_periode)),
-            _sim_stat("Apports cumulés en fin de période", fmt_eur(apports_cumules_finaux)),
-        )
         if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n_ans and apport_annuel_proj > 0:
-            st.caption(f"⚠️ Au rythme prévu, le plafond de versements du PEA ({fmt_eur(PLAFOND_PEA_VERSEMENTS)}) serait atteint avant la fin de l'horizon choisi : les apports sont donc plafonnés sur le graphique à partir de cette échéance.")
-
+            st.caption(f"⚠️ Au rythme prévu, le plafond de versements du PEA ({fmt_eur(PLAFOND_PEA_VERSEMENTS)}) serait atteint avant la fin de l'horizon : les apports sont plafonnés à partir de cette échéance.")
         # Plafond de versements : la barre reflète les apports cumulés PROJETÉS en fin d'horizon.
         pct_plafond = min(max((apports_cumules_finaux / PLAFOND_PEA_VERSEMENTS) * 100, 0.0), 100.0)
         grad_plafond = "linear-gradient(90deg, #d97706, #fbbf24)" if pct_plafond < 90 else "linear-gradient(90deg, #dc2626, #f87171)"
         st.markdown(
-            '<div style="margin-top: 14px; padding: 14px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">'
+            '<div style="margin-top: 10px; padding: 12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">'
             '<div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:4px; margin-bottom:8px;">'
-            '<div style="font-size:0.78rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">🏦 Plafond de versements PEA</div>'
-            f'<div style="font-size:0.85rem; font-weight:700; color:#0f172a;">{fmt_eur(apports_cumules_finaux)} / {fmt_eur(PLAFOND_PEA_VERSEMENTS)}</div></div>'
-            '<div style="background:#e2e8f0; border-radius:999px; height:14px; overflow:hidden;">'
+            '<div style="font-size:0.74rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">🏦 Plafond de versements PEA</div>'
+            f'<div style="font-size:0.82rem; font-weight:700; color:#0f172a;">{fmt_eur(apports_cumules_finaux)} / {fmt_eur(PLAFOND_PEA_VERSEMENTS)}</div></div>'
+            '<div style="background:#e2e8f0; border-radius:999px; height:12px; overflow:hidden;">'
             f'<div style="width:{pct_plafond}%; height:100%; background:{grad_plafond}; border-radius:999px;"></div></div>'
-            '<div style="margin-top:10px; font-size:0.8rem; color:#475569;">'
-            f'📅 Date estimée d\'atteinte du plafond, au rythme de l\'apport annuel prévu ci-dessus : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
+            '<div style="margin-top:8px; font-size:0.78rem; color:#475569;">'
+            f'📅 Atteinte estimée du plafond : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
             unsafe_allow_html=True,
         )
 
 
 @fragment_wrapper
-def _render_sim_revenu_passif(valeur_depart, apport_annuel_defaut, rendement_defaut, taux_impot_defaut):
-    """Simulateur de revenu passif : projection année par année du portefeuille, nette d'impôt sur les gains,
-    avec revenu passif mensuel (taux de retrait). Même principe que la projection (croissance d'abord,
-    versement en fin d'année)."""
+def _render_sim_revenu_passif(valeur_depart, apport_mensuel_defaut, rendement_defaut, taux_impot_defaut):
+    """Simulateur de revenu passif : projection année par année du portefeuille, nette d'impôt sur les gains ET
+    corrigée de l'inflation (tous les montants « nets » sont en pouvoir d'achat d'aujourd'hui), avec revenu passif
+    mensuel (taux de retrait). Croissance d'abord, versements en fin d'année."""
     st.markdown("### 🧭 Simulateur de revenu passif")
     with st.expander("🌱 Valeur nette et revenu passif", expanded=True):
         with st.container(border=True):
-            st.markdown("**💼 Point de départ**")
-            with st.container(key="compact_cols_rp_depart"):
-                col_pf, col_inv = st.columns(2)
-                pf0 = col_pf.number_input(
+            with st.container(key="compact_cols_rp"):
+                c1, c2 = st.columns(2)
+                pf0 = c1.number_input(
                     "Portefeuille actuel (€)", min_value=0.0, step=1000.0, format="%.0f",
                     value=float(max(round(valeur_depart), 0)), key="k_rp_depart",
                 )
-                inv = col_inv.number_input(
-                    "Investissements annuels (€)", min_value=0.0, step=100.0, format="%.0f",
-                    value=float(max(apport_annuel_defaut, 0)), key="k_rp_invest",
+                inv_mois = c2.number_input(
+                    "Investissements mensuels (€)", min_value=0.0, step=10.0, format="%.0f",
+                    value=float(max(apport_mensuel_defaut, 0)), key="k_rp_invest_mensuel",
                 )
-            ans = st.number_input(
-                "Nombre d'années d'épargne", min_value=1, max_value=50, step=1, format="%d",
-                value=15, key="k_rp_annees",
-            )
-        with st.container(border=True):
-            st.markdown("**⚙️ Hypothèses**")
-            with st.container(key="compact_cols_rp_hyp"):
-                col_rend, col_imp = st.columns(2)
-                rend = col_rend.number_input(
+                c3, c4 = st.columns(2)
+                ans = c3.number_input(
+                    "Années d'épargne", min_value=1, max_value=50, step=1, format="%d", value=15, key="k_rp_annees",
+                )
+                rend = c4.number_input(
                     "Rendement (%)", min_value=-50.0, max_value=100.0, step=0.5,
                     value=float(rendement_defaut), key="k_rp_rend",
                 )
-                impot = col_imp.number_input(
+                c5, c6 = st.columns(2)
+                impot = c5.number_input(
                     "Imposition des gains (%)", min_value=0.0, max_value=100.0, step=0.1,
                     value=float(taux_impot_defaut), key="k_rp_impot",
                     help="Par défaut : le taux de prélèvements sociaux réglé dans l'application.",
                 )
-            taux_ret = st.number_input(
-                "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25,
-                value=3.0, key="k_rp_retrait",
-                help="Part du capital net retirée chaque année pour le revenu passif.",
-            )
+                infl = c6.number_input(
+                    "Inflation (%)", min_value=0.0, max_value=20.0, step=0.1, value=2.0, key="k_rp_infl",
+                    help="Tous les montants nets affichés sont corrigés de l'inflation (pouvoir d'achat d'aujourd'hui).",
+                )
+                c7, _c8 = st.columns(2)
+                taux_ret = c7.number_input(
+                    "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25, value=3.0, key="k_rp_retrait",
+                    help="Part du capital net retirée chaque année pour le revenu passif.",
+                )
 
-        # ---- Calcul année par année (croissance, puis versement en fin d'année)
+        # ---- Calcul année par année (croissance, puis versement en fin d'année), en € constants
         n = int(ans)
+        inv = inv_mois * 12.0
         r = rend / 100.0
-        vals, verses, interets = [pf0], [0.0], [0.0]
+        f = 1.0 + infl / 100.0
+        vals = [pf0]
         for k in range(1, n + 1):
             vals.append(vals[-1] * (1 + r) + inv)
-            verses.append(inv * k)
-            interets.append(vals[-1] - pf0 - inv * k)
+        # versements et valeurs exprimés en pouvoir d'achat d'aujourd'hui (un euro versé l'année k vaut 1/f^k)
+        verses_reels = [0.0]
+        for k in range(1, n + 1):
+            verses_reels.append(verses_reels[-1] + inv / f ** k)
+        vals_reelles = [v / f ** k for k, v in enumerate(vals)]
+        interets_reels = [vr - pf0 - vs for vr, vs in zip(vals_reelles, verses_reels)]
+
         valeur_future = vals[-1]
-        plus_value = valeur_future - pf0 - inv * n
+        plus_value = valeur_future - pf0 - inv * n                # gain nominal : base de l'impôt
         impot_du = max(plus_value, 0.0) * impot / 100.0
         valeur_nette = valeur_future - impot_du
-        revenu_mensuel = valeur_nette * taux_ret / 100.0 / 12.0
-        interets_nets = plus_value - impot_du
+        defl = f ** n
+        valeur_nette_reelle = valeur_nette / defl
+        revenu_mensuel = valeur_nette_reelle * taux_ret / 100.0 / 12.0
+        interets_nets = valeur_nette_reelle - pf0 - verses_reels[-1]
 
         # ---- Résultats (en dessous)
-        _sim_headline(
-            f"Valeur nette dans {n} {_plural(n)}", fmt_eur(valeur_nette),
-            f'soit un revenu passif d\'environ <b style="color:#0284c7;">{fmt_eur(revenu_mensuel)} / mois</b>',
-        )
+        _sim_headline_duo([
+            (f"Valeur nette dans {n} {_plural(n)}", fmt_eur(valeur_nette_reelle), "", False),
+            ("Revenu passif / mois", fmt_eur(revenu_mensuel), f"{taux_ret:g} % par an", True),
+        ])
         _sim_pills([
             ("Portefeuille initial", fmt_eur(pf0), "#94a3b8", "#f1f5f9", "#e2e8f0", "#475569"),
-            ("Versements", fmt_eur(inv * n), "#38bdf8", "#f0f9ff", "#bae6fd", "#075985"),
+            ("Versements", fmt_eur(verses_reels[-1]), "#38bdf8", "#f0f9ff", "#bae6fd", "#075985"),
             ("Intérêts nets", fmt_eur(interets_nets), "#f59e0b", "#fffbeb", "#fde68a", "#92400e"),
         ])
-
-        xs = list(range(n + 1))
-        fig_rp = go.Figure()
-        fig_rp.add_trace(go.Scatter(
-            x=xs, y=[pf0] * (n + 1), name="Portefeuille initial", mode="lines", stackgroup="pf",
-            line=dict(color="#94a3b8", width=1.5), fill="tozeroy", fillcolor="rgba(148,163,184,0.28)",
-            customdata=[fmt_eur(pf0)] * (n + 1),
-            hovertemplate="Portefeuille initial : %{customdata}<extra></extra>",
-        ))
-        fig_rp.add_trace(go.Scatter(
-            x=xs, y=verses, name="Versements", mode="lines", stackgroup="pf",
-            line=dict(color="#38bdf8", width=1.5), fill="tonexty", fillcolor="rgba(56,189,248,0.30)",
-            customdata=[fmt_eur(v) for v in verses],
-            hovertemplate="Versements cumulés : %{customdata}<extra></extra>",
-        ))
-        fig_rp.add_trace(go.Scatter(
-            x=xs, y=[max(i, 0.0) for i in interets], name="Intérêts", mode="lines", stackgroup="pf",
-            line=dict(color="#f59e0b", width=2.2), fill="tonexty", fillcolor="rgba(245,158,11,0.30)",
-            customdata=[fmt_eur(v) for v in interets],
-            hovertemplate="Intérêts cumulés : %{customdata}<extra></extra>",
-        ))
-        _tv = sorted({0, n // 2, n})
-        fig_rp.update_layout(
-            height=320, margin=dict(l=8, r=12, t=10, b=8), hovermode="x unified", showlegend=False,
-            yaxis=dict(title="", rangemode="tozero", tickformat=".2s", ticksuffix=" €", nticks=5, automargin=True),
-            xaxis=dict(
-                title="", tickmode="array", tickvals=_tv, showgrid=False,
-                ticktext=["Aujourd'hui" if t == 0 else (f"dans {t} {_plural(t)}" if t == n else f"{t} {_plural(t)}") for t in _tv],
-            ),
-        )
-        apply_chart_theme(fig_rp)
+        fig_rp = _stacked_growth_chart(n, pf0, verses_reels, interets_reels, "Portefeuille initial")
         _plotly_chart(fig_rp, use_container_width=True, theme=None, key="chart_sim_revenu_passif")
 
         _sim_stats(
-            _sim_stat("Valeur future (brute)", fmt_eur(valeur_future)),
-            _sim_stat("Dont plus-value", fmt_eur(plus_value), "#16a34a" if plus_value >= 0 else "#dc2626"),
-            _sim_stat("Impôt sur les gains", fmt_eur(impot_du), "#d97706"),
-            _sim_stat("Valeur nette", fmt_eur(valeur_nette), "#0284c7"),
+            _sim_stat("Valeur future brute", fmt_eur(valeur_future / defl)),
+            _sim_stat("Dont plus-value", fmt_eur(plus_value / defl), "#16a34a" if plus_value >= 0 else "#dc2626"),
+            _sim_stat("Impôt sur les gains", fmt_eur(impot_du / defl), "#d97706"),
+            small=True,
         )
         st.caption(
-            "Projection indicative, non garantie : rendement constant, versements en fin d'année, "
-            "imposition appliquée une seule fois sur la plus-value finale, revenu passif = taux de retrait "
-            "× valeur nette. Le rendement proposé est celui constaté depuis l'ouverture du PEA."
+            "Projection indicative, non garantie : rendement constant, versements en fin d'année, impôt appliqué une "
+            "seule fois sur la plus-value finale, montants corrigés de l'inflation, revenu passif = taux de retrait × "
+            "valeur nette. Le rendement proposé est celui constaté depuis l'ouverture du PEA."
         )
 
 
@@ -8711,7 +8739,7 @@ def _render_sim_retrait():
         else:
             grad_color, net_color = "linear-gradient(90deg, #d97706, #fbbf24)", "#d97706"
 
-        _fr = lambda v, d=1: f"{v:,.{d}f}".replace(",", " ").replace(".", ",")
+        _fr = lambda v, d=1: _fr_num(v, d)
         _sim_headline("💵 Montant net perçu", fmt_eur(net_recu), color=net_color)
         st.markdown(_progress_bar_html(net_pct, grad_color, net_color, f"{_fr(net_pct)} % conservés après fiscalité"), unsafe_allow_html=True)
         cards = [
@@ -8733,7 +8761,7 @@ if _tab_open(tab_simulateur):
         _perf_defaut_rp = round(float(_perf_hist) * 100, 2) if _perf_hist > 0 else 7.0
         _render_sim_revenu_passif(
             float(tot_value_globale),
-            int(app_config.get("apport_annuel_projection", 0) or 0),
+            _apport_mensuel_defaut(),
             _perf_defaut_rp,
             float(app_config.get("taux_prelevements_sociaux", 18.6)),
         )
