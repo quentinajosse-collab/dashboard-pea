@@ -860,10 +860,13 @@ st.markdown(
             flex: 1 1 calc(50% - 0.6rem) !important; min-width: calc(50% - 0.6rem) !important; width: auto !important;
         }
         .pea-stats { grid-template-columns: 1fr; }
-        .pea-stats.sm { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 6px; }
-        .pea-stats.sm .pea-stat { padding: 6px 4px; }
-        .pea-stats.sm .k { font-size: 0.6rem; }
-        .pea-stats.sm .v { font-size: 0.9rem; }
+        /* N cartes (variable --n, posée en ligne par _sim_stats) TOUJOURS sur une seule ligne : colonnes
+           de largeur égale (minmax(0,1fr)), police qui s'adapte à la largeur de l'écran, pas de retour à la ligne
+           des montants. */
+        .pea-stats.sm { grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 5px; }
+        .pea-stats.sm .pea-stat { padding: 6px 2px; min-width: 0; }
+        .pea-stats.sm .k { font-size: min(0.6rem, 2.3vw); letter-spacing: 0; line-height: 1.2; }
+        .pea-stats.sm .v { font-size: min(0.9rem, 3.1vw); white-space: nowrap; }
         .pea-duo-item .v { font-size: 1.15rem; }
         .pea-duo-item.hl .v { font-size: 1.4rem; }
         .pea-head .v { font-size: 1.9rem; }
@@ -1749,6 +1752,46 @@ def _style_perf_cell(v):
     if s.startswith("▼"):
         return "color:#dc2626; font-weight:700;"
     return "color:#64748b;"
+
+def _arrow_sym(val, eps=0.005):
+    """▲ (hausse) / ▼ (baisse) / ▬ (stable) selon le signe, avec une petite tolérance."""
+    try:
+        if pd.isna(val):
+            return ""
+    except Exception:
+        pass
+    return "▲" if val > eps else ("▼" if val < -eps else "▬")
+
+
+def fmt_eur_arrow(val):
+    """Montant signé avec flèche : ▲ +12,00 € / ▼ -12,00 € / ▬ 0,00 €."""
+    if pd.isna(val):
+        return "N/A"
+    if val > 0.005:
+        return "▲ +" + fmt_eur(val)
+    if val < -0.005:
+        return "▼ " + fmt_eur(val)
+    return "▬ " + fmt_eur(0.0)
+
+
+def _style_perf_bg_cell(v):
+    """Fond léger vert / rouge (lisible) pour une cellule déjà formatée avec ▲ / ▼."""
+    s = str(v)
+    if s.startswith("▲"):
+        return "background-color: rgba(34,197,94,0.16); color:#15803d; font-weight:700;"
+    if s.startswith("▼"):
+        return "background-color: rgba(239,68,68,0.14); color:#b91c1c; font-weight:700;"
+    return ""
+
+
+def _zebra_rows(df_z):
+    """Gris léger une ligne sur deux (ligne 2, 4, 6...), semi-transparent pour rester lisible partout."""
+    return pd.DataFrame(
+        [["background-color: rgba(148,163,184,0.16);" if i % 2 == 1 else "" for _ in df_z.columns]
+         for i in range(len(df_z))],
+        index=df_z.index, columns=df_z.columns,
+    )
+
 
 def fmt_perf_text_only(val):
     if pd.isna(val) or np.isnan(val):
@@ -3895,13 +3938,19 @@ def dialog_simulation_operation():
 
     def _delta_eur(delta_val):
         color = "#16a34a" if delta_val > 0.005 else ("#dc2626" if delta_val < -0.005 else "#64748b")
-        sign = "+" if delta_val > 0.005 else ""
-        return f"{sign}{fmt_eur(delta_val)}", color
+        if delta_val > 0.005:
+            return "▲ +" + fmt_eur(delta_val), color
+        if delta_val < -0.005:
+            return "▼ " + fmt_eur(delta_val), color
+        return "▬ " + fmt_eur(0.0), color
 
     def _delta_pct(delta_val):
         color = "#16a34a" if delta_val > 0.005 else ("#dc2626" if delta_val < -0.005 else "#64748b")
-        sign = "+" if delta_val > 0.005 else ""
-        return f"{sign}{delta_val:,.2f} pts".replace(",", " ").replace(".", ","), color
+        if delta_val > 0.005:
+            return f"▲ +{delta_val:,.2f} pts".replace(",", " ").replace(".", ","), color
+        if delta_val < -0.005:
+            return f"▼ {delta_val:,.2f} pts".replace(",", " ").replace(".", ","), color
+        return "▬ 0,00 pts", color
 
     def _render_before_after(items):
         cards = ""
@@ -4116,7 +4165,7 @@ def dialog_simulation_operation():
                 # non sur le montant brut de la vente), cohérent avec la "Performance (%)"
                 # affichée ailleurs dans l'app pour une position en portefeuille.
                 gr_pct = (gain_realise_op / cost_basis_sold * 100) if cost_basis_sold > 0 else 0.0
-                gr_pct_str = f"{'+' if gr_pct >= 0 else ''}{gr_pct:,.2f} %".replace(".", ",")
+                gr_pct_str = f"{_arrow_sym(gr_pct)} {'+' if gr_pct >= 0 else ''}{gr_pct:,.2f} %".replace(".", ",")
                 st.markdown(
                     f'<div style="margin-bottom: 12px; padding: 12px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid {gr_color}; border-radius:8px;">'
                     f'<div style="font-size:0.78rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">{gr_icon} Plus-value réalisée par cette vente</div>'
@@ -4130,7 +4179,7 @@ def dialog_simulation_operation():
             d_cash, c_cash = _delta_eur(cash_apres - cash_avant)
             d_qte = qte_apres - qte_avant
             d_qte_color = "#16a34a" if d_qte > 0 else ("#dc2626" if d_qte < 0 else "#64748b")
-            d_qte_str = f"{'+' if d_qte > 0 else ''}{d_qte:g} titre(s)"
+            d_qte_str = f"{_arrow_sym(d_qte, 1e-9)} {'+' if d_qte > 0 else ''}{d_qte:g} titre(s)"
             d_pru, c_pru = _delta_eur(pru_apres - pru_avant)
             d_valpos, c_valpos = _delta_eur(valeur_pos_apres - valeur_pos_avant)
             d_gainlat, c_gainlat = _delta_eur(gain_latent_apres - gain_latent_avant)
@@ -4419,7 +4468,7 @@ def dialog_simulation_operation():
             d_cash, c_cash = _delta_eur(cash_apres - cash_avant)
             d_qte = qte_apres - qte_avant
             d_qte_color = "#16a34a" if d_qte > 0 else ("#dc2626" if d_qte < 0 else "#64748b")
-            d_qte_str = f"{'+' if d_qte > 0 else ''}{d_qte:g} titre(s)"
+            d_qte_str = f"{_arrow_sym(d_qte, 1e-9)} {'+' if d_qte > 0 else ''}{d_qte:g} titre(s)"
             d_pru, c_pru = _delta_eur(pru_apres - pru_avant)
 
             _render_before_after([
@@ -5495,9 +5544,12 @@ if _tab_open(tab_positions):
                     if col in df_active_fmt.columns:
                         df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_price_dynamic(x))
 
-                for col in ["Valeur Actuel (€)", "Gain Latent (€)", "Gain Réalisé (€)", "Dividende Reçu (€)"]:
+                for col in ["Valeur Actuel (€)", "Dividende Reçu (€)"]:
                     if col in df_active_fmt.columns:
                         df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_eur(x))
+                for col in ["Gain Latent (€)", "Gain Réalisé (€)"]:
+                    if col in df_active_fmt.columns:
+                        df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_eur_arrow(x))
                     
                 if "Performance (%)" in df_active_fmt.columns:
                     df_active_fmt["Performance (%)"] = df_active_fmt["Performance (%)"].apply(lambda x: fmt_perf(x))
@@ -5509,10 +5561,12 @@ if _tab_open(tab_positions):
                 row_height = 35
                 header_height = 40
                 total_height = header_height + len(df_active_fmt) * row_height
-                _sty_active = df_active_fmt.style
-                if "Performance (%)" in df_active_fmt.columns:
+                _sty_active = df_active_fmt.style.apply(_zebra_rows, axis=None)
+                _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
+                                       if c in df_active_fmt.columns]
+                if _cols_fleche_active:
                     _sty_active = (_sty_active.map if hasattr(_sty_active, "map") else _sty_active.applymap)(
-                        _style_perf_cell, subset=["Performance (%)"])
+                        _style_perf_cell, subset=_cols_fleche_active)
                 st.dataframe(
                     _sty_active,
                     use_container_width=True, hide_index=True,
@@ -5920,8 +5974,9 @@ if _tab_open(tab_positions):
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
                 df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)']).copy()
-                for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)']:
-                    df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur)
+                for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)']:
+                    df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur_arrow)
+                df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
 
                 def color_gain_rows(df_display):
@@ -7116,7 +7171,7 @@ if _tab_open(tab_perf):
                         
                             text_arr = [''] * len(extended_y)
                             if not pd.isna(val_fin):
-                                text_str = f"&nbsp;<span style='color: {color};'><b>{val_fin:+,.2f}%</b></span>".replace(",", " ").replace(".", ",")
+                                text_str = f"&nbsp;<span style='color: {color};'><b>{_arrow_sym(val_fin)} {val_fin:+,.2f}%</b></span>".replace(",", " ").replace(".", ",")
                                 text_arr[-1] = text_str
 
                             fig.add_trace(go.Scatter(
@@ -7126,7 +7181,7 @@ if _tab_open(tab_perf):
                                 textposition=text_positions.get(name, "middle right"),
                                 cliponaxis=False,
                                 line=dict(color=color, width=width, dash='solid'),
-                                customdata=[f"{v:+,.2f}".replace(",", " ").replace(".", ",") for v in extended_y],
+                                customdata=[f"{_arrow_sym(v)} {v:+,.2f}".replace(",", " ").replace(".", ",") for v in extended_y],
                                 hovertemplate=f"<b>{name}</b><br>Performance : %{{customdata}} %<extra></extra>"
                             ))
 
@@ -7171,7 +7226,7 @@ if _tab_open(tab_perf):
                         for name, data in benchmarks.items():
                             c_col = data[1]
                             v_end = final_values.get(name, 0.0)
-                            v_end_txt = f"{v_end:+,.2f}".replace(",", " ").replace(".", ",")
+                            v_end_txt = f"{_arrow_sym(v_end)} {v_end:+,.2f}".replace(",", " ").replace(".", ",")
                             legend_html_items.append(f"<div style='display: flex; justify-content: space-between; align-items: center; {item_margin} font-size: 0.85rem;'><span style='display: inline-flex; align-items: center;'><span style='height: 10px; width: 10px; background-color: {c_col}; display: inline-block; border-radius: 50%; margin-right: 6px;'></span><b style='color: #1e293b;'>{name}</b></span><span style='color: {c_col}; font-weight: bold; margin-left: 10px;'>{v_end_txt} %</span></div>")
                     
                         placeholder_legende.markdown(
@@ -7349,8 +7404,11 @@ if _tab_open(tab_perf):
                             ]
 
                             st.markdown("#### 📊 Résultats de la Comparaison")
+                            _sty_comp = df_comp_res[cols_final_comp].style
+                            _sty_comp = (_sty_comp.map if hasattr(_sty_comp, "map") else _sty_comp.applymap)(
+                                _style_perf_bg_cell, subset=cols_final_comp[1:])
                             st.dataframe(
-                                df_comp_res[cols_final_comp],
+                                _sty_comp,
                                 use_container_width=True,
                                 hide_index=True,
                             )
@@ -7699,6 +7757,15 @@ if _tab_open(tab_history):
         def _rendu_onglet_historique(df_transactions, tot_invested, jour, market_epoch):
             _fmt_eur_h = _fmt_eur_lecteur()
 
+            def _fmt_eur_h_arrow(val):
+                if pd.isna(val):
+                    return "N/A"
+                if val > 0.005:
+                    return "▲ +" + _fmt_eur_h(val)
+                if val < -0.005:
+                    return "▼ " + _fmt_eur_h(val)
+                return "▬ " + _fmt_eur_h(0.0)
+
             def style_entire_row_gradient(df):
                 """Dégradé à 3 paliers (vert/rouge) calculé par quantiles PROPRES à ce tableau, via
         get_quantile_level_styles — la même palette que le classement des actions par gain."""
@@ -7714,7 +7781,8 @@ if _tab_open(tab_history):
                         if "nan" in val_str.lower():
                             vals_list.append(np.nan)
                         else:
-                            clean_val = val_str.replace("%", "").replace(" ", "").replace("+", "").replace(",", ".")
+                            clean_val = (val_str.replace("▲", "").replace("▼", "").replace("▬", "")
+                                         .replace("%", "").replace(" ", "").replace("+", "").replace(",", "."))
                             vals_list.append(float(clean_val))
                     except Exception:
                         vals_list.append(np.nan)
@@ -7806,12 +7874,10 @@ if _tab_open(tab_history):
                                 "_dt": daily_df.index[mask_actif],
                                 "Jour": daily_df.index[mask_actif].strftime("%d-%m-%Y"),
                                 "Nb Mouvements": nb_mouv_s[mask_actif].to_numpy(),
-                                "PV actées": net_real_jour_s[mask_actif].map(_fmt_eur_h),
-                                "PV latente": net_latente_jour_s[mask_actif].map(_fmt_eur_h),
+                                "PV actées": net_real_jour_s[mask_actif].map(_fmt_eur_h_arrow),
+                                "PV latente": net_latente_jour_s[mask_actif].map(_fmt_eur_h_arrow),
                                 "Dividendes": net_div_jour_s[mask_actif].map(_fmt_eur_h),
-                                "Performance": perf_pct_jour_s[mask_actif].map(
-                                    lambda v: f"{v:+.2f}%".replace(".", ",") if not np.isnan(v) else "N/A"
-                                ),
+                                "Performance": perf_pct_jour_s[mask_actif].map(fmt_perf_simple),
                                 "Valeur Actions Fin Jour": _cur["Valeur Actions (€)"][mask_actif].map(_fmt_eur_h),
                                 "Achats": achats_s[mask_actif].map(_fmt_eur_h),
                                 "Frais": frais_s[mask_actif].map(_fmt_eur_h),
@@ -7863,10 +7929,10 @@ if _tab_open(tab_history):
                                 "_dt": current_date,
                                 "Mois": mois_fr(current_date, with_year=True),
                                 "Nb Mouvements": nb_mouv,
-                                "PV actées": _fmt_eur_h(net_real_mois),
-                                "PV latente": _fmt_eur_h(net_latente_mois),
+                                "PV actées": _fmt_eur_h_arrow(net_real_mois),
+                                "PV latente": _fmt_eur_h_arrow(net_latente_mois),
                                 "Dividendes": _fmt_eur_h(net_div_mois),
-                                "Performance": f"{perf_pct_mois:+.2f}%".replace(".", ",") if not np.isnan(perf_pct_mois) else "N/A",
+                                "Performance": fmt_perf_simple(perf_pct_mois),
                                 "Valeur Actions Fin Mois": _fmt_eur_h(current_val),
                                 "Achats": _fmt_eur_h(achats_mois),
                                 "Frais": _fmt_eur_h(frais_mois),
@@ -7921,10 +7987,10 @@ if _tab_open(tab_history):
                                 "_year": current_year,
                                 "Année": str(current_year),
                                 "Nb Mouvements": nb_mouv_an,
-                                "PV actées": _fmt_eur_h(net_real_an),
-                                "PV latente": _fmt_eur_h(net_latente_an),
+                                "PV actées": _fmt_eur_h_arrow(net_real_an),
+                                "PV latente": _fmt_eur_h_arrow(net_latente_an),
                                 "Dividendes": _fmt_eur_h(net_div_an),
-                                "Performance": f"{perf_pct_an:+.2f}%".replace(".", ",") if not np.isnan(perf_pct_an) else "N/A",
+                                "Performance": fmt_perf_simple(perf_pct_an),
                                 "Valeur Actions Fin Année": _fmt_eur_h(current_val),
                                 "Achats": _fmt_eur_h(achats_an),
                                 "Frais": _fmt_eur_h(frais_an),
@@ -8207,7 +8273,8 @@ if _tab_open(tab_watchlist):
                 signe = "+" if pct >= 0 else ""
                 pct_txt = f"{signe}{pct:,.1f} %".replace(",", " ").replace(".", ",")
                 eur_txt = f"{signe}{delta_eur:,.2f} €".replace(",", " ").replace(".", ",")
-                return f'<span style="color:{couleur}; font-weight:700;">{eur_txt} ({pct_txt})</span>'
+                fleche = _arrow_sym(pct, 0.0005)
+                return f'<span style="color:{couleur}; font-weight:700;">{fleche} {eur_txt} ({pct_txt})</span>'
 
             def _wl_jour_pct_html(pct):
                 """Petit texte coloré '(+x,x %)' accolé au Prix Actuel pour la variation du jour."""
@@ -8216,7 +8283,8 @@ if _tab_open(tab_watchlist):
                 couleur = "#15803d" if pct >= 0 else "#b91c1c"
                 signe = "+" if pct >= 0 else ""
                 pct_txt = f"{signe}{pct:,.1f} %".replace(",", " ").replace(".", ",")
-                return f' <span style="color:{couleur}; font-weight:700; font-size:0.88em;">({pct_txt})</span>'
+                fleche = _arrow_sym(pct, 0.0005)
+                return f' <span style="color:{couleur}; font-weight:700; font-size:0.88em;">({fleche} {pct_txt})</span>'
 
             wl_computed = []
             for it in watchlist_items:
@@ -8367,7 +8435,8 @@ def _sim_stat(label, value, color="#0f172a"):
 
 
 def _sim_stats(*cards, small=False):
-    st.markdown(f'<div class="pea-stats{" sm" if small else ""}">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+    _n_cartes = max(len(cards), 1)
+    st.markdown(f'<div class="pea-stats{" sm" if small else ""}" style="--n:{_n_cartes};">' + "".join(cards) + "</div>", unsafe_allow_html=True)
 
 
 def _sim_headline_duo(items):
@@ -8449,7 +8518,11 @@ def _tick_labels(n):
 
 
 def _an_label(k):
-    return f"{k} an" if k < 2 else f"{k} ans"
+    """« 15 ans (2041) » : durée + année d'atteinte (année en cours + k). « Aujourd'hui (2026) » pour k = 0."""
+    annee = _now_paris().year + k
+    if k == 0:
+        return f"Aujourd'hui ({annee})"
+    return (f"{k} an" if k < 2 else f"{k} ans") + f" ({annee})"
 
 
 def _stacked_growth_chart(n, base, verses, interets, base_name, height=260):
@@ -8517,7 +8590,7 @@ def _render_sim_projection():
             _fiable = "" if annees_ecoulees >= 1 else " ⚠️ historique court, peu fiable"
             st.caption(
                 f"Apports moyens depuis l'ouverture du PEA : **{fmt_eur(moy_mensuel)} / mois**  \n"
-                f"Performance moyenne depuis l'ouverture : **{_fr_num(perf_annualisee * 100, 2, signed=True)} % / an** "
+                f"Performance moyenne depuis l'ouverture : **{_arrow_sym(perf_annualisee)} {_fr_num(perf_annualisee * 100, 2, signed=True)} % / an** "
                 f"({_fr_num(annees_ecoulees, 1)} {_plural(annees_ecoulees)}).{_fiable}"
             )
         if horizon_annees != int(app_config.get("horizon_projection_annees", 10)):
@@ -8664,7 +8737,18 @@ def _render_sim_revenu_passif(valeur_depart, apport_mensuel_defaut, rendement_de
         defl = f ** n
         valeur_nette_reelle = valeur_nette / defl
         revenu_mensuel = valeur_nette_reelle * taux_ret / 100.0 / 12.0
-        interets_nets = valeur_nette_reelle - pf0 - verses_reels[-1]
+        # Versements AFFICHÉS = ce que l'utilisateur verse réellement (montant mensuel × 12 × années), sans correction
+        # d'inflation : plus de décimales parasites. Les intérêts nets sont le complément, en pouvoir d'achat actuel.
+        verses_nominaux = [inv * k for k in range(n + 1)]
+        # Valeur nette année par année (impôt sur les gains prélevé à chaque horizon, en € constants) : la courbe
+        # finit exactement sur la « valeur nette » affichée en haut.
+        nettes_reelles = []
+        for k, v in enumerate(vals):
+            gain_k = v - pf0 - inv * k
+            net_k = v - max(gain_k, 0.0) * impot / 100.0
+            nettes_reelles.append(net_k / f ** k)
+        interets_chart = [nr - pf0 - vn for nr, vn in zip(nettes_reelles, verses_nominaux)]
+        interets_nets = valeur_nette_reelle - pf0 - verses_nominaux[-1]
 
         # ---- Résultats (en dessous)
         _sim_headline_duo([
@@ -8673,15 +8757,15 @@ def _render_sim_revenu_passif(valeur_depart, apport_mensuel_defaut, rendement_de
         ])
         _sim_pills([
             ("Portefeuille initial", fmt_eur(pf0), "#94a3b8", "#f1f5f9", "#e2e8f0", "#475569"),
-            ("Versements", fmt_eur(verses_reels[-1]), "#38bdf8", "#f0f9ff", "#bae6fd", "#075985"),
+            ("Versements", fmt_eur(verses_nominaux[-1]), "#38bdf8", "#f0f9ff", "#bae6fd", "#075985"),
             ("Intérêts nets", fmt_eur(interets_nets), "#f59e0b", "#fffbeb", "#fde68a", "#92400e"),
         ])
-        fig_rp = _stacked_growth_chart(n, pf0, verses_reels, interets_reels, "Portefeuille initial")
+        fig_rp = _stacked_growth_chart(n, None, verses_nominaux, interets_chart, "")
         _plotly_chart(fig_rp, use_container_width=True, theme=None, key="chart_sim_revenu_passif")
 
         _sim_stats(
             _sim_stat("Valeur future brute", fmt_eur(valeur_future / defl)),
-            _sim_stat("Dont intérêts", fmt_eur(plus_value / defl), "#16a34a" if plus_value >= 0 else "#dc2626"),
+            _sim_stat("Dont intérêts", fmt_eur_arrow(plus_value / defl), "#16a34a" if plus_value >= 0 else "#dc2626"),
             small=True,
         )
 
