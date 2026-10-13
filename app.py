@@ -1866,9 +1866,25 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
     if max_height is None and len(df) > 25:
         max_height = 620
     wrap_style = f' style="max-height:{int(max_height)}px;"' if max_height else ""
-    html = (f'<div class="pea-tbl-wrap"{wrap_style}><table class="pea-tbl"><thead><tr>{head}</tr></thead>'
-            f'<tbody>{"".join(rows)}</tbody></table></div>')
-    st.markdown(html, unsafe_allow_html=True)
+
+    def _tbl(rs):
+        return (f'<div class="pea-tbl-wrap"{wrap_style}><table class="pea-tbl"><thead><tr>{head}</tr></thead>'
+                f'<tbody>{"".join(rs)}</tbody></table></div>')
+
+    # Gros tableaux : les 300 premières lignes (les plus récentes) sont affichées tout de suite, le reste est
+    # replié dans un bloc « Afficher les lignes plus anciennes » (rien n'est supprimé, mais le navigateur ne
+    # calcule pas la mise en page des milliers de lignes cachées).
+    LIM = 300
+    html = _tbl(rows[:LIM])
+    if len(rows) > LIM:
+        html += (f'<details style="margin:2px 0 8px 0;"><summary style="cursor:pointer; font-size:0.8rem; color:#475569; '
+                 f'padding:4px 2px;">Afficher les {len(rows) - LIM} lignes plus anciennes</summary>'
+                 + _tbl(rows[LIM:]) + "</details>")
+    # st.html évite le parseur Markdown de Streamlit, très lent sur de gros blocs HTML.
+    if hasattr(st, "html"):
+        st.html(html)
+    else:
+        st.markdown(html, unsafe_allow_html=True)
 
 def _lerp_hex(c1, c2, t):
     a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
@@ -2172,20 +2188,20 @@ def _alloc_color(i):
 _ALLOC_HTML = r"""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
-  html, body { margin: 0; padding: 0; background: transparent; }
-  #root { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center;
+  html, body { margin: 0; padding: 0; background: transparent; height: 100%; }
+  #root { min-height: 100%; box-sizing: border-box; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center;
           font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); padding: 4px 2px; }
   #wrap { position: relative; width: 250px; flex: 0 0 250px; margin-top: 0; }
   svg { width: 250px; height: 250px; display: block; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
   .slice.dim { opacity: .28; }
-  #legend { flex: 1 1 220px; min-width: 200px; max-width: 420px; }
+  #legend { flex: 0 1 auto; min-width: 200px; max-width: 420px; }
   .row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer;
          transition: opacity .18s ease, background .18s ease; -webkit-tap-highlight-color: transparent; }
   .row.sel { background: rgba(127,127,127,.14); }
   .row.dim { opacity: .4; }
   .dot { width: 11px; height: 11px; border-radius: 3px; flex: 0 0 11px; }
-  .nm { flex: 1; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nm { flex: 1; min-width: 110px; padding-right: 28px; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pc { font-family: Manrope, Inter, system-ui, sans-serif; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12.5px; opacity: .85; }
   text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
   html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
@@ -2299,8 +2315,12 @@ _ALLOC_HTML = r"""
 
   function fit() {
     try {
-      var h = document.getElementById('root').getBoundingClientRect().height + 10;
-      window.frameElement.style.height = Math.ceil(h) + 'px';
+      var rt = document.getElementById('root');
+      rt.style.minHeight = '0';
+      var h = Math.ceil(rt.getBoundingClientRect().height) + 10;
+      rt.style.minHeight = '';
+      try { window.frameElement.style.height = h + 'px'; }
+      catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
     } catch (e) {}
   }
   select(-1); fit();
@@ -5893,7 +5913,9 @@ if _tab_open(tab_positions):
                             return ['background-color: #fff7ed;'] * len(row)
                         return [''] * len(row)
 
-                    _row_styles_tx = [color_transactions(_r)[0] for _, _r in df_table.iterrows()]
+                    _bg_tx = {"ACHAT": "#f0f7ff", "VENTE": "#fdf2f2", "DIVIDENDE": "#f2fcf5", "APPORT": "#e6f4ea",
+                              "RETRAIT": "#f5f3ff", "SPLIT": "#fff7ed", "REGROUPEMENT": "#fff7ed", "SPLIT/REGROUPEMENT": "#fff7ed"}
+                    _row_styles_tx = [f"background-color: {_bg_tx[t]};" if t in _bg_tx else "" for t in df_table["Type"]]
                     _html_table(df_table, row_styles=_row_styles_tx, show_index=True, index_label="N°")
                 else:
                     st.info("Aucune transaction trouvée avec ces critères.")
