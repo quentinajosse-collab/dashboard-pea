@@ -860,7 +860,7 @@ st.markdown(
             flex: 1 1 calc(50% - 0.6rem) !important; min-width: calc(50% - 0.6rem) !important; width: auto !important;
         }
         .pea-stats { grid-template-columns: 1fr; }
-        .pea-stats.sm { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+        .pea-stats.sm { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 6px; }
         .pea-stats.sm .pea-stat { padding: 6px 4px; }
         .pea-stats.sm .k { font-size: 0.6rem; }
         .pea-stats.sm .v { font-size: 0.9rem; }
@@ -1725,8 +1725,8 @@ def _export_payload(kind, signature_parts, builder):
 def fmt_perf(val):
     if pd.isna(val) or np.isnan(val):
         return "N/A"
-    prefix = "🟢 +" if val > 0 else ("🔴 " if val < 0 else "⚪ ")
-    return f"{prefix}{val:,.2f}%".replace(".", ",")
+    prefix = "▲ +" if val > 0 else ("▼ " if val < 0 else "▬ ")
+    return f"{prefix}{val:,.2f}%".replace(",", " ").replace(".", ",")
 
 def fmt_perf_simple(val):
     if pd.isna(val) or isinstance(val, str) and val == "N/A":
@@ -1734,11 +1734,21 @@ def fmt_perf_simple(val):
     if np.isnan(val):
         return "N/A"
     if val > 0:
-        return f"🟢 +{val:,.2f}%".replace(".", ",")
+        return f"▲ +{val:,.2f}%".replace(",", " ").replace(".", ",")
     elif val < 0:
-        return f"🔴 {val:,.2f}%".replace(".", ",")
+        return f"▼ {val:,.2f}%".replace(",", " ").replace(".", ",")
     else:
-        return f"⚪ 0,00%"
+        return "▬ 0,00%"
+
+
+def _style_perf_cell(v):
+    """Couleur du texte d'une cellule de performance déjà formatée (▲ vert, ▼ rouge, ▬ gris)."""
+    s = str(v)
+    if s.startswith("▲"):
+        return "color:#16a34a; font-weight:700;"
+    if s.startswith("▼"):
+        return "color:#dc2626; font-weight:700;"
+    return "color:#64748b;"
 
 def fmt_perf_text_only(val):
     if pd.isna(val) or np.isnan(val):
@@ -5326,7 +5336,7 @@ if _tab_open(tab_overview):
         # zone d'achat définie, pour ne pas surcharger le haut du dashboard sans raison. ---
         with st.expander("🎯 Objectif Annuel", expanded=True):
             with st.container(border=True):
-                st.markdown("**💰 Objectif de fin d'année & ➕ épargne prévue**")
+                st.markdown("**💰 Objectif de fin d'année & épargne prévue**")
                 with st.container(key="compact_cols_objectif"):
                     col_obj_cible, col_obj_epargne = st.columns(2)
                     current_target_val = int(app_config.get("yearly_target", 10000))
@@ -5499,8 +5509,12 @@ if _tab_open(tab_positions):
                 row_height = 35
                 header_height = 40
                 total_height = header_height + len(df_active_fmt) * row_height
+                _sty_active = df_active_fmt.style
+                if "Performance (%)" in df_active_fmt.columns:
+                    _sty_active = (_sty_active.map if hasattr(_sty_active, "map") else _sty_active.applymap)(
+                        _style_perf_cell, subset=["Performance (%)"])
                 st.dataframe(
-                    df_active_fmt,
+                    _sty_active,
                     use_container_width=True, hide_index=True,
                     height=min(max(total_height, 100), 1000),
                 )
@@ -7102,7 +7116,7 @@ if _tab_open(tab_perf):
                         
                             text_arr = [''] * len(extended_y)
                             if not pd.isna(val_fin):
-                                text_str = f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style='color: {color};'><b>{val_fin:+,.2f}%</b></span>".replace(",", " ").replace(".", ",")
+                                text_str = f"&nbsp;<span style='color: {color};'><b>{val_fin:+,.2f}%</b></span>".replace(",", " ").replace(".", ",")
                                 text_arr[-1] = text_str
 
                             fig.add_trace(go.Scatter(
@@ -7130,7 +7144,7 @@ if _tab_open(tab_perf):
                             paper_bgcolor='rgba(0,0,0,0)', 
                             plot_bgcolor='rgba(0,0,0,0)', 
                             hovermode="x unified", 
-                            margin=dict(l=8, r=64, t=10, b=8),
+                            margin=dict(l=8, r=72, t=10, b=8),
                             yaxis_title="",
                             xaxis_title="",
                             height=380,
@@ -8439,25 +8453,27 @@ def _an_label(k):
 
 
 def _stacked_growth_chart(n, base, verses, interets, base_name, height=260):
-    """Aires empilées : montant de départ, versements cumulés, intérêts/plus-values cumulés. Abscisses en
-    catégories « k an(s) » (le survol affiche donc « 5 ans »), 3 à 4 repères numériques seulement."""
+    """Aires empilées : [montant de départ si `base` n'est pas None], versements cumulés, intérêts cumulés.
+    Abscisses en catégories « k an(s) » (le survol affiche donc « 5 ans »), 3 à 4 repères numériques seulement."""
     cats = [_an_label(k) for k in range(n + 1)]
     ticks = _tick_labels(n)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=cats, y=[base] * (n + 1), name=base_name, mode="lines", stackgroup="s",
-        line=dict(color="#94a3b8", width=1.5), fill="tozeroy", fillcolor="rgba(148,163,184,0.28)",
-        customdata=[fmt_eur(base)] * (n + 1), hovertemplate=base_name + " : %{customdata}<extra></extra>",
-    ))
+    if base is not None:
+        fig.add_trace(go.Scatter(
+            x=cats, y=[base] * (n + 1), name=base_name, mode="lines", stackgroup="s",
+            line=dict(color="#94a3b8", width=1.5), fill="tozeroy", fillcolor="rgba(148,163,184,0.28)",
+            customdata=[fmt_eur(base)] * (n + 1), hovertemplate=base_name + " : %{customdata}<extra></extra>",
+        ))
     fig.add_trace(go.Scatter(
         x=cats, y=verses, name="Versements", mode="lines", stackgroup="s",
-        line=dict(color="#38bdf8", width=1.5), fill="tonexty", fillcolor="rgba(56,189,248,0.30)",
+        line=dict(color="#38bdf8", width=1.5), fill="tonexty" if base is not None else "tozeroy",
+        fillcolor="rgba(56,189,248,0.30)",
         customdata=[fmt_eur(v) for v in verses], hovertemplate="Versements cumulés : %{customdata}<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
-        x=cats, y=[max(i, 0.0) for i in interets], name="Plus-values", mode="lines", stackgroup="s",
+        x=cats, y=[max(i, 0.0) for i in interets], name="Intérêts", mode="lines", stackgroup="s",
         line=dict(color="#f59e0b", width=2.2), fill="tonexty", fillcolor="rgba(245,158,11,0.30)",
-        customdata=[fmt_eur(v) for v in interets], hovertemplate="Plus-values cumulées : %{customdata}<extra></extra>",
+        customdata=[fmt_eur(v) for v in interets], hovertemplate="Intérêts cumulés : %{customdata}<extra></extra>",
     ))
     fig.update_layout(
         height=height, margin=dict(l=8, r=12, t=6, b=6), hovermode="x unified", showlegend=False,
@@ -8500,8 +8516,8 @@ def _render_sim_projection():
                 )
             _fiable = "" if annees_ecoulees >= 1 else " ⚠️ historique court, peu fiable"
             st.caption(
-                f"Moyenne depuis l'ouverture du PEA : **{fmt_eur(moy_mensuel)} / mois** d'apports · "
-                f"**{_fr_num(perf_annualisee * 100, 2, signed=True)} % / an** de performance "
+                f"Apports moyens depuis l'ouverture du PEA : **{fmt_eur(moy_mensuel)} / mois**  \n"
+                f"Performance moyenne depuis l'ouverture : **{_fr_num(perf_annualisee * 100, 2, signed=True)} % / an** "
                 f"({_fr_num(annees_ecoulees, 1)} {_plural(annees_ecoulees)}).{_fiable}"
             )
         if horizon_annees != int(app_config.get("horizon_projection_annees", 10)):
@@ -8528,8 +8544,8 @@ def _render_sim_projection():
         # porte sur le cumul des APPORTS nets : une fois atteint, seule la performance joue.
         n_ans = int(horizon_annees)
         valeurs_annuelles = [tot_value_globale]
-        verses = [0.0]
-        interets = [0.0]
+        verses = [apports_totaux]                       # versements cumulés : apports déjà réalisés inclus
+        interets = [tot_value_globale - apports_totaux]  # intérêts cumulés : gains déjà acquis inclus
         v_courant, ap_courant = tot_value_globale, apports_totaux
         for _an in range(1, n_ans + 1):
             place_restante = max(PLAFOND_PEA_VERSEMENTS - ap_courant, 0.0)
@@ -8537,12 +8553,12 @@ def _render_sim_projection():
             v_courant = v_courant * (1 + perf_annuelle_retenue) + apport_reel_annee
             ap_courant += apport_reel_annee
             valeurs_annuelles.append(v_courant)
-            verses.append(verses[-1] + apport_reel_annee)
-            interets.append(v_courant - tot_value_globale - verses[-1])
+            verses.append(ap_courant)
+            interets.append(v_courant - ap_courant)
 
         valeur_projetee_finale = valeurs_annuelles[-1]
         apports_cumules_finaux = min(ap_courant, PLAFOND_PEA_VERSEMENTS)
-        plus_values_estimees = interets[-1]
+        interets_estimes = interets[-1]
 
         # Échéance d'atteinte du plafond au rythme de l'apport prévu (versement continu et régulier).
         montant_restant_plafond = PLAFOND_PEA_VERSEMENTS - apports_totaux
@@ -8557,12 +8573,13 @@ def _render_sim_projection():
 
         # ---- Résultats (en dessous) : même gabarit que le simulateur de revenu passif
         _sim_headline(f"Valeur projetée dans {n_ans} {_plural(n_ans)}", fmt_eur(valeur_projetee_finale), color="#0284c7")
-        _sim_pills([
-            ("Valeur actuelle", fmt_eur(tot_value_globale), "#94a3b8", "#f1f5f9", "#e2e8f0", "#475569"),
-            (f"Apports prévus sur {n_ans} {_plural(n_ans)}", fmt_eur(verses[-1]), "#38bdf8", "#f0f9ff", "#bae6fd", "#075985"),
-            ("Plus-values estimées", fmt_eur(plus_values_estimees), "#f59e0b", "#fffbeb", "#fde68a", "#92400e"),
-        ])
-        fig_proj = _stacked_growth_chart(n_ans, tot_value_globale, verses, interets, "Valeur actuelle")
+        _sim_stats(
+            _sim_stat("Apports actuels", fmt_eur(apports_totaux), "#475569"),
+            _sim_stat("Apports prévus", fmt_eur(ap_courant - apports_totaux), "#0284c7"),
+            _sim_stat("Intérêts estimés", fmt_eur(interets_estimes), "#d97706"),
+            small=True,
+        )
+        fig_proj = _stacked_growth_chart(n_ans, None, verses, interets, "")
         _plotly_chart(fig_proj, use_container_width=True, theme=None, key="projection_valeur_chart")
 
         if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n_ans and apport_annuel_proj > 0:
@@ -8652,7 +8669,7 @@ def _render_sim_revenu_passif(valeur_depart, apport_mensuel_defaut, rendement_de
         # ---- Résultats (en dessous)
         _sim_headline_duo([
             (f"Valeur nette dans {n} {_plural(n)}", fmt_eur(valeur_nette_reelle), "", False),
-            ("Revenu passif / mois", fmt_eur(revenu_mensuel), f"{taux_ret:g} % par an", True),
+            ("Revenu passif / mois", fmt_eur(revenu_mensuel), "", True),
         ])
         _sim_pills([
             ("Portefeuille initial", fmt_eur(pf0), "#94a3b8", "#f1f5f9", "#e2e8f0", "#475569"),
@@ -8664,14 +8681,8 @@ def _render_sim_revenu_passif(valeur_depart, apport_mensuel_defaut, rendement_de
 
         _sim_stats(
             _sim_stat("Valeur future brute", fmt_eur(valeur_future / defl)),
-            _sim_stat("Dont plus-value", fmt_eur(plus_value / defl), "#16a34a" if plus_value >= 0 else "#dc2626"),
-            _sim_stat("Impôt sur les gains", fmt_eur(impot_du / defl), "#d97706"),
+            _sim_stat("Dont intérêts", fmt_eur(plus_value / defl), "#16a34a" if plus_value >= 0 else "#dc2626"),
             small=True,
-        )
-        st.caption(
-            "Projection indicative, non garantie : rendement constant, versements en fin d'année, impôt appliqué une "
-            "seule fois sur la plus-value finale, montants corrigés de l'inflation, revenu passif = taux de retrait × "
-            "valeur nette. Le rendement proposé est celui constaté depuis l'ouverture du PEA."
         )
 
 
