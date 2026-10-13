@@ -4656,7 +4656,7 @@ def _compute_ticker_daily_history_cached(ticker, df_ticker, start_date_str, end_
                 _veille = _today_n - pd.Timedelta(days=1)
                 while _veille.weekday() >= 5:
                     _veille -= pd.Timedelta(days=1)
-                if _bars.index.max().normalize() < _veille and _veille >= all_dates[0]:
+                if _veille not in set(_bars.index.normalize()) and _veille >= all_dates[0]:
                     _pc = get_previous_close(ticker)
                     if _pc:
                         aligned_hist.loc[_veille:_today_n - pd.Timedelta(days=1)] = _pc
@@ -5974,9 +5974,8 @@ if _tab_open(tab_positions):
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
                 df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)']).copy()
-                for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)']:
-                    df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur_arrow)
-                df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
+                for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)']:
+                    df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
 
                 def color_gain_rows(df_display):
@@ -7757,15 +7756,6 @@ if _tab_open(tab_history):
         def _rendu_onglet_historique(df_transactions, tot_invested, jour, market_epoch):
             _fmt_eur_h = _fmt_eur_lecteur()
 
-            def _fmt_eur_h_arrow(val):
-                if pd.isna(val):
-                    return "N/A"
-                if val > 0.005:
-                    return "▲ +" + _fmt_eur_h(val)
-                if val < -0.005:
-                    return "▼ " + _fmt_eur_h(val)
-                return "▬ " + _fmt_eur_h(0.0)
-
             def style_entire_row_gradient(df):
                 """Dégradé à 3 paliers (vert/rouge) calculé par quantiles PROPRES à ce tableau, via
         get_quantile_level_styles — la même palette que le classement des actions par gain."""
@@ -7874,8 +7864,8 @@ if _tab_open(tab_history):
                                 "_dt": daily_df.index[mask_actif],
                                 "Jour": daily_df.index[mask_actif].strftime("%d-%m-%Y"),
                                 "Nb Mouvements": nb_mouv_s[mask_actif].to_numpy(),
-                                "PV actées": net_real_jour_s[mask_actif].map(_fmt_eur_h_arrow),
-                                "PV latente": net_latente_jour_s[mask_actif].map(_fmt_eur_h_arrow),
+                                "PV actées": net_real_jour_s[mask_actif].map(_fmt_eur_h),
+                                "PV latente": net_latente_jour_s[mask_actif].map(_fmt_eur_h),
                                 "Dividendes": net_div_jour_s[mask_actif].map(_fmt_eur_h),
                                 "Performance": perf_pct_jour_s[mask_actif].map(fmt_perf_simple),
                                 "Valeur Actions Fin Jour": _cur["Valeur Actions (€)"][mask_actif].map(_fmt_eur_h),
@@ -7929,8 +7919,8 @@ if _tab_open(tab_history):
                                 "_dt": current_date,
                                 "Mois": mois_fr(current_date, with_year=True),
                                 "Nb Mouvements": nb_mouv,
-                                "PV actées": _fmt_eur_h_arrow(net_real_mois),
-                                "PV latente": _fmt_eur_h_arrow(net_latente_mois),
+                                "PV actées": _fmt_eur_h(net_real_mois),
+                                "PV latente": _fmt_eur_h(net_latente_mois),
                                 "Dividendes": _fmt_eur_h(net_div_mois),
                                 "Performance": fmt_perf_simple(perf_pct_mois),
                                 "Valeur Actions Fin Mois": _fmt_eur_h(current_val),
@@ -7987,8 +7977,8 @@ if _tab_open(tab_history):
                                 "_year": current_year,
                                 "Année": str(current_year),
                                 "Nb Mouvements": nb_mouv_an,
-                                "PV actées": _fmt_eur_h_arrow(net_real_an),
-                                "PV latente": _fmt_eur_h_arrow(net_latente_an),
+                                "PV actées": _fmt_eur_h(net_real_an),
+                                "PV latente": _fmt_eur_h(net_latente_an),
                                 "Dividendes": _fmt_eur_h(net_div_an),
                                 "Performance": fmt_perf_simple(perf_pct_an),
                                 "Valeur Actions Fin Année": _fmt_eur_h(current_val),
@@ -8514,7 +8504,7 @@ def _apport_mensuel_defaut():
 
 def _tick_labels(n):
     """3 à 4 graduations (numériques, sans unité) régulièrement réparties sur 1..n années."""
-    return sorted({max(1, round(n * i / 4)) for i in range(1, 5)})
+    return sorted({max(1, round(n * i / 3)) for i in range(1, 4)})
 
 
 def _an_label(k):
@@ -8552,7 +8542,7 @@ def _stacked_growth_chart(n, base, verses, interets, base_name, height=260):
         height=height, margin=dict(l=8, r=12, t=6, b=6), hovermode="x unified", showlegend=False,
         yaxis=dict(title="", rangemode="tozero", tickformat=".2s", ticksuffix=" €", nticks=4, automargin=True),
         xaxis=dict(title="", type="category", tickmode="array", tickvals=[cats[k] for k in ticks],
-                   ticktext=[str(k) for k in ticks], showgrid=False),
+                   ticktext=[cats[k] for k in ticks], tickangle=0, tickfont=dict(size=10), showgrid=False),
     )
     apply_chart_theme(fig)
     return fig
