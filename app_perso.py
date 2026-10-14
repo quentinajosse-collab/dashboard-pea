@@ -6878,6 +6878,7 @@ if _tab_open(tab_classements):
                             # que de ventes dans le classement (jusqu'à 10).
                             _y_gains = list(range(_n_gains - 1, -1, -1))  # position 0 = tout en bas
                             _montants_fmt_gains = [fmt_eur(v) for v in _vals_gains]
+                            _full_names_gains = _df_gains_disp["Nom"].astype(str).tolist()
                             _customdata_gains = [
                                 (lbl, date_str, _tip_col("Plus-value", montant_str, val),
                                  _tip_col("Performance", _pct_str_frise(pct_val), val if pd.isna(pct_val) else pct_val))
@@ -6886,7 +6887,6 @@ if _tab_open(tab_classements):
                                     _df_gains_disp["Gain Réalisé (%)"], _vals_gains
                                 )
                             ]
-                            _full_names_gains = _df_gains_disp["Nom"].astype(str).tolist()
                             fig_gains_frise = go.Figure()
                             fig_gains_frise.add_trace(_build_bar_trace(
                                 _vals_gains, _y_gains, "#16a34a", _customdata_gains, _montants_fmt_gains
@@ -6931,6 +6931,7 @@ if _tab_open(tab_classements):
                             # entreprise (sinon Plotly les fusionnait sur une seule catégorie/ligne).
                             _y_pertes = list(range(_n_pertes - 1, -1, -1))  # position 0 = tout en bas
                             _montants_fmt_pertes = [fmt_eur(v) for v in _vals_pertes]
+                            _full_names_pertes = _df_pertes_disp["Nom"].astype(str).tolist()
                             _customdata_pertes = [
                                 (lbl, date_str, _tip_col("Moins-value", montant_str, val),
                                  _tip_col("Performance", _pct_str_frise(pct_val), val if pd.isna(pct_val) else pct_val))
@@ -6939,7 +6940,6 @@ if _tab_open(tab_classements):
                                     _df_pertes_disp["Gain Réalisé (%)"], _vals_pertes
                                 )
                             ]
-                            _full_names_pertes = _df_pertes_disp["Nom"].astype(str).tolist()
                             fig_pertes_frise = go.Figure()
                             fig_pertes_frise.add_trace(_build_bar_trace(
                                 _vals_pertes, _y_pertes, "#dc2626", _customdata_pertes, _montants_fmt_pertes
