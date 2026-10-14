@@ -841,8 +841,9 @@ st.markdown(
                   white-space: nowrap; border-bottom: 1px solid #e2e8f0; }
     .pea-tbl td, .pea-tbl th.ix { text-align: center; padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #f1f5f9; }
     .pea-tbl th.ix { position: static; background: transparent; color: inherit; text-transform: none; font-size: inherit; font-weight: 600; }
-    .pea-tbl .ca { display: inline-flex; align-items: baseline; gap: 0.4em; }
-    .pea-tbl .ar { display: inline-block; width: 1em; text-align: center; }
+    .pea-tbl .ca { display: inline-flex; align-items: baseline; gap: 0.12em; }
+    .pea-tbl .ar { display: inline-block; width: 0.85em; text-align: center; }
+    .pea-tbl .un { display: inline-block; width: 0.9em; text-align: left; padding-left: 0.15em; }
     .pea-tbl .rv { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }
     .pea-tbl tbody tr:nth-child(even) { background: rgba(148,163,184,0.10); }
     @media (max-width: 640px) { .pea-tbl { font-size: 0.72rem; } .pea-tbl td, .pea-tbl th { padding: 5px 5px; } }
@@ -1848,6 +1849,12 @@ def _dash_if_empty(df, eq_cols=(), sale_flag=None, sale_col="PV actées"):
             return v == 0
         return bool(_TBL_ZERO_RE.match(str(v).strip()))
 
+    def _eq_txt(v):
+        # « = 0,00 € » / « = 0,00% » : le symbole égal suivi de la valeur nulle (sans flèche ni signe).
+        if isinstance(v, (int, float, np.integer, np.floating)):
+            return "= 0"
+        return "= " + re.sub(r"^[▬▲▼\s+\-−]+", "", str(v).strip())
+
     out = df.copy()
     flags = None if sale_flag is None else np.asarray(sale_flag, dtype=bool)
     for col in out.columns:
@@ -1855,9 +1862,9 @@ def _dash_if_empty(df, eq_cols=(), sale_flag=None, sale_col="PV actées"):
         empty = ser.map(_is_empty)
         zero = (~empty) & ser.map(_is_zero)
         if col in eq_cols:
-            res = ser.mask(zero, "=").mask(empty, "-")
+            res = ser.mask(zero, ser.map(_eq_txt)).mask(empty, "-")
         elif flags is not None and col == sale_col:
-            res = ser.mask(zero & flags, "=").mask((zero & ~flags) | empty, "-")
+            res = ser.mask(zero & flags, ser.map(_eq_txt)).mask((zero & ~flags) | empty, "-")
         else:
             res = ser.mask(zero | empty, "-")
         out[col] = res
@@ -1869,32 +1876,50 @@ def _row_styles_of(styles_df):
         return None
     return [str(x) for x in styles_df.iloc[:, 0].tolist()]
 
+_CELL_RE = re.compile(r"^(?:([▲▼▬=])\s)?(.*\d.*?)\s?(€|%)?$")
+
 def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None):
     """Tableau HTML avec toutes les valeurs centrées. row_styles : une chaîne CSS par ligne ;
-    cell_style(colonne, valeur) -> chaîne CSS d'une cellule. Défilement interne au-delà de 25 lignes."""
+    cell_style(colonne, valeur) -> chaîne CSS d'une cellule. Défilement interne au-delà de 25 lignes.
+    Dans les colonnes qui contiennent une flèche (▲ ▼ ▬ =) ou une unité (€ %), la flèche, le nombre et l'unité
+    occupent chacun une position fixe : flèches et unités sont alignées verticalement d'une ligne à l'autre."""
     cols = list(df.columns)
     head = ("<th>" + _esc(str(index_label)) + "</th>" if show_index else "") + "".join(f"<th>{_esc(str(c))}</th>" for c in cols)
     idx = list(df.index)
-    # Colonnes contenant des flèches ▲ / ▼ / ▬ : flèche en colonne fixe, montant aligné à droite -> flèches alignées.
-    _ARR = ("▲", "▼", "▬")
-    arrow_w = {}
+    # Analyse (une seule fois) de chaque colonne : (flèche, nombre, unité) par cellule, largeur max du nombre.
+    parsed, num_w, has_arrow = {}, {}, {}
     for c in cols:
-        ser = df[c].astype(str)
-        m = ser.str[:1].isin(_ARR)
-        if m.any():
-            arrow_w[c] = int(ser[m].str.len().sub(2).max())
+        vals = df[c].astype(str).tolist()
+        pl, w, ar, structured = [], 0, False, False
+        for t in vals:
+            m = _CELL_RE.match(t) if ("€" in t or "%" in t or t[:1] in "▲▼▬=") else None
+            if m and (m.group(1) or m.group(3)) and not t.rstrip().endswith(")"):
+                pl.append((m.group(1) or "", m.group(2), m.group(3) or ""))
+                w = max(w, len(m.group(2)))
+                ar = ar or bool(m.group(1))
+                structured = True
+            else:
+                pl.append(None)
+        if structured:
+            parsed[c], num_w[c], has_arrow[c] = pl, w, ar
     rows = []
     for i, row in enumerate(df.itertuples(index=False, name=None)):
         rs = (row_styles[i] if row_styles is not None else "") or ""
         tds = [f'<th class="ix">{_esc(str(idx[i]))}</th>'] if show_index else []
         for c, v in zip(cols, row):
             cs = (cell_style(c, v) if cell_style else "") or ""
-            t = str(v)
-            if c in arrow_w and t[:1] in _ARR:
-                inner = (f'<span class="ca"><span class="ar">{t[0]}</span>'
-                         f'<span class="rv" style="min-width:{arrow_w[c]}ch">{_esc(t[2:])}</span></span>')
+            p = parsed[c][i] if c in parsed else None
+            if p is not None:
+                arrow, num, unit = p
+                inner = '<span class="ca">'
+                if has_arrow[c]:
+                    inner += f'<span class="ar">{arrow}</span>'
+                inner += f'<span class="rv" style="min-width:{num_w[c]}ch">{_esc(num)}</span>'
+                if unit:
+                    inner += f'<span class="un">{unit}</span>'
+                inner += "</span>"
             else:
-                inner = _esc(t)
+                inner = _esc(str(v))
             tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
         rows.append(f'<tr style="{rs}">' + "".join(tds) + "</tr>" if rs else "<tr>" + "".join(tds) + "</tr>")
     if max_height is None and len(df) > 25:
