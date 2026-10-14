@@ -8093,18 +8093,6 @@ if _tab_open(tab_perf):
                             xaxis=dict(range=[dt_graph_start, future_date + pd.Timedelta(days=10)], autorange=False)
                         )
                         fig.update_yaxes(automargin=True)
-                        if _perf_longue:
-                            # Boutons de zoom rapide (6 mois / 1 an / 3 ans / tout) au-dessus du graphique.
-                            fig.update_layout(height=420, margin=dict(l=8, r=72, t=44, b=8))
-                            fig.update_xaxes(rangeselector=dict(
-                                buttons=[
-                                    dict(count=6, label="6M", step="month", stepmode="backward"),
-                                    dict(count=1, label="1A", step="year", stepmode="backward"),
-                                    dict(count=3, label="3A", step="year", stepmode="backward"),
-                                    dict(step="all", label="Tout"),
-                                ],
-                                x=0, y=1.0, yanchor="bottom", font=dict(size=11),
-                            ))
                     
                         fig.update_xaxes(type="date", tickformat="%d/%m/%Y", hoverformat="%d/%m/%Y", tickangle=-45, nticks=10, showticklabels=True, automargin=True)
 
