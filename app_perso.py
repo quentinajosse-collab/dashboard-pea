@@ -325,6 +325,11 @@ else:
     _logout_button()
 _current_user_id = st.session_state["_sb_user_id"]
 
+# Clés dont la LECTURE a échoué (Supabase injoignable) pendant cette exécution : on refuse alors toute
+# ÉCRITURE de cette clé, sinon l'app enregistrerait la valeur par défaut (vide) par-dessus vos vraies
+# données (watchlist, transactions, réglages...) dès la première sauvegarde automatique.
+_SUPABASE_LOAD_FAILED = set()
+
 def _supabase_get_value(key_name, default):
     """Lit la valeur (colonne jsonb) associée à `key_name` POUR L'UTILISATEUR CONNECTÉ dans
     app_storage. Ne fait jamais planter l'app : si Supabase est injoignable ou que la ligne
@@ -339,10 +344,11 @@ def _supabase_get_value(key_name, default):
             .eq("user_id", _current_user_id)
             .execute()
         )
+        _SUPABASE_LOAD_FAILED.discard(key_name)
         if res.data:
             return res.data[0]["value"]
     except Exception:
-        pass
+        _SUPABASE_LOAD_FAILED.add(key_name)
     return default
 
 def _supabase_set_value(key_name, value):
@@ -350,6 +356,9 @@ def _supabase_set_value(key_name, value):
     app_storage. Renvoie (True, None) en cas de succès, (False, message_erreur) sinon — même
     contrat que les anciennes fonctions save_*_csv/save_config, pour ne rien changer côté
     appelants."""
+    if key_name in _SUPABASE_LOAD_FAILED:
+        return False, ("Enregistrement bloqué : la lecture de vos données a échoué (connexion Supabase), "
+                       "les écraser avec une valeur vide serait dangereux. Rechargez la page.")
     try:
         sb = get_supabase_client()
         sb.table("app_storage").upsert(
@@ -1153,6 +1162,17 @@ _TIP_JS = r"""
   P.document.head.appendChild(s);
 })();
 """
+
+
+def _hover_zone_trace(x_edge, y_positions, customdata, hovertemplate):
+    """Barre invisible couvrant toute la largeur de chaque ligne d'un classement horizontal : l'infobulle de la
+    barre s'affiche alors en survolant (ou en touchant) n'importe quel point de la ligne, même quand la barre
+    visible est très courte (téléphone). À ajouter AVANT la vraie barre, avec barmode=\"overlay\"."""
+    return go.Bar(
+        x=[x_edge] * len(y_positions), y=list(y_positions), orientation="h",
+        marker=dict(color="rgba(0,0,0,0)"), customdata=customdata, hovertemplate=hovertemplate,
+        showlegend=False, cliponaxis=False,
+    )
 
 
 def _paired_columns(key):
@@ -2105,6 +2125,11 @@ def _make_tx_period_agg(df_tx):
         frais = float(np.nansum(_frais[m])) if _frais is not None else 0.0
         apports = float(np.nansum(_qty[m & _is_apport]))
         return nb, achats, frais, apports
+    def ventes(annee, mois=None):
+        """Montant brut des ventes (quantité × prix unitaire) sur le mois ou l'année."""
+        m = (_yr == annee) if mois is None else ((_yr == annee) & (_mo == mois))
+        return float(np.nansum(_montant_achat[m & _is_vente]))
+    agg.ventes = ventes
     return agg
 
 def get_quantile_level_styles(vals_arr):
@@ -2603,7 +2628,7 @@ def _render_allocation(df_active, cash):
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
-    """Barre de progression pleine largeur (objectif annuel, net conservé après retrait)."""
+    """Barre de progression pleine largeur (objectif, net conservé après retrait)."""
     pct_c = max(0.0, min(float(pct), 100.0))
     return (
         '<div style="background:#e2e8f0; border-radius:999px; height:34px; overflow:hidden; position:relative; box-shadow: inset 0 2px 5px rgba(0,0,0,0.10);">'
@@ -3718,6 +3743,11 @@ def _import_build_updates(op, all_actions, owned):
         if name:
             u[key_sel] = name
             known["name"] = name
+        elif key_sel == "k_achat_nom":
+            # Achat : case unique (liste + saisie libre) -> le nouveau nom est écrit directement dans la case.
+            u[key_sel] = (alias or {}).get("nom") or op.name
+            if alias and alias.get("ticker"):
+                u[key_tick_new] = alias["ticker"]
         else:
             u[key_sel] = _SENTINEL_NOUVEAU
             u[key_new] = (alias or {}).get("nom") or op.name
@@ -3899,20 +3929,44 @@ def dialog_saisie_operation():
 
         if op_type == "ACHAT":
             _field_label("Nom de l'action / ETF")
+            # UNE SEULE case : on choisit une action existante OU on tape directement un nouveau nom (proposé
+            # dans la liste déroulante). Repli sur l'ancien fonctionnement (liste + case « Nouveau ») si la version
+            # de Streamlit ne gère pas encore accept_new_options.
+            _nom_achat_fusionne = True
             with _req_field("req_achat_nom", "k_achat_nom", track=required_fields):
-                choix_action_achat = st.selectbox(
-                    "Nom de l'action / ETF",
-                    options=[_SENTINEL_NOUVEAU] + all_actions_historique,
-                    index=None,
-                    placeholder="Choisissez une action existante ou ajoutez-en une nouvelle...",
-                    key="k_achat_nom",
-                    label_visibility="collapsed",
-                )
-            if choix_action_achat == _SENTINEL_NOUVEAU:
-                _field_label("Nom de l'action / ETF (Nouveau)")
-                with _req_field("req_achat_nom_nouveau", "k_achat_nom_new", track=required_fields):
-                    nom_action = st.text_input("Nom de l'action / ETF (Nouveau)", key="k_achat_nom_new",
-                                                placeholder="Nom de l'action ou de l'ETF", label_visibility="collapsed")
+                try:
+                    choix_action_achat = st.selectbox(
+                        "Nom de l'action / ETF",
+                        options=all_actions_historique,
+                        index=None,
+                        accept_new_options=True,
+                        placeholder="Choisissez une action existante ou tapez un nouveau nom...",
+                        key="k_achat_nom",
+                        label_visibility="collapsed",
+                    )
+                except TypeError:
+                    _nom_achat_fusionne = False
+                    choix_action_achat = st.selectbox(
+                        "Nom de l'action / ETF",
+                        options=[_SENTINEL_NOUVEAU] + all_actions_historique,
+                        index=None,
+                        placeholder="Choisissez une action existante ou ajoutez-en une nouvelle...",
+                        key="k_achat_nom",
+                        label_visibility="collapsed",
+                    )
+            _achat_nom_nouveau = (
+                (choix_action_achat == _SENTINEL_NOUVEAU)
+                or (_nom_achat_fusionne and bool(str(choix_action_achat or "").strip())
+                    and choix_action_achat not in all_actions_historique)
+            )
+            if _achat_nom_nouveau:
+                if choix_action_achat == _SENTINEL_NOUVEAU:
+                    _field_label("Nom de l'action / ETF (Nouveau)")
+                    with _req_field("req_achat_nom_nouveau", "k_achat_nom_new", track=required_fields):
+                        nom_action = st.text_input("Nom de l'action / ETF (Nouveau)", key="k_achat_nom_new",
+                                                    placeholder="Nom de l'action ou de l'ETF", label_visibility="collapsed")
+                else:
+                    nom_action = str(choix_action_achat).strip()
                 _field_label("Ticker")
                 with _req_field("req_achat_ticker_nouveau", "k_achat_ticker_new", track=required_fields):
                     ticker = st.text_input("Ticker", key="k_achat_ticker_new",
@@ -4148,6 +4202,16 @@ def dialog_saisie_operation():
                 )
 
         st.markdown('<div class="op-card-title">🗓️ Date de l\'opération</div>', unsafe_allow_html=True)
+        # Cases date/heure vides par défaut : on masque le format indicatif (« DD-MM-YYYY », « HH:mm:ss »).
+        st.markdown(
+            "<style>"
+            ".st-key-k_date_full input::placeholder, .st-key-k_date_simple input::placeholder, "
+            ".st-key-k_heure_full input::placeholder { color: transparent !important; opacity: 0 !important; } "
+            ".st-key-k_heure_full [data-baseweb=\"select\"] [class*=\"laceholder\"], "
+            ".st-key-k_heure_full [data-baseweb=\"select\"] div[aria-hidden=\"true\"] { color: transparent !important; } "
+            "</style>",
+            unsafe_allow_html=True,
+        )
         if op_type in ["APPORT", "RETRAIT", "DIVIDENDE", "SPLIT"]:
             with _req_field("req_date_simple", "k_date_simple", track=required_fields):
                 tx_date = st.date_input("Date", value=None, format="DD-MM-YYYY", key="k_date_simple", label_visibility="collapsed")
@@ -4245,6 +4309,29 @@ def dialog_saisie_operation():
                 except Exception as e:
                     st.error(f"Erreur : {e}")
 
+def _sim_headline_duo(items):
+    """Deux indicateurs côte à côte (y compris sur téléphone) ; items = (libellé, valeur, sous-texte, mis_en_avant)."""
+    parts = []
+    for it in items:
+        k, v, sub, hl = it[:4]
+        col = it[4] if len(it) > 4 else None
+        sty = f' style="color:{col};"' if col else ""
+        parts.append(
+            f'<div class="pea-duo-item{" hl" if hl else ""}"><div class="k">{k}</div><div class="v"{sty}>{v}</div>'
+            + (f'<div class="s">{sub}</div>' if sub else "") + "</div>"
+        )
+    cls = " tri" if len(items) == 3 else ""
+    st.markdown(f'<div class="pea-duo{cls}">{"".join(parts)}</div>', unsafe_allow_html=True)
+
+
+def _sim_headline(label, value, sub="", color="#0f172a"):
+    sub_html = f'<div class="s">{sub}</div>' if sub else ""
+    st.markdown(
+        f'<div class="pea-head"><div class="k">{label}</div><div class="v" style="color:{color};">{value}</div>{sub_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 @dialog_wrapper("🧪 Simulation nouvelle opération")
 def dialog_simulation_operation():
     """Simulateur "what-if" (Achat / Vente / Split) : ne modifie jamais les transactions
@@ -4307,18 +4394,24 @@ def dialog_simulation_operation():
     def _render_before_after(items):
         cards = ""
         for label, avant_str, apres_str, delta_str, delta_color in items:
+            _acc = delta_color if (isinstance(delta_color, str) and delta_color.startswith("#")) else "#94a3b8"
+            _pill_bg = (_acc + "1a") if len(_acc) == 7 else "#f1f5f9"
             cards += (
-                '<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:12px 16px; flex:1; min-width:200px;">'
-                f'<div style="font-size:0.7rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em; margin-bottom:8px;">{label}</div>'
-                '<div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">'
-                f'<span style="font-size:0.82rem; color:#94a3b8; text-decoration:line-through;">{avant_str}</span>'
-                '<span style="color:#cbd5e1; font-weight:700;">→</span>'
-                f'<span style="font-size:1.08rem; font-weight:800; color:#0f172a;">{apres_str}</span>'
+                f'<div style="background:linear-gradient(180deg,#ffffff,#f8fafc); border:1px solid #e2e8f0; border-top:3px solid {_acc}; '
+                'border-radius:12px; padding:12px 14px; flex:1 1 150px; min-width:0; box-shadow:0 1px 3px rgba(15,23,42,0.06);">'
+                f'<div style="font-size:0.7rem; color:#475569; text-transform:uppercase; font-weight:800; letter-spacing:0.05em; margin-bottom:10px;">{label}</div>'
+                '<div style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">'
+                '<div><div style="font-size:0.6rem; color:#94a3b8; font-weight:700; text-transform:uppercase;">Avant</div>'
+                f'<div style="font-size:0.9rem; color:#64748b; font-weight:600;">{avant_str}</div></div>'
+                '<div style="color:#94a3b8; font-weight:800; font-size:1.1rem; padding-bottom:1px;">→</div>'
+                '<div><div style="font-size:0.6rem; color:#94a3b8; font-weight:700; text-transform:uppercase;">Après</div>'
+                f'<div style="font-size:1.2rem; font-weight:800; color:#0f172a; line-height:1.15;">{apres_str}</div></div>'
                 '</div>'
-                f'<div style="font-size:0.76rem; font-weight:700; color:{delta_color}; margin-top:4px;">{delta_str}</div>'
+                f'<div style="display:inline-block; margin-top:10px; padding:2px 10px; border-radius:999px; background:{_pill_bg}; '
+                f'font-size:0.76rem; font-weight:800; color:{_acc};">{delta_str}</div>'
                 '</div>'
             )
-        st.markdown(f'<div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:10px;">{cards}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="display:flex; flex-wrap:wrap; gap:10px;">{cards}</div>', unsafe_allow_html=True)
 
     type_wi = st.radio("Type d'opération", ["Achat", "Vente", "Achat/Vente", "Split"], horizontal=True, key="k_whatif_type")
 
@@ -4544,7 +4637,7 @@ def dialog_simulation_operation():
             if type_wi == "Achat":
                 # Le PRU net n'évolue jamais lors d'une simple vente (seule la quantité détenue
                 # change) : la carte n'a donc de sens à afficher que côté achat.
-                _cartes_ligne1_wi.append(("🎯 PRU net", fmt_eur(pru_avant), fmt_eur(pru_apres), d_pru, c_pru))
+                _cartes_ligne1_wi.append(("🎯 PRU net", fmt_price_dynamic(pru_avant, include_comm=False), fmt_price_dynamic(pru_apres, include_comm=False), d_pru, c_pru))
             _render_before_after(_cartes_ligne1_wi)
             st.markdown("<div style='height:10px;'></div>", unsafe_allow_html=True)
             _render_before_after([
@@ -4642,149 +4735,153 @@ def dialog_simulation_operation():
                 _detail_frais_achat_av.append(f"TTF {fmt_eur(ttf_achat_av)}")
             _detail_frais_achat_str_av = " + ".join(_detail_frais_achat_av) if _detail_frais_achat_av else "aucun frais"
 
-            st.markdown(
-                f'<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 14px; margin-top:4px;">'
-                f'<div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">'
-                f'<div><div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Quantité achetable</div>'
-                f'<div style="font-size:0.78rem; color:#64748b; margin-top:2px;">{quantite_av:g} action(s) × {fmt_eur(prix_achat_av)} ({_detail_frais_achat_str_av})</div></div>'
-                f'<div style="text-align:right;"><div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Montant total payé</div>'
-                f'<div style="font-size:1.05rem; font-weight:800; color:#0f172a;">{fmt_eur(capital_investi_av)}</div></div>'
-                f'</div>'
-                f'<div style="margin-top:8px; font-size:0.78rem; color:#64748b;">💶 Prix d\'achat par action brut de frais d\'achat : <b style="color:#0f172a;">{fmt_price_dynamic(prix_achat_av, include_comm=False)}</b></div>'
-                f'<div style="margin-top:4px; padding:6px 10px; background:#eff6ff; border-radius:6px; font-size:0.95rem; font-weight:800; color:#1d4ed8;">💶 Prix d\'achat par action net de frais d\'achat : {fmt_price_dynamic(prix_achat_net_av, include_comm=False)}</div>'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+            # --- Achat : prix par action brut / net de frais, puis quantité achetable et montant total payé ---
+            _sim_headline_duo([
+                ("Prix d'achat / action brut de frais", fmt_price_dynamic(prix_achat_av, include_comm=False), "", False),
+                ("Prix d'achat / action net de frais", fmt_price_dynamic(prix_achat_net_av, include_comm=False),
+                 _detail_frais_achat_str_av, True, "#1d4ed8"),
+            ])
+            _sim_headline_duo([
+                ("Quantité achetable", f"{quantite_av:g}", "action(s)", False),
+                ("Montant total payé", fmt_eur(capital_investi_av), "frais inclus", False, "#0f172a"),
+            ])
 
-            st.markdown("<hr style='margin:14px 0;'>", unsafe_allow_html=True)
-            st.markdown("**🎯 Objectif de gain à la revente**")
+            # --- Deux boutons : objectif de gain à la revente / gain en vendant à un prix donné ---
+            if "k_whatif_av_mode" not in st.session_state:
+                st.session_state["k_whatif_av_mode"] = None
 
-            # Les deux champs (€ et %) restent synchronisés via deux callbacks on_change :
-            # modifier l'un recalcule immédiatement l'autre à partir du capital investi net de
-            # frais (capital_investi_av, déjà connu à ce stade). La mise à jour de
-            # session_state se fait dans le callback, donc AVANT que le widget correspondant ne
-            # soit ré-instancié au prochain rerun déclenché par ce même callback : pas de conflit
-            # possible avec Streamlit ("cannot be modified after widget is instantiated").
-            #
-            # "k_whatif_av_last_field" mémorise LEQUEL des deux champs (€ ou %) a été saisi en
-            # dernier par l'utilisateur. Ça sert à gérer le cas où c'est le PRIX D'ACHAT ou le
-            # MONTANT À INVESTIR qui change ensuite (donc le capital investi, capital_investi_av) :
-            # sans ça, modifier le montant après avoir saisi un gain en % laissait le gain en €
-            # figé sur son ancienne valeur (et inversement), les deux champs devenant incohérents
-            # entre eux. On compare donc à chaque exécution le capital investi actuel à sa valeur
-            # lors du dernier passage ("k_whatif_av_capital_prev") : s'il a changé, on recalcule
-            # automatiquement le champ qui n'a PAS été modifié en dernier, pour garder l'autre
-            # (celui réellement saisi par l'utilisateur) inchangé.
-            def _av_on_gain_eur_change():
-                st.session_state["k_whatif_av_last_field"] = "eur"
-                if capital_investi_av > 0:
-                    st.session_state["k_whatif_av_gain_pct"] = round(
-                        st.session_state["k_whatif_av_gain_eur"] / capital_investi_av * 100, 2
-                    )
-                st.session_state["k_whatif_av_capital_prev"] = capital_investi_av
+            def _av_set_mode(m):
+                st.session_state["k_whatif_av_mode"] = m
 
-            def _av_on_gain_pct_change():
-                st.session_state["k_whatif_av_last_field"] = "pct"
-                if capital_investi_av > 0:
-                    st.session_state["k_whatif_av_gain_eur"] = round(
-                        st.session_state["k_whatif_av_gain_pct"] / 100 * capital_investi_av, 2
-                    )
-                st.session_state["k_whatif_av_capital_prev"] = capital_investi_av
+            _mode_av = st.session_state["k_whatif_av_mode"]
+            st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+            with st.container(key="compact_cols_av_mode"):
+                _cb1, _cb2 = st.columns(2)
+                _cb1.button("🎯 Objectif de gain à la revente", key="k_whatif_av_btn_obj", use_container_width=True,
+                            type=("primary" if _mode_av == "objectif" else "secondary"),
+                            on_click=_av_set_mode, args=("objectif",))
+                _cb2.button("💹 Gain si je vends à un prix", key="k_whatif_av_btn_prix", use_container_width=True,
+                            type=("primary" if _mode_av == "prix" else "secondary"),
+                            on_click=_av_set_mode, args=("prix",))
 
-            # Pas de paramètre "value" sur ces deux widgets : dès lors qu'ils sont pilotés par
-            # les callbacks ci-dessus (qui écrivent directement dans session_state), passer EN
-            # PLUS un "value" explicite créerait un conflit avec Session State. On initialise
-            # donc la valeur par défaut nous-mêmes, une seule fois, avant la création du widget.
-            if "k_whatif_av_gain_eur" not in st.session_state:
-                st.session_state["k_whatif_av_gain_eur"] = 0.0
-            if "k_whatif_av_gain_pct" not in st.session_state:
-                st.session_state["k_whatif_av_gain_pct"] = 0.0
-            if "k_whatif_av_last_field" not in st.session_state:
-                st.session_state["k_whatif_av_last_field"] = "pct"
-            if "k_whatif_av_capital_prev" not in st.session_state:
-                st.session_state["k_whatif_av_capital_prev"] = capital_investi_av
+            if _mode_av is None:
+                st.caption("Choisissez un des deux boutons ci-dessus pour simuler la revente.")
+            else:
+                # Exonération de commission COURTIER À LA VENTE, indépendante de celle de l'achat (une offre de
+                # courtage gratuit peut ne s'appliquer qu'à l'achat, ou inversement).
+                exoneration_commission_vente_av = st.checkbox(
+                    "🚫 Exonération des commissions courtier (vente)",
+                    key="k_whatif_av_exoneration_commission_vente",
+                    help="À cocher si la revente est exonérée de commission courtier : le taux ci-dessus ne sera alors pas appliqué à la vente."
+                )
+                _taux_c_vente_av = 0.0 if exoneration_commission_vente_av else (taux_courtier_pct_wi / 100.0)
 
-            # Le prix d'achat ou le montant à investir ont changé depuis le dernier passage : on
-            # recalcule le champ non saisi en dernier à partir du nouveau capital investi, AVANT
-            # la création des widgets ci-dessous (obligatoire : Streamlit interdit de modifier
-            # session_state APRÈS l'instanciation du widget correspondant).
-            if abs(capital_investi_av - st.session_state["k_whatif_av_capital_prev"]) > 1e-9:
-                if st.session_state["k_whatif_av_last_field"] == "eur":
+            if _mode_av == "objectif":
+                # Les deux champs (€ et %) restent synchronisés via deux callbacks on_change : modifier l'un recalcule
+                # immédiatement l'autre à partir du capital investi net de frais. La mise à jour de session_state se
+                # fait dans le callback, donc AVANT que le widget ne soit ré-instancié au rerun suivant.
+                # "k_whatif_av_last_field" mémorise LEQUEL des deux champs a été saisi en dernier : si le prix d'achat
+                # ou le montant changent ensuite (donc le capital investi), on recalcule automatiquement l'AUTRE champ.
+                def _av_on_gain_eur_change():
+                    st.session_state["k_whatif_av_last_field"] = "eur"
                     if capital_investi_av > 0:
                         st.session_state["k_whatif_av_gain_pct"] = round(
                             st.session_state["k_whatif_av_gain_eur"] / capital_investi_av * 100, 2
                         )
-                else:
+                    st.session_state["k_whatif_av_capital_prev"] = capital_investi_av
+
+                def _av_on_gain_pct_change():
+                    st.session_state["k_whatif_av_last_field"] = "pct"
                     if capital_investi_av > 0:
                         st.session_state["k_whatif_av_gain_eur"] = round(
                             st.session_state["k_whatif_av_gain_pct"] / 100 * capital_investi_av, 2
                         )
-                st.session_state["k_whatif_av_capital_prev"] = capital_investi_av
+                    st.session_state["k_whatif_av_capital_prev"] = capital_investi_av
 
-            col_gain_eur_av, col_gain_pct_av = st.columns(2)
-            with col_gain_eur_av:
-                st.number_input(
-                    "Gain souhaité (€)",
-                    step=0.01, format="%.2f",
-                    key="k_whatif_av_gain_eur",
-                    on_change=_av_on_gain_eur_change,
-                    help="Le gain net souhaité (après commission de revente), en euros. Modifiez ce champ ou celui de droite : les deux restent synchronisés."
-                )
-            with col_gain_pct_av:
-                st.number_input(
-                    "Gain souhaité (%)",
-                    step=0.01, format="%.2f",
-                    key="k_whatif_av_gain_pct",
-                    on_change=_av_on_gain_pct_change,
-                    help="Le même gain souhaité, exprimé en pourcentage du montant total payé à l'achat (frais inclus)."
-                )
+                if "k_whatif_av_gain_eur" not in st.session_state:
+                    st.session_state["k_whatif_av_gain_eur"] = 0.0
+                if "k_whatif_av_gain_pct" not in st.session_state:
+                    st.session_state["k_whatif_av_gain_pct"] = 0.0
+                if "k_whatif_av_last_field" not in st.session_state:
+                    st.session_state["k_whatif_av_last_field"] = "pct"
+                if "k_whatif_av_capital_prev" not in st.session_state:
+                    st.session_state["k_whatif_av_capital_prev"] = capital_investi_av
 
-            # Exonération de commission COURTIER À LA VENTE, indépendante de celle de l'achat
-            # (l'une n'implique pas l'autre : une offre de courtage gratuit peut ne s'appliquer
-            # qu'à l'achat, ou inversement). Avant l'ajout de cette case, le calcul du prix de
-            # vente nécessaire réutilisait par erreur le réglage d'exonération de l'ACHAT pour
-            # décider si la commission de VENTE devait, elle aussi, être annulée — ce qui faussait
-            # le prix de vente calculé dès que l'achat était exonéré mais pas la vente (ou
-            # inversement).
-            exoneration_commission_vente_av = st.checkbox(
-                "🚫 Exonération des commissions courtier (vente)",
-                key="k_whatif_av_exoneration_commission_vente",
-                help="À cocher si la revente est exonérée de commission courtier : le taux ci-dessus ne sera alors pas appliqué à la vente."
-            )
-            _taux_c_vente_av = 0.0 if exoneration_commission_vente_av else (taux_courtier_pct_wi / 100.0)
+                if abs(capital_investi_av - st.session_state["k_whatif_av_capital_prev"]) > 1e-9:
+                    if st.session_state["k_whatif_av_last_field"] == "eur":
+                        if capital_investi_av > 0:
+                            st.session_state["k_whatif_av_gain_pct"] = round(
+                                st.session_state["k_whatif_av_gain_eur"] / capital_investi_av * 100, 2
+                            )
+                    else:
+                        if capital_investi_av > 0:
+                            st.session_state["k_whatif_av_gain_eur"] = round(
+                                st.session_state["k_whatif_av_gain_pct"] / 100 * capital_investi_av, 2
+                            )
+                    st.session_state["k_whatif_av_capital_prev"] = capital_investi_av
 
-            gain_eur_cible_av = float(st.session_state.get("k_whatif_av_gain_eur", 0.0))
+                with st.container(key="compact_cols_av_gain"):
+                    col_gain_eur_av, col_gain_pct_av = st.columns(2)
+                    with col_gain_eur_av:
+                        st.number_input(
+                            "Gain souhaité (€)",
+                            step=0.01, format="%.2f",
+                            key="k_whatif_av_gain_eur",
+                            on_change=_av_on_gain_eur_change,
+                            help="Le gain net souhaité (après commission de revente), en euros. Modifiez ce champ ou celui de droite : les deux restent synchronisés."
+                        )
+                    with col_gain_pct_av:
+                        st.number_input(
+                            "Gain souhaité (%)",
+                            step=0.01, format="%.2f",
+                            key="k_whatif_av_gain_pct",
+                            on_change=_av_on_gain_pct_change,
+                            help="Le même gain souhaité, exprimé en pourcentage du montant total payé à l'achat (frais inclus)."
+                        )
 
-            if abs(1.0 - _taux_c_vente_av) < 1e-9:
-                st.warning("⚠️ Taux de commission de 100% invalide pour le calcul du prix de vente.")
-            else:
-                # "Prix de vente par action brut de frais de vente" = le prix théorique
-                # nécessaire pour le gain visé SANS tenir compte de la commission de vente
-                # (calcul naïf, la commission n'est pas encore déduite).
-                # "Prix de vente par action net de frais de vente" = le prix RÉEL à saisir dans
-                # l'ordre de vente pour qu'une fois la commission de vente déduite, le gain visé
-                # soit malgré tout atteint : logiquement PLUS ÉLEVÉ que le brut, puisqu'il faut
-                # compenser la commission qui sera prélevée dessus. C'est donc bien ce prix "net"
-                # qu'il faut viser au moment de passer l'ordre.
-                montant_vente_net_cible_av = gain_eur_cible_av + capital_investi_av
-                prix_vente_brut_av = montant_vente_net_cible_av / quantite_av
-                montant_vente_net_reel_av = montant_vente_net_cible_av / (1.0 - _taux_c_vente_av)
-                prix_vente_net_av = montant_vente_net_reel_av / quantite_av
-                gain_reel_pct_av = (gain_eur_cible_av / capital_investi_av * 100) if capital_investi_av > 0 else 0.0
+                gain_eur_cible_av = float(st.session_state.get("k_whatif_av_gain_eur", 0.0))
 
-                gain_color_av = "#16a34a" if gain_eur_cible_av > 0.005 else ("#dc2626" if gain_eur_cible_av < -0.005 else "#64748b")
-                _gain_reel_pct_str_av = f"{gain_reel_pct_av:,.2f}".replace(",", " ").replace(".", ",")
-                _gain_sign_av = "+" if gain_eur_cible_av >= 0 else ""
+                if abs(1.0 - _taux_c_vente_av) < 1e-9:
+                    st.warning("⚠️ Taux de commission de 100% invalide pour le calcul du prix de vente.")
+                else:
+                    # \"Brut de frais de vente\" = prix nécessaire pour le gain visé SANS tenir compte de la commission
+                    # de vente ; \"net de frais de vente\" = prix RÉEL à saisir dans l'ordre pour qu'une fois la
+                    # commission de vente déduite, le gain visé soit atteint (donc plus élevé que le brut).
+                    montant_vente_net_cible_av = gain_eur_cible_av + capital_investi_av
+                    prix_vente_brut_av = montant_vente_net_cible_av / quantite_av
+                    montant_vente_net_reel_av = montant_vente_net_cible_av / (1.0 - _taux_c_vente_av)
+                    prix_vente_net_av = montant_vente_net_reel_av / quantite_av
+                    _sim_headline_duo([
+                        ("Prix de vente / action brut de frais de vente", fmt_price_dynamic(prix_vente_brut_av, include_comm=False), "", False),
+                        ("Prix de vente / action net de frais de vente", fmt_price_dynamic(prix_vente_net_av, include_comm=False), "à saisir dans l'ordre", True, "#7c3aed"),
+                    ])
+                    _sim_headline("Montant total de vente", fmt_eur(montant_vente_net_reel_av), "", "#7c3aed")
 
-                st.markdown(
-                    f'<div style="margin-top:10px; padding: 12px 16px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid {gain_color_av}; border-radius:8px;">'
-                    f'<div style="font-size:0.78rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">💹 Prix de vente nécessaire par action pour {_gain_sign_av}{fmt_eur(gain_eur_cible_av)} ({_gain_sign_av}{_gain_reel_pct_str_av} %)</div>'
-                    f'<div style="font-size:0.85rem; color:#64748b; margin-top:4px;">💶 Prix de vente par action brut de frais de vente : <b style="color:#0f172a;">{fmt_price_dynamic(prix_vente_brut_av, include_comm=False)}</b></div>'
-                    f'<div style="margin-top:4px; padding:6px 10px; background:#f5f3ff; border-radius:6px; font-size:0.95rem; font-weight:800; color:#7c3aed;">💶 Prix de vente par action net de frais de vente : {fmt_price_dynamic(prix_vente_net_av, include_comm=False)}</div>'
-                    f'<div style="margin-top:4px; padding:6px 10px; background:#f5f3ff; border-radius:6px; font-size:0.95rem; font-weight:800; color:#7c3aed;">💰 Montant total de vente : {fmt_eur(montant_vente_net_reel_av)}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
+            elif _mode_av == "prix":
+                with st.container(key="compact_cols_av_prixvente"):
+                    prix_vente_saisi_av = st.number_input(
+                        "Prix de vente par action (€)",
+                        min_value=0.0, step=0.0001, value=None, format="%.4f",
+                        placeholder="Entrez un prix de vente...",
+                        key="k_whatif_av_prix_vente",
+                    )
+                if prix_vente_saisi_av and prix_vente_saisi_av > 0:
+                    montant_vente_brut_av = round(quantite_av * prix_vente_saisi_av, 2)
+                    commission_vente_av = round(montant_vente_brut_av * _taux_c_vente_av, 2)
+                    montant_vente_recu_av = round(montant_vente_brut_av - commission_vente_av, 2)
+                    gain_brut_av = round(montant_vente_brut_av - montant_brut_achat_av, 2)      # hors tous frais
+                    gain_net_av = round(montant_vente_recu_av - capital_investi_av, 2)           # après frais d'achat et de vente
+                    gain_pct_av = (gain_net_av / capital_investi_av * 100) if capital_investi_av > 0 else 0.0
+                    _col_pct = "#16a34a" if gain_net_av > 0.005 else ("#dc2626" if gain_net_av < -0.005 else "#64748b")
+                    _col_brut = "#16a34a" if gain_brut_av > 0.005 else ("#dc2626" if gain_brut_av < -0.005 else "#64748b")
+                    _sg = lambda v: ("+" if v > 0.005 else "") + fmt_eur(v)
+                    _sim_headline_duo([
+                        ("Gain en %", ("+" if gain_pct_av > 0.005 else "") + f"{gain_pct_av:,.2f} %".replace(",", " ").replace(".", ","),
+                         "net de frais", True, _col_pct),
+                        ("Gain brut de frais", _sg(gain_brut_av), "", False, _col_brut),
+                        ("Gain net de frais", _sg(gain_net_av), "", False, _col_pct),
+                    ])
+                    st.caption(f"Montant de vente : {fmt_eur(montant_vente_brut_av)} − commission {fmt_eur(commission_vente_av)} = {fmt_eur(montant_vente_recu_av)} reçus.")
 
     else:
         # --- Simulation d'un SPLIT / regroupement ---
@@ -5657,13 +5754,13 @@ def _tab_open(_tab):
 # de conservation de l'état). Les clés ci-dessous sont extraites automatiquement du code de
 # chaque onglet (widgets ayant un key= littéral).
 _TAB_STATE_KEYS = {
-    "tab_overview": ("k_objectif_cible", "apport_prevision_input", "k_suivi_objectif_pas", ),
+    "tab_overview": ("k_objectif_cible", "apport_prevision_input", "k_objectif_date_debut", "k_objectif_date_fin", "k_suivi_objectif_pas", ),
     "tab_apports": (),
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
-    "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
+    "tab_perf": ("k_periode_perf", "k_perf_echelle", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
     "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
-    "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_impot", "k_rp_retrait", "k_rp_infl", "k_sim_graph_mode", ),
+    "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_impot", "k_rp_retrait", "k_rp_infl", ),
 }
 _tab_objs_by_name = {
     "tab_overview": tab_overview, "tab_positions": tab_positions, "tab_apports": tab_apports, "tab_classements": tab_classements,
@@ -5758,38 +5855,96 @@ if _tab_open(tab_overview):
         # l'arrivée sur le dashboard, avant même d'ouvrir un onglet, comme n'importe quelle autre
         # alerte de ce type. N'affiche rien si la watchlist est vide ou si aucune valeur suivie n'a de
         # zone d'achat définie, pour ne pas surcharger le haut du dashboard sans raison. ---
-        with st.expander("🎯 Objectif Annuel", expanded=True):
+        with st.expander("🎯 Objectif", expanded=True):
+            # --- Valeurs ENREGISTRÉES de l'objectif (fixes tant que l'opérateur ne confirme pas un changement) ---
+            _auj_iso = _today_paris().strftime("%Y-%m-%d")
+            _cfg_dirty = False
+            if not str(app_config.get("objectif_date", "") or ""):
+                app_config["objectif_date"] = _auj_iso          # date de début par défaut = aujourd'hui
+                _cfg_dirty = True
+            if not str(app_config.get("objectif_fin", "") or ""):
+                app_config["objectif_fin"] = f"{_today_paris().year}-12-31"   # fin par défaut = 31/12 de l'année en cours
+                _cfg_dirty = True
+            if _cfg_dirty:
+                _ok_cfg, _err_cfg = save_config(app_config)
+                if not _ok_cfg:
+                    st.warning(_err_cfg)
+
+            def _to_date(v):
+                return pd.Timestamp(str(v)).date()
+
+            _cur_target = int(app_config.get("yearly_target", 10000))
+            _cur_apport = int(app_config.get("apport_previsionnel", 0))
+            _cur_debut = _to_date(app_config["objectif_date"])
+            _cur_fin = _to_date(app_config["objectif_fin"])
+
+            def _reset_objectif_inputs(t, a, d0, d1):
+                st.session_state["k_objectif_cible"] = t
+                st.session_state["apport_prevision_input"] = a
+                st.session_state["k_objectif_date_debut"] = d0
+                st.session_state["k_objectif_date_fin"] = d1
+
+            def _confirmer_objectif():
+                _t = int(st.session_state.get("k_objectif_cible", _cur_target))
+                _a = int(st.session_state.get("apport_prevision_input", _cur_apport))
+                _d0 = st.session_state.get("k_objectif_date_debut", _cur_debut)
+                _d1 = st.session_state.get("k_objectif_date_fin", _cur_fin)
+                app_config["yearly_target"] = _t
+                app_config["apport_previsionnel"] = _a
+                app_config["objectif_date"] = _d0.strftime("%Y-%m-%d")
+                app_config["objectif_fin"] = _d1.strftime("%Y-%m-%d")
+                app_config.pop("objectif_v0", None)   # la valeur de départ est désormais déduite de l'historique
+                _ok, _err = save_config(app_config)
+                if not _ok:
+                    st.session_state["_objectif_save_err"] = _err
+
             with st.container(border=True):
-                st.markdown("**💰 Objectif de fin d'année & épargne prévue**")
+                st.markdown("**💰 Objectif & épargne prévue**")
                 with st.container(key="compact_cols_objectif"):
                     col_obj_cible, col_obj_epargne = st.columns(2)
-                    current_target_val = int(app_config.get("yearly_target", 10000))
-                    new_target = col_obj_cible.number_input(
+                    _in_target = col_obj_cible.number_input(
                         "Valeur totale visée (€)",
-                        min_value=0, step=1, value=current_target_val, format="%d",
+                        min_value=0, step=1, value=_cur_target, format="%d",
                         key="k_objectif_cible",
                     )
-                    current_apport_prev_val = int(app_config.get("apport_previsionnel", 0))
-                    apport_prevision = col_obj_epargne.number_input(
-                        "Apport prévisionnel d'ici fin d'année (€)",
-                        min_value=0, step=1, value=current_apport_prev_val, format="%d",
+                    _in_apport = col_obj_epargne.number_input(
+                        "Apport prévisionnel d'ici la date visée (€)",
+                        min_value=0, step=1, value=_cur_apport, format="%d",
                         key="apport_prevision_input",
                     )
-                # Le suivi de trajectoire démarre le jour où l'opérateur renseigne (ou modifie) ces valeurs,
-                # avec la valeur du portefeuille de ce jour-là comme point de départ. Si aucune date n'est
-                # enregistrée (ou si elle date d'une année précédente), le suivi repart d'aujourd'hui.
-                _auj_iso = _today_paris().strftime("%Y-%m-%d")
-                _date_obj_cfg = str(app_config.get("objectif_date", "") or "")
-                _valeurs_modifiees = (new_target != current_target_val) or (apport_prevision != current_apport_prev_val)
-                _date_obsolete = (not _date_obj_cfg) or (_date_obj_cfg[:4] != _auj_iso[:4])
-                if _valeurs_modifiees or _date_obsolete:
-                    app_config["yearly_target"] = int(new_target)
-                    app_config["apport_previsionnel"] = int(apport_prevision)
-                    app_config["objectif_date"] = _auj_iso
-                    app_config["objectif_v0"] = float(tot_value_globale)
-                    _ok_cfg, _err_cfg = save_config(app_config)
-                    if not _ok_cfg:
-                        st.warning(_err_cfg)
+                    col_obj_d0, col_obj_d1 = st.columns(2)
+                    _in_debut = col_obj_d0.date_input(
+                        "Date de début", value=_cur_debut, min_value=date(2000, 1, 1), max_value=date(2100, 12, 31),
+                        format="DD/MM/YYYY", key="k_objectif_date_debut",
+                    )
+                    _in_fin = col_obj_d1.date_input(
+                        "Date de l'objectif (fin)", value=_cur_fin, min_value=date(2000, 1, 1), max_value=date(2100, 12, 31),
+                        format="DD/MM/YYYY", key="k_objectif_date_fin",
+                    )
+
+                _pending = (int(_in_target) != _cur_target or int(_in_apport) != _cur_apport
+                            or _in_debut != _cur_debut or _in_fin != _cur_fin)
+                if _pending:
+                    if _in_fin <= _in_debut:
+                        st.error("La date de fin doit être postérieure à la date de début.")
+                        st.button("↩️ Annuler", key="k_objectif_annuler_err", use_container_width=True,
+                                  on_click=_reset_objectif_inputs, args=(_cur_target, _cur_apport, _cur_debut, _cur_fin))
+                    else:
+                        st.warning(
+                            "⚠️ **Voulez-vous vraiment modifier votre objectif ?** Les calculs et le suivi de trajectoire "
+                            "seront recalculés avec ces nouvelles valeurs."
+                        )
+                        _col_oui, _col_non = st.columns(2)
+                        _col_oui.button("✅ Oui, modifier", key="k_objectif_confirmer", type="primary",
+                                        use_container_width=True, on_click=_confirmer_objectif)
+                        _col_non.button("↩️ Annuler", key="k_objectif_annuler", use_container_width=True,
+                                        on_click=_reset_objectif_inputs, args=(_cur_target, _cur_apport, _cur_debut, _cur_fin))
+                if st.session_state.get("_objectif_save_err"):
+                    st.warning(st.session_state.pop("_objectif_save_err"))
+
+            # Le reste de la page n'utilise QUE les valeurs enregistrées (les dates de l'objectif sont fixes).
+            new_target = _cur_target
+            apport_prevision = _cur_apport
 
             # Résultats sous les champs, sur toute la largeur.
             # La barre de progression et "Restant à atteindre" intègrent l'épargne prévue :
@@ -5822,7 +5977,7 @@ if _tab_open(tab_overview):
             # une performance qui, elle, ne porte que sur les mois restants.
             RENDEMENT_MARCHE_ANNUEL = 8.0
             today_ts = _today_paris()
-            jours_restants_annee = max((pd.Timestamp(today_ts.year, 12, 31) - today_ts).days, 1)
+            jours_restants_annee = max((pd.Timestamp(_cur_fin) - pd.Timestamp(today_ts)).days, 1)
             repere_marche_periode = RENDEMENT_MARCHE_ANNUEL * (jours_restants_annee / 365.0)
 
             # Le message reflète la difficulté de la PERFORMANCE BOURSIÈRE requise (comparée à
@@ -5874,7 +6029,7 @@ if _tab_open(tab_overview):
                 <div style="font-size:0.88rem; font-weight:700; color:{badge_color};">{badge}</div>
                 <div style="font-size:0.78rem; color:#64748b; margin-top:2px;">{badge_detail}</div>
                 <div style="font-size:0.82rem; font-weight:600; color:#475569; margin-top:6px;">
-                    📊 Performance requise sur vos actions d'ici fin d'année : <b style="color:#0f172a;">{perf_necessaire_str}</b>
+                    📊 Performance requise sur vos actions d'ici le {_cur_fin.strftime('%d/%m/%Y')} : <b style="color:#0f172a;">{perf_necessaire_str}</b>
                 </div>
             </div>
             """, 
@@ -5882,7 +6037,7 @@ if _tab_open(tab_overview):
             )
 
             # --- Suivi de la trajectoire vers l'objectif : valeur réelle du portefeuille vs valeur attendue sur une
-            # trajectoire linéaire (valeur au 31/12 de l'an dernier -> cible au 31/12), jour / semaine / mois. ---
+            # trajectoire linéaire (valeur de départ à la date de début -> cible à la date de fin), jour / semaine / mois / année. ---
             if new_target > 0 and not df_transactions.empty:
                 # Ligne vide avant le suivi ; titre et sélecteur Jour/Semaine/Mois rapprochés.
                 st.markdown(
@@ -5891,22 +6046,31 @@ if _tab_open(tab_overview):
                     unsafe_allow_html=True,
                 )
                 st.markdown("**📅 Suivi de la trajectoire vers l'objectif**")
-                _pas_suivi = st.radio("Pas du suivi", ["Jour", "Semaine", "Mois"], index=2, horizontal=True,
+                _pas_suivi = st.radio("Pas du suivi", ["Jour", "Semaine", "Mois", "Année"], index=2, horizontal=True,
                                       key="k_suivi_objectif_pas", label_visibility="collapsed")
                 _h_obj = get_portfolio_history(df_transactions)
                 _serie = _h_obj["Valeur du Portefeuille (€)"].dropna() if "Valeur du Portefeuille (€)" in _h_obj.columns else pd.Series(dtype=float)
-                _an = _today_paris().year
-                _debut_obj = pd.Timestamp(str(app_config.get("objectif_date") or _today_paris().strftime("%Y-%m-%d")))
-                _fin_obj = pd.Timestamp(_an, 12, 31)
+                # Dates FIXES de l'objectif (saisies et confirmées par l'opérateur) : début -> fin.
+                _debut_obj = pd.Timestamp(_cur_debut)
+                _fin_obj = pd.Timestamp(_cur_fin)
                 _jours_obj = max((_fin_obj - _debut_obj).days, 1)
-                _v0 = float(app_config.get("objectif_v0", tot_value_globale))
                 _auj = _today_paris()
                 _auj = pd.Timestamp(_auj.year, _auj.month, _auj.day)
+                # Valeur de DÉPART = valeur du portefeuille au DÉBUT de la journée de début, c'est-à-dire à la clôture
+                # de la veille. À défaut d'historique antérieur (premier jour du suivi, ou début dans le futur), on
+                # prend la valeur actuelle.
+                _v0 = float(tot_value_globale)
+                if len(_serie) and _debut_obj <= _auj:
+                    _avant = _serie[_serie.index < _debut_obj]
+                    if len(_avant):
+                        _v0 = float(_avant.iloc[-1])
+                    elif _debut_obj <= _serie.index[0]:
+                        _v0 = float(_serie.iloc[0])
                 _att_fn = lambda d: _v0 + (new_target - _v0) * float(np.clip((d - _debut_obj).days / _jours_obj, 0.0, 1.0))
 
                 # Échéancier COMPLET, de la date de saisie jusqu'au 31/12 : chaque ligne donne la valeur théorique
                 # attendue à la fin de la période. La valeur réelle, l'écart et le statut se remplissent au fil des
-                # jours (périodes terminées uniquement) tant que l'objectif n'est pas modifié.
+                # jours (périodes terminées + période en cours, avec la valeur du jour).
                 _starts, _ends = [], []
                 if _pas_suivi == "Jour":
                     _jr = pd.bdate_range(_debut_obj, _fin_obj)
@@ -5917,10 +6081,16 @@ if _tab_open(tab_overview):
                         _e = min(_cur_d + pd.Timedelta(days=(6 - _cur_d.weekday())), _fin_obj)
                         _starts.append(_cur_d); _ends.append(_e)
                         _cur_d = _e + pd.Timedelta(days=1)
-                else:
+                elif _pas_suivi == "Mois":
                     _cur_d = _debut_obj
                     while _cur_d <= _fin_obj:
                         _e = min(_cur_d + pd.offsets.MonthEnd(0), _fin_obj)
+                        _starts.append(_cur_d); _ends.append(_e)
+                        _cur_d = _e + pd.Timedelta(days=1)
+                else:  # Année : une ligne par année civile, entre la date de début et la date de fin
+                    _cur_d = _debut_obj
+                    while _cur_d <= _fin_obj:
+                        _e = min(pd.Timestamp(_cur_d.year, 12, 31), _fin_obj)
                         _starts.append(_cur_d); _ends.append(_e)
                         _cur_d = _e + pd.Timedelta(days=1)
 
@@ -5934,6 +6104,12 @@ if _tab_open(tab_overview):
                     else:
                         _vr = np.nan
                     _en_cours = (_d0 <= _auj <= _d1) and not (_d1 <= _auj)
+                    if _en_cours and len(_serie):
+                        # Période (semaine / mois / année) EN COURS : on n'attend pas sa fin. Valeur réelle = valeur
+                        # du jour, comparée à la valeur attendue AUJOURD'HUI sur la trajectoire (et non à celle
+                        # attendue en fin de période, ce qui donnerait un faux « en retard »).
+                        _vr = float(_serie.iloc[-1])
+                        _att = _att_fn(_auj)
                     _rows_obj.append((_d0, _d1, _att, _vr, _en_cours))
 
                 # Message de synthèse : écart d'aujourd'hui par rapport à la trajectoire théorique.
@@ -5952,18 +6128,20 @@ if _tab_open(tab_overview):
                         return d1.strftime("%d/%m/%Y")
                     if _pas_suivi == "Semaine":
                         return f"Sem. {d1.isocalendar()[1]} (au {d1.strftime('%d/%m')})"
+                    if _pas_suivi == "Année":
+                        return str(d1.year) if (d1.month, d1.day) == (12, 31) else f"{d1.year} (au {d1.strftime('%d/%m/%Y')})"
                     return f"{d1.month:02d}/{d1.year}"
 
                 _lab, _vr_t, _att_t, _ecm_t, _ecp_t, _stat_t, _styles_t = [], [], [], [], [], [], []
                 _focus = None
                 for _k, (_d0, _d1, _att, _vr, _enc) in enumerate(_rows_obj):
                     _lab.append(_lab_obj(_d0, _d1))
-                    _att_t.append(fmt_eur(_att))
+                    _att_t.append(fmt_eur(_att) + (" (auj.)" if _enc and not np.isnan(_vr) else ""))
                     if not np.isnan(_vr):
                         _ec = _vr - _att
                         _vr_t.append(fmt_eur(_vr)); _ecm_t.append(fmt_eur_arrow(_ec))
                         _ecp_t.append(fmt_perf_simple(_ec / _att * 100) if _att > 0 else "-")
-                        _stat_t.append("✅ En avance" if _ec >= 0 else "❌ En retard")
+                        _stat_t.append(("✅ En avance" if _ec >= 0 else "❌ En retard") + (" · en cours" if _enc else ""))
                     else:
                         _vr_t.append("-"); _ecm_t.append("-"); _ecp_t.append("-")
                         _stat_t.append("⏳ En cours" if _enc else "🕒 À venir")
@@ -6558,10 +6736,9 @@ if _tab_open(tab_apports):
                 apply_chart_theme(fig_ap)
                 _plotly_chart(fig_ap, use_container_width=True, theme=None, key="chart_apports_cumul")
 
-            with st.expander("📊 Versements et retraits par année", expanded=True):
+            with st.expander("📊 Versements par année", expanded=True):
                 _ann = sorted(_df_mv["Annee"].unique().tolist())
                 _v_an = [float(_df_mv.loc[(_df_mv["Type"] == "APPORT") & (_df_mv["Annee"] == a), "Quantité"].sum()) for a in _ann]
-                _r_an = [float(_df_mv.loc[(_df_mv["Type"] == "RETRAIT") & (_df_mv["Annee"] == a), "Quantité"].sum()) for a in _ann]
                 fig_ap_an = go.Figure()
                 fig_ap_an.add_trace(go.Bar(
                     x=[str(a) for a in _ann], y=_v_an, name="Versements",
@@ -6570,18 +6747,11 @@ if _tab_open(tab_apports):
                     customdata=[fmt_eur(v) for v in _v_an],
                     hovertemplate="<b>%{x}</b><br>Versements : %{customdata}<extra></extra>",
                 ))
-                if any(r > 0 for r in _r_an):
-                    fig_ap_an.add_trace(go.Bar(
-                        x=[str(a) for a in _ann], y=[-r for r in _r_an], name="Retraits",
-                        marker=dict(color="#f87171"),
-                        customdata=[fmt_eur(r) for r in _r_an],
-                        hovertemplate="<b>%{x}</b><br>Retraits : %{customdata}<extra></extra>",
-                    ))
                 fig_ap_an.update_layout(
-                    height=340, margin=dict(l=8, r=16, t=50, b=8), barmode="relative", bargap=0.35,
-                    yaxis=dict(title="", zeroline=True, zerolinewidth=2, tickformat=",.0f", ticksuffix=" €", automargin=True, nticks=6),
+                    height=340, margin=dict(l=8, r=16, t=20, b=8), bargap=0.35,
+                    yaxis=dict(title="", rangemode="tozero", zeroline=True, zerolinewidth=2, tickformat=",.0f", ticksuffix=" €", automargin=True, nticks=6),
                     xaxis=dict(title="", type="category", automargin=True),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    showlegend=False,
                 )
                 apply_chart_theme(fig_ap_an)
                 _plotly_chart(fig_ap_an, use_container_width=True, theme=None, key="chart_apports_annuels")
@@ -6592,6 +6762,35 @@ if _tab_open(tab_apports):
                     build_calendar_heatmap(
                         _df_app_only, "Date_Heure", "Quantité",
                         ["#ecfeff", "#0891b2"], "apports",
+                        date_ouverture=pea_opening_dt,
+                    )
+
+            # Retraits : même présentation que les versements (graphique par année, puis cartographie mensuelle).
+            _df_ret_only = _df_mv[_df_mv["Type"] == "RETRAIT"]
+            if not _df_ret_only.empty:
+                with st.expander("📊 Retraits par année", expanded=True):
+                    _r_an = [float(_df_mv.loc[(_df_mv["Type"] == "RETRAIT") & (_df_mv["Annee"] == a), "Quantité"].sum()) for a in _ann]
+                    fig_ret_an = go.Figure()
+                    fig_ret_an.add_trace(go.Bar(
+                        x=[str(a) for a in _ann], y=_r_an, name="Retraits",
+                        marker=dict(color="#f87171"),
+                        text=[(f"{v:,.0f}".replace(",", " ") + " €") if v > 0 else "" for v in _r_an], textposition="outside", cliponaxis=False,
+                        customdata=[fmt_eur(v) for v in _r_an],
+                        hovertemplate="<b>%{x}</b><br>Retraits : %{customdata}<extra></extra>",
+                    ))
+                    fig_ret_an.update_layout(
+                        height=340, margin=dict(l=8, r=16, t=20, b=8), bargap=0.35,
+                        yaxis=dict(title="", rangemode="tozero", zeroline=True, zerolinewidth=2, tickformat=",.0f", ticksuffix=" €", automargin=True, nticks=6),
+                        xaxis=dict(title="", type="category", automargin=True),
+                        showlegend=False,
+                    )
+                    apply_chart_theme(fig_ret_an)
+                    _plotly_chart(fig_ret_an, use_container_width=True, theme=None, key="chart_retraits_annuels")
+
+                with st.expander("🗓️ Cartographie mensuelle des retraits", expanded=True):
+                    build_calendar_heatmap(
+                        _df_ret_only, "Date_Heure", "Quantité",
+                        ["#fef2f2", "#dc2626"], "retraits",
                         date_ouverture=pea_opening_dt,
                     )
 
@@ -6724,6 +6923,11 @@ if _tab_open(tab_classements):
                     _breakdown = _breakdown_periode(_debut, _d.normalize(), _pnl_total, label_variation)
                     _customdata.append((_labels[i], _ligne_secondaire, _breakdown))
                 fig = go.Figure()
+                _edge = max(_vals) if color == "#16a34a" else min(_vals)
+                if _edge == 0:
+                    _edge = 1 if color == "#16a34a" else -1
+                _hover_tpl_rank = "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>%{customdata[2]}<extra></extra>"
+                fig.add_trace(_hover_zone_trace(_edge * 1.25, _y, _customdata, _hover_tpl_rank))
                 fig.add_trace(go.Bar(
                     x=_vals, y=_y, orientation="h",
                     marker=dict(color=color),
@@ -6732,15 +6936,13 @@ if _tab_open(tab_classements):
                     textposition="outside",
                     textfont=dict(size=11, color=color),
                     cliponaxis=False,
-                    hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<br>%{customdata[2]}<extra></extra>",
+                    hovertemplate=_hover_tpl_rank,
                     showlegend=False,
                 ))
-                _edge = max(_vals) if color == "#16a34a" else min(_vals)
-                if _edge == 0:
-                    _edge = 1 if color == "#16a34a" else -1
                 fig.update_layout(
                     height=max(220, 34 * _n + 40),
                     margin=dict(l=14, r=56, t=6, b=6),
+                    barmode="overlay",
                     bargap=0.35,
                     xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _edge * 1.25], showticklabels=False),
                     yaxis=dict(title=None, tickmode="array", tickvals=_y, ticktext=_labels, range=[-0.6, _n - 0.4], tickfont=dict(size=11)),
@@ -6826,6 +7028,11 @@ if _tab_open(tab_classements):
                         c = "#4ade80" if v >= 0 else "#f87171"
                         return f"{label} : <span style='color:{c};'>{txt}</span>"
 
+                    _HOVER_TPL_FRISE = (
+                        "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>"
+                        "%{customdata[2]}<br>%{customdata[3]}<extra></extra>"
+                    )
+
                     def _build_bar_trace(x_vals, y_positions, color, customdata_list, montants_fmt):
                         # Barre pleine (go.Bar) au lieu de l'ancien nuage de petits points qui simulait
                         # une tige : plus lisible, et le survol fonctionne sur toute la longueur de la
@@ -6840,10 +7047,7 @@ if _tab_open(tab_classements):
                             textposition="outside",
                             textfont=dict(size=11, color=color),
                             cliponaxis=False,
-                            hovertemplate=(
-                                "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>"
-                                "%{customdata[2]}<br>%{customdata[3]}<extra></extra>"
-                            ),
+                            hovertemplate=_HOVER_TPL_FRISE,
                             showlegend=False,
                         )
 
@@ -6888,6 +7092,9 @@ if _tab_open(tab_classements):
                                 )
                             ]
                             fig_gains_frise = go.Figure()
+                            fig_gains_frise.add_trace(_hover_zone_trace(
+                                (max(_vals_gains) if _vals_gains else 0) * 1.25, _y_gains, _customdata_gains, _HOVER_TPL_FRISE
+                            ))
                             fig_gains_frise.add_trace(_build_bar_trace(
                                 _vals_gains, _y_gains, "#16a34a", _customdata_gains, _montants_fmt_gains
                             ))
@@ -6899,6 +7106,7 @@ if _tab_open(tab_classements):
                             fig_gains_frise.update_layout(
                                 height=max(220, 34 * _n_gains + 40),
                                 margin=dict(l=14, r=56, t=6, b=6),
+                                barmode="overlay",
                                 bargap=0.35,
                                 xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _max_gains * 1.25], showticklabels=False),
                                 yaxis=dict(
@@ -6941,6 +7149,9 @@ if _tab_open(tab_classements):
                                 )
                             ]
                             fig_pertes_frise = go.Figure()
+                            fig_pertes_frise.add_trace(_hover_zone_trace(
+                                (min(_vals_pertes) if _vals_pertes else 0) * 1.25, _y_pertes, _customdata_pertes, _HOVER_TPL_FRISE
+                            ))
                             fig_pertes_frise.add_trace(_build_bar_trace(
                                 _vals_pertes, _y_pertes, "#dc2626", _customdata_pertes, _montants_fmt_pertes
                             ))
@@ -6953,6 +7164,7 @@ if _tab_open(tab_classements):
                             fig_pertes_frise.update_layout(
                                 height=max(220, 34 * _n_pertes + 40),
                                 margin=dict(l=14, r=56, t=6, b=6),
+                                barmode="overlay",
                                 bargap=0.35,
                                 xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _min_pertes * 1.25], showticklabels=False),
                                 yaxis=dict(
@@ -7653,6 +7865,19 @@ if _tab_open(tab_perf):
                             key="multiselect_indices_benchmarks",
                             help="Sélectionnez un ou plusieurs indices pour comparer la performance de votre portefeuille."
                         )
+                        # Longue période : échelle logarithmique en option (base 100) — les écarts relatifs restent lisibles
+                        # quand une courbe (indice, ou premières semaines du PEA) écrase toutes les autres en linéaire.
+                        _perf_longue = (graph_date_fin - graph_date_debut).days > 365
+                        if _perf_longue:
+                            _echelle_perf = st.radio(
+                                "Échelle du graphique", ["Linéaire", "Logarithmique"], horizontal=True,
+                                key="k_perf_echelle",
+                                help="Logarithmique : les variations en % ont la même hauteur partout (base 100). "
+                                     "Utile sur plusieurs années, quand la courbe s'écrase. Le survol affiche toujours la performance en %.",
+                            )
+                        else:
+                            _echelle_perf = "Linéaire"
+                        _log_perf = (_echelle_perf == "Logarithmique")
                         chart_slot = st.container()          # graphique (rempli plus bas)
                         placeholder_legende = st.empty()     # légende (remplie plus bas)
 
@@ -7699,8 +7924,18 @@ if _tab_open(tab_perf):
                             if not b_perf.empty:
                                 final_values[name] = b_perf.iloc[-1]
 
-                        future_date = sub_history_graph.index[-1] + pd.Timedelta(days=3)
-                        extended_index = sub_history_graph.index.append(pd.Index([future_date]))
+                        # Longue période : on n'affiche qu'environ 600 points (un point sur N, dernier point toujours
+                        # conservé) — la courbe reste fidèle mais n'est plus hachée/écrasée par des milliers de points.
+                        _n_pts = len(sub_history_graph.index)
+                        _pas_ds = max(1, int(np.ceil(_n_pts / 600)))
+                        if _pas_ds > 1:
+                            _keep_pos = sorted(set(range(0, _n_pts, _pas_ds)) | {_n_pts - 1})
+                            _idx_aff = sub_history_graph.index[_keep_pos]
+                            bench_series = {k: v.loc[_idx_aff] for k, v in bench_series.items()}
+                        else:
+                            _idx_aff = sub_history_graph.index
+                        future_date = _idx_aff[-1] + pd.Timedelta(days=3)
+                        extended_index = _idx_aff.append(pd.Index([future_date]))
 
                         sorted_curves = sorted(final_values.items(), key=lambda item: item[1], reverse=True)
                         text_positions = {}
@@ -7732,6 +7967,9 @@ if _tab_open(tab_perf):
                             val_fin = round(final_values.get(name, 0), 2)
                         
                             extended_y = pd.concat([series, pd.Series([val_fin], index=[future_date])])
+                            # En échelle logarithmique on trace l'indice base 100 (100 + perf %) ; le survol,
+                            # lui, affiche toujours la performance en % (customdata calculé sur extended_y).
+                            _y_plot = (extended_y + 100.0) if _log_perf else extended_y
                         
                             text_arr = [''] * len(extended_y)
                             if not pd.isna(val_fin):
@@ -7739,7 +7977,7 @@ if _tab_open(tab_perf):
                                 text_arr[-1] = text_str
 
                             fig.add_trace(go.Scatter(
-                                x=extended_index, y=extended_y, 
+                                x=extended_index, y=_y_plot,
                                 mode='lines+text', name=name,
                                 text=text_arr,
                                 textposition=text_positions.get(name, "middle right"),
@@ -7753,7 +7991,7 @@ if _tab_open(tab_perf):
                             ))
 
                         fig.add_hline(
-                            y=0, 
+                            y=(100 if _log_perf else 0),
                             line_dash="dash", 
                             line_color="#64748b", 
                             line_width=1.5,
@@ -7774,6 +8012,33 @@ if _tab_open(tab_perf):
                             xaxis=dict(range=[dt_graph_start, future_date + pd.Timedelta(days=10)], autorange=False)
                         )
                         fig.update_yaxes(automargin=True)
+                        if _log_perf:
+                            _all_y = np.concatenate([np.asarray(t.y, dtype=float) for t in fig.data])
+                            _all_y = _all_y[np.isfinite(_all_y) & (_all_y > 0)]
+                            if _all_y.size:
+                                _lo, _hi = float(_all_y.min()) * 0.95, float(_all_y.max()) * 1.05
+                                _perf_ticks = [p for p in (-75, -50, -25, -10, 0, 10, 25, 50, 100, 200, 300, 500, 1000, 2000)
+                                               if _lo <= 100 + p <= _hi]
+                                if len(_perf_ticks) >= 2:
+                                    fig.update_yaxes(
+                                        type="log", tickmode="array",
+                                        tickvals=[100 + p for p in _perf_ticks],
+                                        ticktext=[f"{p:+d} %" if p else "0 %" for p in _perf_ticks],
+                                    )
+                                else:
+                                    fig.update_yaxes(type="log")
+                        if _perf_longue:
+                            # Boutons de zoom rapide (6 mois / 1 an / 3 ans / tout) au-dessus du graphique.
+                            fig.update_layout(height=420, margin=dict(l=8, r=72, t=44, b=8))
+                            fig.update_xaxes(rangeselector=dict(
+                                buttons=[
+                                    dict(count=6, label="6M", step="month", stepmode="backward"),
+                                    dict(count=1, label="1A", step="year", stepmode="backward"),
+                                    dict(count=3, label="3A", step="year", stepmode="backward"),
+                                    dict(step="all", label="Tout"),
+                                ],
+                                x=0, y=1.0, yanchor="bottom", font=dict(size=11),
+                            ))
                     
                         fig.update_xaxes(type="date", tickformat="%d/%m/%Y", hoverformat="%d/%m/%Y", tickangle=-45, nticks=10, showticklabels=True, automargin=True)
 
@@ -8047,6 +8312,7 @@ if _tab_open(tab_dividends):
 
                     render_total_card("Total Général perçu net (Div. + Rompus)", total_div_recu, "#0d9488",
                                        detail_source=df_divs, detail_value_col="Montant_Net", detail_kind="dividendes")
+                    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
                     st.markdown("**Détail net par année :**")
                     div_yearly_sum = df_divs.groupby("Année")["Montant_Net"].sum()
                     render_yearly_amounts(div_yearly_sum, "#0d9488", detail_source=df_divs, detail_value_col="Montant_Net", detail_kind="dividendes")
@@ -8199,6 +8465,7 @@ if _tab_open(tab_dividends):
                         # les entreprises versant ce mois-ci s'affichent d'un coup (et pas seulement au
                         # survol exact du petit segment de chacune). ---
                         if occurrences_div_12m:
+                            st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
                             st.markdown("**📆 Dividendes attendus sur les 12 prochains mois, par mois**")
 
                             mois_labels_fr = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
@@ -8414,6 +8681,11 @@ if _tab_open(tab_history):
                             .assign(_montant=lambda d: d["Quantité"] * d["Prix Unitaire (€)"])
                             .groupby("_jour_norm")["_montant"].sum()
                         )
+                        _ventes_j = (
+                            _tx_norm[_tx_norm["Type"] == "VENTE"]
+                            .assign(_montant=lambda d: d["Quantité"] * d["Prix Unitaire (€)"])
+                            .groupby("_jour_norm")["_montant"].sum()
+                        )
                         _frais_j = (
                             _tx_norm.groupby("_jour_norm")["Frais Totaux (€)"].sum()
                             if "Frais Totaux (€)" in _tx_norm.columns else pd.Series(dtype=float)
@@ -8422,6 +8694,7 @@ if _tab_open(tab_history):
 
                         nb_mouv_s = _nb_mouv_j.reindex(daily_df.index, fill_value=0)
                         achats_s = _achats_j.reindex(daily_df.index, fill_value=0.0)
+                        ventes_s = _ventes_j.reindex(daily_df.index, fill_value=0.0)
                         frais_s = _frais_j.reindex(daily_df.index, fill_value=0.0)
                         apports_s = _apports_j.reindex(daily_df.index, fill_value=0.0)
 
@@ -8469,6 +8742,7 @@ if _tab_open(tab_history):
                                 "Performance": perf_pct_jour_s[mask_actif].map(fmt_perf_simple),
                                 "Valeur Actions Fin Jour": _cur["Valeur Actions (€)"][mask_actif].map(_fmt_eur_h),
                                 "Achats": achats_s[mask_actif].map(_fmt_eur_h),
+                                "Ventes": ventes_s[mask_actif].map(_fmt_eur_h),
                                 "Frais": frais_s[mask_actif].map(_fmt_eur_h),
                                 "Apport": apports_s[mask_actif].map(lambda v: _fmt_eur_h(v) if v > 0 else "N/A"),
                                 "_sale": daily_df.index[mask_actif].normalize().isin(
@@ -8529,6 +8803,7 @@ if _tab_open(tab_history):
                                 "Performance": fmt_perf_simple(perf_pct_mois),
                                 "Valeur Actions Fin Mois": _fmt_eur_h(current_val),
                                 "Achats": _fmt_eur_h(achats_mois),
+                                "Ventes": _fmt_eur_h(_tx_agg.ventes(current_date.year, current_date.month)),
                                 "Frais": _fmt_eur_h(frais_mois),
                                 "Apport": apports_str,
                                 "_sale": (current_date.year, current_date.month) in _sale_ym,
@@ -8589,6 +8864,7 @@ if _tab_open(tab_history):
                                 "Performance": fmt_perf_simple(perf_pct_an),
                                 "Valeur Actions Fin Année": _fmt_eur_h(current_val),
                                 "Achats": _fmt_eur_h(achats_an),
+                                "Ventes": _fmt_eur_h(_tx_agg.ventes(current_year, None)),
                                 "Frais": _fmt_eur_h(frais_an),
                                 "Apport": apports_an_str,
                                 "_sale": current_year in _sale_years,
@@ -8623,6 +8899,7 @@ if _tab_open(tab_fees):
 
                 render_total_card("Total Général des Frais", total_fees_recu, "#f97316",
                                    detail_source=df_fees_pure, detail_value_col="Frais Totaux (€)", detail_kind="frais")
+                st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
                 st.markdown("**Détail des frais par année :**")
                 fees_yearly_sum = df_fees_pure.groupby("Année")["Frais Totaux (€)"].sum()
                 render_yearly_amounts(fees_yearly_sum, "#f97316", detail_source=df_fees_pure, detail_value_col="Frais Totaux (€)", detail_kind="frais")
@@ -8883,6 +9160,19 @@ if _tab_open(tab_watchlist):
                 fleche = _arrow_sym(pct, 0.0005)
                 return f' <span style="color:{couleur}; font-weight:700; font-size:0.88em;">({fleche} {pct_txt})</span>'
 
+            # Badge de statut : pastille aux couleurs FIXES et contrastées (vert = dans la zone d'achat, ambre =
+            # proche, gris = au-dessus), lisible quelle que soit la teinte de fond de la ligne.
+            _WL_BADGES = {
+                "dans":   ("🟢", "#15803d", "#ffffff"),
+                "proche": ("🟡", "#f59e0b", "#3b2300"),
+                "dessus": ("⚪", "#cbd5e1", "#1e293b"),
+                "na":     ("➖", "#e2e8f0", "#475569"),
+            }
+            def _wl_badge_html(key, texte):
+                _ico, _bg, _fg = _WL_BADGES.get(key, _WL_BADGES["na"])
+                return (f"<span style='display:inline-block; background:{_bg}; color:{_fg}; font-weight:800; "
+                        f"padding:3px 10px; border-radius:999px; font-size:0.78rem; white-space:nowrap;'>{_ico} {texte}</span>")
+
             wl_computed = []
             for it in watchlist_items:
                 prix_actuel_wl = get_live_price(it["ticker"])
@@ -8891,15 +9181,15 @@ if _tab_open(tab_watchlist):
                 if prix_actuel_wl is not None and zone_wl:
                     ecart_pct_wl = (prix_actuel_wl - zone_wl) / zone_wl * 100
                     if ecart_pct_wl <= 0:
-                        statut_wl = "🟢 Dans la zone"
+                        statut_wl = "Dans la zone d'achat"; statut_key_wl = "dans"
                     elif ecart_pct_wl <= SEUIL_PROCHE_ZONE_PCT:
-                        statut_wl = "🟡 Proche de la zone"
+                        statut_wl = "Proche de la zone"; statut_key_wl = "proche"
                     else:
-                        statut_wl = "⚪ Au-dessus"
+                        statut_wl = "Au-dessus de la zone"; statut_key_wl = "dessus"
                     ecart_str_wl = f"{'+' if ecart_pct_wl >= 0 else ''}{ecart_pct_wl:,.1f} %".replace(",", " ").replace(".", ",")
                 else:
                     ecart_str_wl = "—"
-                    statut_wl = "—"
+                    statut_wl = "Zone non définie" if not zone_wl else "Prix indisponible"; statut_key_wl = "na"
                 wl_computed.append({
                     "nom": it["nom"],
                     "ticker": it["ticker"],
@@ -8908,6 +9198,7 @@ if _tab_open(tab_watchlist):
                     "zone_txt": fmt_eur(zone_wl) if zone_wl else "Non définie",
                     "ecart_txt": ecart_str_wl,
                     "statut_txt": statut_wl,
+                    "statut_key": statut_key_wl,
                 })
 
             # Tri : d'abord les valeurs avec une zone d'achat définie, de la plus proche (écart le
@@ -8940,11 +9231,13 @@ if _tab_open(tab_watchlist):
                 "</tr>"
             )
             _lignes_wl_html = []
+            _cartes_wl_html = []
             for c in wl_computed:
                 bg_hex, txt_hex = _wl_row_colors(c["ecart_pct"])
                 variations = get_watchlist_variations(c["ticker"])
                 prix_txt = fmt_eur(c["prix_actuel"]) if c["prix_actuel"] is not None else "Indisponible"
                 prix_cell_html = prix_txt + _wl_jour_pct_html(variations["jour"][1])
+                badge_html = _wl_badge_html(c["statut_key"], c["statut_txt"])
                 row_style = f"background-color:{bg_hex}; color:{txt_hex}; font-weight:600; border-bottom:1px solid rgba(0,0,0,0.04);"
                 _lignes_wl_html.append(
                     f"<tr style='{row_style}'>"
@@ -8956,66 +9249,42 @@ if _tab_open(tab_watchlist):
                     f"<td style='{_wl_cols_droite}'>{_wl_var_cell_html(*variations['12m'])}</td>"
                     f"<td class='hm' style='{_wl_cols_droite}'>{c['zone_txt']}</td>"
                     f"<td style='{_wl_cols_droite}'>{c['ecart_txt']}</td>"
-                    f"<td style='padding:7px 10px;'>{c['statut_txt']}</td>"
+                    f"<td style='padding:7px 10px;'>{badge_html}</td>"
                     "</tr>"
+                )
+                # Version téléphone : une carte par valeur (nom + statut, prix, zone/écart, 4 variations en grille 2x2).
+                _accent = _WL_BADGES.get(c["statut_key"], _WL_BADGES["na"])[1]
+                def _mini(label, cell_html):
+                    return (f"<div><div style='font-size:0.66rem; color:#64748b; font-weight:600;'>{label}</div>"
+                            f"<div style='font-size:0.82rem;'>{cell_html}</div></div>")
+                _cartes_wl_html.append(
+                    f"<div style='background:{bg_hex}; border-left:5px solid {_accent}; border-radius:10px; "
+                    f"padding:10px 12px; margin-bottom:10px; box-shadow:0 1px 2px rgba(0,0,0,0.06);'>"
+                    f"<div style='display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;'>"
+                    f"<span style='font-weight:800; font-size:0.98rem; color:#0f172a;'>{c['nom']}</span>{badge_html}</div>"
+                    f"<div style='display:flex; justify-content:space-between; align-items:baseline; margin-top:6px; gap:8px; flex-wrap:wrap;'>"
+                    f"<span style='font-size:1.15rem; font-weight:800; color:{txt_hex};'>{prix_cell_html}</span>"
+                    f"<span style='font-size:0.78rem; color:#475569;'>Zone : <b>{c['zone_txt']}</b> · Écart : <b style='color:{txt_hex};'>{c['ecart_txt']}</b></span></div>"
+                    f"<div style='display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; margin-top:8px; "
+                    f"padding-top:8px; border-top:1px solid rgba(0,0,0,0.08);'>"
+                    f"{_mini('7 jours', _wl_var_cell_html(*variations['semaine']))}"
+                    f"{_mini('30 jours', _wl_var_cell_html(*variations['30j']))}"
+                    f"{_mini('6 mois', _wl_var_cell_html(*variations['6m']))}"
+                    f"{_mini('12 mois', _wl_var_cell_html(*variations['12m']))}"
+                    f"</div></div>"
                 )
 
             st.markdown(
-                "<div style='overflow-x:auto;'>"
+                "<style>.wl-cards{display:none;} "
+                "@media (max-width: 640px){ .wl-table-wrap{display:none;} .wl-cards{display:block;} }</style>"
+                "<div class='wl-table-wrap' style='overflow-x:auto;'>"
                 "<table class='pea-wl' style='width:100%; border-collapse:collapse; font-size:0.9rem;'>"
                 f"<thead>{_header_html}</thead>"
                 f"<tbody>{''.join(_lignes_wl_html)}</tbody>"
-                "</table></div>",
+                "</table></div>"
+                f"<div class='wl-cards'>{''.join(_cartes_wl_html)}</div>",
                 unsafe_allow_html=True,
             )
-
-            st.markdown("**🛠️ Gérer une valeur de la watchlist (Modifier / Supprimer) :**")
-            _wl_items_mgmt = _watchlist_get()
-            wl_noms_dispo = [f"{it['nom']} ({it['ticker']})" for it in _wl_items_mgmt]
-            wl_choix_mgmt = st.selectbox(
-                "Valeur à gérer", wl_noms_dispo, index=None,
-                placeholder="Choisir une valeur...", key="wl_mgmt_select",
-            )
-            if wl_choix_mgmt is not None:
-                wl_idx_mgmt = wl_noms_dispo.index(wl_choix_mgmt)
-                wl_item_mgmt = _wl_items_mgmt[wl_idx_mgmt]
-                wl_action_mgmt = st.radio(
-                    "Action", ["Modifier", "Supprimer"], horizontal=True, key="wl_mgmt_action"
-                )
-
-                if wl_action_mgmt == "Supprimer":
-                    if st.button("🗑️ Confirmer la suppression", type="primary", key="wl_mgmt_del_btn"):
-                        del _wl_items_mgmt[wl_idx_mgmt]
-                        if _watchlist_save(_wl_items_mgmt):
-                            st.toast("Valeur retirée de la watchlist", icon="🗑️")
-                            _rerun_scoped()
-
-                else:
-                    with st.form("wl_edit_form"):
-                        e_wl_nom = st.text_input("Nom", value=wl_item_mgmt["nom"])
-                        e_wl_ticker = st.text_input("Ticker", value=wl_item_mgmt["ticker"]).upper().strip()
-                        _e_zone_default = wl_item_mgmt.get("zone_achat")
-                        e_wl_zone = st.number_input(
-                            "Zone d'achat (€, optionnel)", min_value=0.0, step=0.5,
-                            value=float(_e_zone_default) if _e_zone_default else None, format="%.2f",
-                        )
-                        if st.form_submit_button("✅ Valider les modifications"):
-                            if not e_wl_nom.strip() or not e_wl_ticker:
-                                st.error("Le nom et le ticker sont obligatoires.")
-                            elif any(
-                                i != wl_idx_mgmt and it2["ticker"].upper() == e_wl_ticker.upper()
-                                for i, it2 in enumerate(_wl_items_mgmt)
-                            ):
-                                st.error(f"{e_wl_ticker} est déjà dans la watchlist.")
-                            else:
-                                _wl_items_mgmt[wl_idx_mgmt] = {
-                                    "ticker": e_wl_ticker,
-                                    "nom": e_wl_nom.strip(),
-                                    "zone_achat": float(e_wl_zone) if e_wl_zone else None,
-                                }
-                                if _watchlist_save(_wl_items_mgmt):
-                                    st.toast("✅ Valeur modifiée avec succès !", icon="✅")
-                                    _rerun_scoped()
 
         _watchlist_tab_fragment()
 
@@ -9034,29 +9303,6 @@ def _sim_stat(label, value, color="#0f172a"):
 def _sim_stats(*cards, small=False):
     _n_cartes = max(len(cards), 1)
     st.markdown(f'<div class="pea-stats{" sm" if small else ""}" style="--n:{_n_cartes};">' + "".join(cards) + "</div>", unsafe_allow_html=True)
-
-
-def _sim_headline_duo(items):
-    """Deux indicateurs côte à côte (y compris sur téléphone) ; items = (libellé, valeur, sous-texte, mis_en_avant)."""
-    parts = []
-    for it in items:
-        k, v, sub, hl = it[:4]
-        col = it[4] if len(it) > 4 else None
-        sty = f' style="color:{col};"' if col else ""
-        parts.append(
-            f'<div class="pea-duo-item{" hl" if hl else ""}"><div class="k">{k}</div><div class="v"{sty}>{v}</div>'
-            + (f'<div class="s">{sub}</div>' if sub else "") + "</div>"
-        )
-    cls = " tri" if len(items) == 3 else ""
-    st.markdown(f'<div class="pea-duo{cls}">{"".join(parts)}</div>', unsafe_allow_html=True)
-
-
-def _sim_headline(label, value, sub="", color="#0f172a"):
-    sub_html = f'<div class="s">{sub}</div>' if sub else ""
-    st.markdown(
-        f'<div class="pea-head"><div class="k">{label}</div><div class="v" style="color:{color};">{value}</div>{sub_html}</div>',
-        unsafe_allow_html=True,
-    )
 
 
 def _sim_pills(rows):
@@ -9200,12 +9446,13 @@ def _render_sim_epargne(valeur_depart):
                 impot = c5.number_input(
                     "Imposition des gains (%)", min_value=0.0, max_value=100.0, step=0.1,
                     value=float(app_config.get("taux_prelevements_sociaux", 18.6)), key="k_rp_impot",
-                    help="Par défaut : le taux de prélèvements sociaux réglé dans l'application. Appliqué à l'ensemble des "
-                         "intérêts (gains déjà acquis inclus) pour la valeur nette.",
+                    help="Par défaut : le taux de prélèvements sociaux réglé dans l'application, appliqué aux gains au moment du "
+                         "retrait. Si le PEA a moins de 5 ans à ce moment-là (ancienneté actuelle + nombre d'années), "
+                         "12,8 % d'impôt sur le revenu sont ajoutés automatiquement.",
                 )
                 infl = c6.number_input(
                     "Inflation (%)", min_value=0.0, max_value=20.0, step=0.1, value=2.0, key="k_rp_infl",
-                    help="La valeur nette et le revenu passif sont corrigés de l'inflation (pouvoir d'achat d'aujourd'hui).",
+                    help="La valeur finale et le revenu passif sont exprimés en euros d'aujourd'hui (pouvoir d'achat). Mettez 0 pour les voir sans inflation.",
                 )
                 c7, _c8 = st.columns(2)
                 taux_ret = c7.number_input(
@@ -9215,8 +9462,7 @@ def _render_sim_epargne(valeur_depart):
             _fiable = "" if annees_ecoulees >= 1 else " ⚠️ historique court, peu fiable"
             st.caption(
                 f"Apports moyens depuis l'ouverture du PEA : **{fmt_eur(moy_mensuel)} / mois**  \n"
-                f"Performance moyenne depuis l'ouverture : **{_arrow_sym(perf_annualisee)} {_fr_num(perf_annualisee * 100, 2, signed=True)} % / an** "
-                f"({_fr_num(annees_ecoulees, 1)} {_plural(annees_ecoulees)}).{_fiable}"
+                f"Performance moyenne depuis l'ouverture : **{_arrow_sym(perf_annualisee)} {_fr_num(perf_annualisee * 100, 2, signed=True)} % / an**.{_fiable}"
             )
         if horizon_annees != int(app_config.get("horizon_projection_annees", 10)):
             app_config["horizon_projection_annees"] = int(horizon_annees)
@@ -9250,15 +9496,20 @@ def _render_sim_epargne(valeur_depart):
             ap_cur += ap_annee
             verses.append(verses[-1] + ap_annee)
         interets = [v - vs for v, vs in zip(vals, verses)]
-        # Valeur nette année par année : impôt sur l'ensemble des intérêts, puis pouvoir d'achat d'aujourd'hui.
-        nettes_reelles = []
-        for k, (v, vs) in enumerate(zip(vals, verses)):
-            net_k = v - max(v - vs, 0.0) * impot / 100.0
-            nettes_reelles.append(net_k / f ** k)
+        # Valeurs corrigées de l'inflation (€ d'aujourd'hui) année par année ; avec une inflation de 0 %, ce sont les
+        # valeurs brutes. Le graphique et la case « Valeur dans N ans » utilisent ces valeurs.
+        reelles = [v / f ** k for k, v in enumerate(vals)]
         valeur_brute = vals[-1]
-        impot_du = max(valeur_brute - verses[-1], 0.0) * impot / 100.0
-        valeur_nette_reelle = nettes_reelles[-1]
-        revenu_mensuel = valeur_nette_reelle * taux_ret / 100.0 / 12.0
+        valeur_reelle = reelles[-1]
+        interets_reels = [max(rv - vs, 0.0) for rv, vs in zip(reelles, verses)]
+        # Imposition AU MOMENT DU RETRAIT, selon l'ancienneté du PEA à cette date (ancienneté actuelle + horizon) :
+        # 5 ans et plus -> prélèvements sociaux seulement ; moins de 5 ans -> + 12,8 % d'impôt sur le revenu.
+        _anciennete_fin = float(annees_ecoulees) + n
+        _taux_impot_retrait = float(impot) + (0.0 if _anciennete_fin >= 5 else 12.8)
+        _gains_finaux = max(valeur_brute - verses[-1], 0.0)
+        valeur_nette_impots = valeur_brute - _gains_finaux * _taux_impot_retrait / 100.0
+        revenu_mensuel_brut = valeur_reelle * taux_ret / 100.0 / 12.0
+        revenu_mensuel_net = (valeur_nette_impots / f ** n) * taux_ret / 100.0 / 12.0
         apports_cumules_finaux = min(ap_cur, PLAFOND_PEA_VERSEMENTS)
 
         # Échéance d'atteinte du plafond au rythme de l'apport prévu (versement continu et régulier).
@@ -9274,26 +9525,18 @@ def _render_sim_epargne(valeur_depart):
 
         # ---- Résultats (en dessous)
         _sim_headline_duo([
-            (f"Valeur brute dans {n} {_plural(n)}", fmt_eur(valeur_brute), "", False, "#0284c7"),
-            ("Valeur nette (€ d'aujourd'hui)", fmt_eur(valeur_nette_reelle), "", False),
+            (f"Valeur dans {n} {_plural(n)} (€ d'aujourd'hui)", fmt_eur(valeur_reelle), "", True, "#0284c7"),
         ])
         _sim_headline_duo([
-            ("Revenu passif / mois", fmt_eur(revenu_mensuel), "", True),
-            ("Impôt estimé sur les gains", fmt_eur(impot_du), "", False, "#dc2626"),
+            ("Revenu passif / mois", fmt_eur(revenu_mensuel_brut), "avant impôts", False),
+            ("Revenu passif / mois net d'impôts", fmt_eur(revenu_mensuel_net),
+             f"imposition des gains : {_fr_num(_taux_impot_retrait, 1)} % (PEA de {_fr_num(_anciennete_fin, 1)} ans)", True, "#16a34a"),
         ])
         _sim_headline_duo([
             ("Versements cumulés", fmt_eur(verses[-1]), "", False, "#0284c7"),
-            ("Intérêts bruts", fmt_eur(valeur_brute - verses[-1]), "", False, "#d97706"),
-            ("Dont versements prévus", fmt_eur(verses[-1] - verses0), "", False, "#475569"),
+            ("Intérêts", fmt_eur(max(valeur_reelle - verses[-1], 0.0)), "", False, "#d97706"),
         ])
-        mode_graph = st.radio(
-            "Affichage du graphique", ["Valeur brute", "Valeur nette (€ d'aujourd'hui)"], horizontal=True,
-            key="k_sim_graph_mode", label_visibility="collapsed",
-        )
-        if mode_graph == "Valeur brute":
-            interets_chart = interets
-        else:
-            interets_chart = [nr - vs for nr, vs in zip(nettes_reelles, verses)]
+        interets_chart = interets_reels
         fig_sim = _stacked_growth_chart(n, None, verses, interets_chart, "")
         _plotly_chart(fig_sim, use_container_width=True, theme=None, key="chart_sim_epargne")
 
@@ -9308,7 +9551,7 @@ def _render_sim_epargne(valeur_depart):
             '<div style="background:#e2e8f0; border-radius:999px; height:12px; overflow:hidden;">'
             f'<div style="width:{pct_plafond}%; height:100%; background:{grad_plafond}; border-radius:999px;"></div></div>'
             '<div style="margin-top:8px; font-size:0.78rem; color:#475569;">'
-            f'📅 Atteinte estimée du plafond : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
+            f'📅 Date de plafonnement estimée (selon vos valeurs saisies) : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
             unsafe_allow_html=True,
         )
         if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n and inv > 0:
