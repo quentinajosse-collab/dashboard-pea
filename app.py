@@ -841,6 +841,10 @@ st.markdown(
                   white-space: nowrap; border-bottom: 1px solid #e2e8f0; }
     .pea-tbl td, .pea-tbl th.ix { text-align: center; padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #f1f5f9; }
     .pea-tbl th.ix { position: static; background: transparent; color: inherit; text-transform: none; font-size: inherit; font-weight: 600; }
+    .pea-tbl .ca { display: inline-flex; align-items: baseline; gap: 0.12em; }
+    .pea-tbl .ar { display: inline-block; width: 0.85em; text-align: center; }
+    .pea-tbl .un { display: inline-block; width: 0.9em; text-align: left; padding-left: 0.15em; }
+    .pea-tbl .rv { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }
     .pea-tbl tbody tr:nth-child(even) { background: rgba(148,163,184,0.10); }
     @media (max-width: 640px) { .pea-tbl { font-size: 0.72rem; } .pea-tbl td, .pea-tbl th { padding: 5px 5px; } }
     .pea-head { text-align: center; padding: 6px 0 2px 0; }
@@ -887,6 +891,19 @@ st.markdown(
         div[class*="st-key-onecol_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
             flex: 1 1 100% !important; min-width: 100% !important;
         }
+        /* Onglet Classements : paires vert / rouge TOUJOURS côte à côte (comme les camemberts). */
+        div[class*="st-key-sbs_"] [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: 0.4rem !important; }
+        div[class*="st-key-sbs_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            flex: 1 1 0 !important; min-width: 0 !important; width: auto !important;
+        }
+        div[class*="st-key-sbs_"] [data-testid="stMarkdownContainer"] p {
+            font-size: 0.8rem !important; line-height: 1.3 !important; min-height: 2.6em; margin-bottom: 0.2rem !important;
+        }
+        div[class*="st-key-sbs_"] .pea-card { padding: 8px 10px !important; }
+        div[class*="st-key-sbs_"] .pea-card .k { font-size: 0.6rem; }
+        div[class*="st-key-sbs_"] .pea-card div[style*="font-size:1.55rem"] { font-size: 1.05rem !important; }
+        div[class*="st-key-sbs_"] .js-plotly-plot .ytick text,
+        div[class*="st-key-sbs_"] .js-plotly-plot .barlayer text { font-size: 10px !important; }
         .pea-wl .hm { display: none; }
         .pea-wl th, .pea-wl td { padding: 5px 3px !important; font-size: 0.7rem !important; white-space: normal !important; }
         .pea-cards { grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -903,6 +920,12 @@ st.markdown(
         div[class*="st-key-compact_cols"] [data-baseweb="select"] > div { font-size: 0.82rem !important; }
         div[class*="st-key-compact_cols"] label p { font-size: 0.74rem !important; }
         div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div { font-size: 1.2rem !important; }
+        /* Vue d'ensemble : cartes 2 par ligne, et la dernière (si impaire) occupe toute la largeur
+           au lieu de rester seule à moitié vide. */
+        .st-key-row_perf_wrap [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child:nth-child(odd),
+        .st-key-row_gains_wrap [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child:nth-child(odd) {
+            flex: 1 1 100% !important; min-width: 100% !important;
+        }
         .stTabs [data-baseweb="tab"] { padding: 0 10px; font-size: 0.85rem; }
         /* À droite : ~15 % de la largeur laissés libres pour le bouton rouge « Manage app » et la
            pastille de profil que Streamlit Community Cloud affiche par-dessus l'app (ils sont dans la
@@ -1133,8 +1156,9 @@ _TIP_JS = r"""
 
 
 def _paired_columns(key):
-    """Deux colonnes côte à côte sur ordinateur ; empilées (une par ligne, pleine largeur) sur téléphone grâce au
-    conteneur « onecol_* » : les deux graphiques d'une paire ne se décalent plus quand un titre passe à la ligne."""
+    """Deux colonnes côte à côte, sur ordinateur ET sur téléphone (conteneur « sbs_* », cf. CSS « Affichage
+    téléphone » : colonnes de largeur égale, titres sur 2 lignes réservées pour que les deux graphiques restent
+    alignés)."""
     with st.container(key=key):
         return st.columns(2, gap="small")
 
@@ -1825,23 +1849,46 @@ import re
 
 _TBL_ZERO_RE = re.compile(r"^[▬▲▼\s+\-−]*0+([,.]0+)?\s*(€|%)?$")
 
-def _dash_if_empty(df):
-    """Remplace 0, N/A et valeurs vides d'un tableau déjà formaté par un « - »."""
-    def _f(v):
+def _dash_if_empty(df, eq_cols=(), sale_flag=None, sale_col="PV actées"):
+    """Remplace 0, N/A et valeurs vides d'un tableau déjà formaté par un « - ».
+    eq_cols : colonnes où un zéro est une vraie valeur (ex. performance) -> « = » (N/A reste « - »).
+    sale_flag : tableau de booléens (une vente a eu lieu sur la période) ; dans sale_col, un zéro devient
+    « = » si une vente a été actée à 0, sinon « - »."""
+    def _is_empty(v):
         if v is None:
-            return "-"
+            return True
         try:
             if pd.isna(v):
-                return "-"
+                return True
         except Exception:
             pass
+        return isinstance(v, str) and v.strip() in ("", "N/A", "nan", "NaN", "None")
+
+    def _is_zero(v):
         if isinstance(v, (int, float, np.integer, np.floating)):
-            return "-" if v == 0 else v
-        t = str(v).strip()
-        if t in ("", "N/A", "nan", "NaN", "None"):
-            return "-"
-        return "-" if _TBL_ZERO_RE.match(t) else v
-    return df.apply(lambda col: col.map(_f))
+            return v == 0
+        return bool(_TBL_ZERO_RE.match(str(v).strip()))
+
+    def _eq_txt(v):
+        # « = 0,00 € » / « = 0,00% » : le symbole égal suivi de la valeur nulle (sans flèche ni signe).
+        if isinstance(v, (int, float, np.integer, np.floating)):
+            return "= 0"
+        return "= " + re.sub(r"^[▬▲▼\s+\-−]+", "", str(v).strip())
+
+    out = df.copy()
+    flags = None if sale_flag is None else np.asarray(sale_flag, dtype=bool)
+    for col in out.columns:
+        ser = out[col]
+        empty = ser.map(_is_empty)
+        zero = (~empty) & ser.map(_is_zero)
+        if col in eq_cols:
+            res = ser.mask(zero, ser.map(_eq_txt)).mask(empty, "-")
+        elif flags is not None and col == sale_col:
+            res = ser.mask(zero & flags, ser.map(_eq_txt)).mask((zero & ~flags) | empty, "-")
+        else:
+            res = ser.mask(zero | empty, "-")
+        out[col] = res
+    return out
 
 def _row_styles_of(styles_df):
     """Style de ligne (une chaîne CSS par ligne) à partir d'un DataFrame de styles uniformes par ligne."""
@@ -1849,42 +1896,147 @@ def _row_styles_of(styles_df):
         return None
     return [str(x) for x in styles_df.iloc[:, 0].tolist()]
 
-def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None):
+
+_TBL_IFRAME_CSS = """
+html, body { margin: 0; height: 100%; background: transparent; font-family: Manrope, Inter, system-ui, sans-serif; }
+.pea-tbl-wrap { height: 100%; overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px; background: #ffffff; box-sizing: border-box; }
+.pea-tbl { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 0.8rem; color: #0f172a; }
+.pea-tbl th { position: sticky; top: 0; z-index: 2; background: #f8fafc; color: #475569; text-transform: uppercase;
+              font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; padding: 8px 8px; text-align: center;
+              white-space: nowrap; border-bottom: 1px solid #e2e8f0; cursor: pointer; user-select: none; }
+.pea-tbl th.s-asc::after { content: " ▲"; font-size: 0.6rem; } .pea-tbl th.s-desc::after { content: " ▼"; font-size: 0.6rem; }
+.pea-tbl td, .pea-tbl th.ix { text-align: center; padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #f1f5f9; }
+.pea-tbl th.ix { position: static; background: transparent; color: inherit; text-transform: none; font-size: inherit; font-weight: 600; cursor: default; }
+.pea-tbl tbody tr:nth-child(even) { background: rgba(148,163,184,0.10); }
+.pea-tbl tfoot td, .pea-tbl tfoot th { position: sticky; bottom: 0; z-index: 2; background: #f1f5f9; font-weight: 800;
+                                       border-top: 2px solid #cbd5e1; border-bottom: none; }
+.pea-tbl .ca { display: inline-flex; align-items: baseline; gap: 0.12em; }
+.pea-tbl .ar { display: inline-block; width: 0.85em; text-align: center; }
+.pea-tbl .rv { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }
+.pea-tbl .un { display: inline-block; width: 0.9em; text-align: left; padding-left: 0.15em; }
+"""
+
+_TBL_IFRAME_JS = r"""
+(function () {
+  var t = document.getElementById('t'); if (!t) return;
+  var tb = t.tBodies[0], hr = t.tHead.rows[0];
+  function key(s) {
+    s = (s || '').trim();
+    var m = s.match(/^(\d{2})[-\/](\d{2})[-\/](\d{4})$/); if (m) return +(m[3] + m[2] + m[1]);
+    m = s.match(/^(\d{2})\/(\d{4})$/); if (m) return +(m[2] + m[1]);
+    var c = s.replace(/[\u00a0\u202f\s€%▲▼▬=]/g, '').replace('\u2212', '-').replace(',', '.');
+    if (/^[+\-]?\d+(\.\d+)?$/.test(c)) return parseFloat(c);
+    return s === '-' || s === '' ? null : s.toLowerCase();
+  }
+  var cur = document.getElementById('cur'), wrap = document.querySelector('.pea-tbl-wrap');
+  if (cur && wrap) { wrap.scrollTop = Math.max(0, cur.offsetTop - 70); }
+  var dir = {}, last = -1;
+  Array.prototype.forEach.call(hr.cells, function (th, i) {
+    if (th.className === 'ix') return;
+    th.addEventListener('click', function () {
+      var d = (last === i && dir[i] === 1) ? -1 : 1; dir[i] = d; last = i;
+      Array.prototype.forEach.call(hr.cells, function (x) { x.classList.remove('s-asc', 's-desc'); });
+      th.classList.add(d === 1 ? 's-asc' : 's-desc');
+      var rows = Array.prototype.slice.call(tb.rows);
+      var keys = rows.map(function (r) { return key(r.cells[i].textContent); });
+      var idx = rows.map(function (_, k) { return k; });
+      idx.sort(function (a, b) {
+        var x = keys[a], y = keys[b];
+        if (x === null && y === null) return a - b; if (x === null) return 1; if (y === null) return -1;
+        if (typeof x === 'number' && typeof y === 'number') return (x - y) * d || (a - b);
+        return String(x).localeCompare(String(y), 'fr') * d || (a - b);
+      });
+      var frag = document.createDocumentFragment();
+      idx.forEach(function (k) { frag.appendChild(rows[k]); });
+      tb.appendChild(frag);
+    });
+  });
+})();
+"""
+
+_CELL_RE = re.compile(r"^(?:([▲▼▬=])\s)?(.*\d.*?)\s?(€|%)?$")
+
+def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None, focus_row=None, total_row=None):
     """Tableau HTML avec toutes les valeurs centrées. row_styles : une chaîne CSS par ligne ;
-    cell_style(colonne, valeur) -> chaîne CSS d'une cellule. Défilement interne au-delà de 25 lignes."""
+    cell_style(colonne, valeur) -> chaîne CSS d'une cellule. Défilement interne au-delà de 25 lignes.
+    Dans les colonnes qui contiennent une flèche (▲ ▼ ▬ =) ou une unité (€ %), la flèche, le nombre et l'unité
+    occupent chacun une position fixe : flèches et unités sont alignées verticalement d'une ligne à l'autre.
+    total_row : dict {colonne: texte déjà formaté} -> ligne « Total » figée en bas du tableau (hors tri)."""
     cols = list(df.columns)
     head = ("<th>" + _esc(str(index_label)) + "</th>" if show_index else "") + "".join(f"<th>{_esc(str(c))}</th>" for c in cols)
     idx = list(df.index)
+    # Analyse (une seule fois) de chaque colonne : (flèche, nombre, unité) par cellule, largeur max du nombre.
+    parsed, num_w, has_arrow = {}, {}, {}
+    for c in cols:
+        vals = df[c].astype(str).tolist()
+        if total_row is not None:
+            vals = vals + [str(total_row.get(c, ""))]  # la ligne Total participe à l'alignement des colonnes
+        pl, w, ar, structured = [], 0, False, False
+        for t in vals:
+            m = _CELL_RE.match(t) if ("€" in t or "%" in t or t[:1] in "▲▼▬=") else None
+            if m and (m.group(1) or m.group(3)) and not t.rstrip().endswith(")"):
+                pl.append((m.group(1) or "", m.group(2), m.group(3) or ""))
+                w = max(w, len(m.group(2)))
+                ar = ar or bool(m.group(1))
+                structured = True
+            else:
+                pl.append(None)
+        if structured:
+            parsed[c], num_w[c], has_arrow[c] = pl, w, ar
     rows = []
     for i, row in enumerate(df.itertuples(index=False, name=None)):
         rs = (row_styles[i] if row_styles is not None else "") or ""
         tds = [f'<th class="ix">{_esc(str(idx[i]))}</th>'] if show_index else []
         for c, v in zip(cols, row):
             cs = (cell_style(c, v) if cell_style else "") or ""
-            tds.append(f'<td style="{cs}">{_esc(str(v))}</td>' if cs else f"<td>{_esc(str(v))}</td>")
-        rows.append(f'<tr style="{rs}">' + "".join(tds) + "</tr>" if rs else "<tr>" + "".join(tds) + "</tr>")
-    if max_height is None and len(df) > 25:
-        max_height = 620
-    wrap_style = f' style="max-height:{int(max_height)}px;"' if max_height else ""
-
-    def _tbl(rs):
-        return (f'<div class="pea-tbl-wrap"{wrap_style}><table class="pea-tbl"><thead><tr>{head}</tr></thead>'
-                f'<tbody>{"".join(rs)}</tbody></table></div>')
-
-    # Gros tableaux : les 300 premières lignes (les plus récentes) sont affichées tout de suite, le reste est
-    # replié dans un bloc « Afficher les lignes plus anciennes » (rien n'est supprimé, mais le navigateur ne
-    # calcule pas la mise en page des milliers de lignes cachées).
-    LIM = 300
-    html = _tbl(rows[:LIM])
-    if len(rows) > LIM:
-        html += (f'<details style="margin:2px 0 8px 0;"><summary style="cursor:pointer; font-size:0.8rem; color:#475569; '
-                 f'padding:4px 2px;">Afficher les {len(rows) - LIM} lignes plus anciennes</summary>'
-                 + _tbl(rows[LIM:]) + "</details>")
-    # st.html évite le parseur Markdown de Streamlit, très lent sur de gros blocs HTML.
-    if hasattr(st, "html"):
-        st.html(html)
-    else:
-        st.markdown(html, unsafe_allow_html=True)
+            p = parsed[c][i] if c in parsed else None
+            if p is not None:
+                arrow, num, unit = p
+                inner = '<span class="ca">'
+                if has_arrow[c]:
+                    inner += f'<span class="ar">{arrow}</span>'
+                inner += f'<span class="rv" style="min-width:{num_w[c]}ch">{_esc(num)}</span>'
+                if unit:
+                    inner += f'<span class="un">{unit}</span>'
+                inner += "</span>"
+            else:
+                inner = _esc(str(v))
+            tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
+        _rid = ' id="cur"' if (focus_row is not None and i == focus_row) else ""
+        rows.append(f'<tr{_rid} style="{rs}">' + "".join(tds) + "</tr>" if rs else f"<tr{_rid}>" + "".join(tds) + "</tr>")
+    foot = ""
+    if total_row is not None:
+        _n_body = len(rows)
+        tds = ['<th class="ix"></th>'] if show_index else []
+        for c in cols:
+            v = total_row.get(c, "")
+            cs = (cell_style(c, v) if cell_style else "") or ""
+            p = parsed[c][_n_body] if c in parsed else None
+            if p is not None:
+                arrow, num, unit = p
+                inner = '<span class="ca">'
+                if has_arrow[c]:
+                    inner += f'<span class="ar">{arrow}</span>'
+                inner += f'<span class="rv" style="min-width:{num_w[c]}ch">{_esc(num)}</span>'
+                if unit:
+                    inner += f'<span class="un">{unit}</span>'
+                inner += "</span>"
+            else:
+                inner = _esc(str(v))
+            tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
+        foot = "<tfoot><tr>" + "".join(tds) + "</tr></tfoot>"
+    cap = int(max_height) if max_height else 640
+    n_rows = len(rows)
+    height = int(min(cap, 34 + 30 * n_rows + 14 + (36 if total_row is not None else 0)))
+    doc = (f"<style>{_TBL_IFRAME_CSS}</style>"
+           f'<div class="pea-tbl-wrap"><table class="pea-tbl" id="t"><thead><tr>{head}</tr></thead>'
+           f'<tbody>{"".join(rows)}</tbody>{foot}</table></div><script>{_TBL_IFRAME_JS}</script>')
+    try:
+        import streamlit.components.v1 as _components
+        _components.html(doc, height=height, scrolling=False)
+    except Exception:
+        st.markdown(f'<div class="pea-tbl-wrap"><table class="pea-tbl"><thead><tr>{head}</tr></thead>'
+                    f'<tbody>{"".join(rows)}</tbody>{foot}</table></div>', unsafe_allow_html=True)
 
 def _lerp_hex(c1, c2, t):
     a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
@@ -2185,46 +2337,80 @@ def _alloc_color(i):
         return _ALLOC_COLORS[i]
     return f"hsl({(i * 47) % 360}, 45%, 72%)"
 
+_SECTEURS_FR = {
+    "Technology": "Technologie", "Healthcare": "Santé", "Financial Services": "Services financiers",
+    "Consumer Cyclical": "Conso. cyclique", "Consumer Defensive": "Conso. défensive",
+    "Industrials": "Industrie", "Energy": "Énergie", "Utilities": "Services publics",
+    "Real Estate": "Immobilier", "Basic Materials": "Matériaux de base",
+    "Communication Services": "Communication",
+}
+
+def _secteur_fr(sect):
+    """Nom de secteur en français ('Autre' si inconnu, ex. ETF sans secteur)."""
+    if sect is None or (isinstance(sect, float) and np.isnan(sect)):
+        return "Autre"
+    t = str(sect).strip()
+    if not t or t.lower() in ("nan", "none"):
+        return "Autre"
+    return _SECTEURS_FR.get(t, t)
+
 _ALLOC_HTML = r"""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
   html, body { margin: 0; padding: 0; background: transparent; height: 100%; }
-  #root { min-height: 100%; box-sizing: border-box; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center;
-          font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); padding: 4px 2px; }
-  #wrap { position: relative; width: 250px; flex: 0 0 250px; margin-top: 0; }
-  svg { width: 250px; height: 250px; display: block; -webkit-tap-highlight-color: transparent; }
+  #root { box-sizing: border-box; display: grid; gap: 8px 14px; justify-content: center; align-items: start; padding: 4px 2px;
+          grid-template-columns: 210px minmax(150px, 200px) 210px minmax(150px, 200px);
+          grid-template-areas: "pa la pb lb";
+          font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); }
+  #wa { grid-area: pa; } #wb { grid-area: pb; } #legA { grid-area: la; } #legS { grid-area: lb; }
+  .wrap { position: relative; width: 100%; }
+  .ttl { text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .6; margin-bottom: 2px; }
+  svg { width: 100%; max-width: 210px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
   .slice.dim { opacity: .28; }
-  #legend { flex: 0 1 auto; min-width: 200px; max-width: 420px; }
-  .row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer;
+  .row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; cursor: pointer;
          transition: opacity .18s ease, background .18s ease; -webkit-tap-highlight-color: transparent; }
   .row.sel { background: rgba(127,127,127,.14); }
   .row.dim { opacity: .4; }
-  .dot { width: 11px; height: 11px; border-radius: 3px; flex: 0 0 11px; }
-  .nm { flex: 1; min-width: 110px; padding-right: 28px; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pc { font-family: Manrope, Inter, system-ui, sans-serif; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12.5px; opacity: .85; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 10px; }
+  .nm { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pc { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12px; opacity: .85; }
   text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
   html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  .mono { font-family: Manrope, Inter, system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+  .mono { font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+  /* Écran étroit : les deux camemberts restent côte à côte, légendes dessous (on voit toujours les deux). */
+  @media (max-width: 880px) {
+    #root { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "pa pb" "la lb"; gap: 6px 10px; }
+    svg { max-width: 200px; }
+    .nm { font-size: 12px; } .pc { font-size: 11px; } .row { padding: 4px 4px; gap: 6px; }
+  }
 </style>
 <div id="root">
-  <div id="wrap"><svg id="svg" viewBox="0 0 250 250"></svg></div>
-  <div id="legend"></div>
+  <div class="wrap" id="wa"><div class="ttl">Par action</div><svg id="svgA" viewBox="0 0 240 240"></svg></div>
+  <div class="wrap" id="wb"><div class="ttl">Par secteur</div><svg id="svgS" viewBox="0 0 240 240"></svg></div>
+  <div id="legA"></div>
+  <div id="legS"></div>
 </div>
 <script>
 (function () {
-  var D = __DATA__, TOTAL = __TOTAL__;
+  var D = __DATA__, S = __SECT__, TOTAL = __TOTAL__;
   var fg = '#334155';
   try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
   document.documentElement.style.setProperty('--fg', fg);
 
-  var NS = 'http://www.w3.org/2000/svg', C = 125, R = 108, r = 78, sel = -1, mute = 0;
-  var svg = document.getElementById('svg'), legend = document.getElementById('legend');
+  var NS = 'http://www.w3.org/2000/svg', C = 120, R = 104, r = 76, mute = 0;
+  var st = { t: null, i: -1 };
+  var svgA = document.getElementById('svgA'), svgS = document.getElementById('svgS');
+  var legA = document.getElementById('legA'), legS = document.getElementById('legS');
 
-  // Angle minimal visible pour que même les toutes petites positions restent présentes et cliquables.
-  var MIN = 2.2, raw = D.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
-  var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
-  raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
+  // Angle minimal visible pour que même les toutes petites parts restent présentes et cliquables.
+  function layout(items) {
+    var MIN = 2.2, raw = items.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
+    var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
+    raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
+    return ang;
+  }
+  var angA = layout(D), angS = layout(S);
 
   function pt(rad, a) { var t = (a - 90) * Math.PI / 180; return [C + rad * Math.cos(t), C + rad * Math.sin(t)]; }
   function arc(s, e) {
@@ -2236,76 +2422,112 @@ _ALLOC_HTML = r"""
   function el(n, at, parent) {
     var e = document.createElementNS(NS, n);
     for (var key in at) e.setAttribute(key, at[key]);
-    (parent || svg).appendChild(e); return e;
+    parent.appendChild(e); return e;
   }
   function cut(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+  function plural(n, a, b) { return n + ' ' + (n > 1 ? b : a); }
 
-  var slices = D.map(function (d, i) {
-    var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice', 'data-i': i });
-    p.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; select(sel === i ? -1 : i); });
-    return p;
-  });
-  var t1 = el('text', { x: C, y: C - 20, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 });
-  var t2 = el('text', { x: C, y: C + 6, 'text-anchor': 'middle', 'font-size': 19, 'font-weight': 700, 'class': 'mono' });
-  var t3 = el('text', { x: C, y: C + 28, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 });
+  function toggle(t, i) {
+    if (st.t === t && st.i === i) st = { t: null, i: -1 }; else st = { t: t, i: i };
+    render();
+  }
+  function build(svg, items, ang, t) {
+    return items.map(function (d, i) {
+      var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice', 'data-t': t, 'data-i': i }, svg);
+      p.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
+      return p;
+    });
+  }
+  function center(svg) {
+    return [
+      el('text', { x: C, y: C - 26, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
+      el('text', { x: C, y: C - 2, 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 700, 'class': 'mono' }, svg),
+      el('text', { x: C, y: C + 16, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
+      el('text', { x: C, y: C + 32, 'text-anchor': 'middle', 'font-size': 10.5, opacity: .7 }, svg)
+    ];
+  }
+  function buildRows(leg, items, t) {
+    return items.map(function (d, i) {
+      var row = document.createElement('div'); row.className = 'row'; row.setAttribute('data-t', t); row.setAttribute('data-i', i);
+      row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
+      row.querySelector('.nm').textContent = d.n; row.title = d.n;
+      row.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
+      leg.appendChild(row); return row;
+    });
+  }
+  var slA = build(svgA, D, angA, 'a'), slS = build(svgS, S, angS, 's');
+  var cA = center(svgA), cS = center(svgS);
+  var rowsA = buildRows(legA, D, 'a'), rowsS = buildRows(legS, S, 's');
 
-  var rows = D.map(function (d, i) {
-    var row = document.createElement('div'); row.className = 'row'; row.setAttribute('data-i', i);
-    row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
-    row.querySelector('.nm').textContent = d.n; row.title = d.n;
-    row.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; select(sel === i ? -1 : i); });
-    legend.appendChild(row); return row;
-  });
-
-  function select(i) {
-    sel = i;
-    slices.forEach(function (s, j) {
-      s.setAttribute('class', 'slice' + (i >= 0 && j !== i ? ' dim' : ''));
-      if (j === i) {
+  function paint(sl, ang, rows, isAct, on) {
+    sl.forEach(function (s, j) {
+      var a = on && isAct(j);
+      s.setAttribute('class', 'slice' + (on && !a ? ' dim' : ''));
+      if (a) {
         var m = (ang[j][0] + ang[j][1]) / 2 * Math.PI / 180;
         s.style.transform = 'translate(' + (Math.sin(m) * 5) + 'px,' + (-Math.cos(m) * 5) + 'px)';
       } else { s.style.transform = ''; }
     });
-    rows.forEach(function (rw, j) { rw.className = 'row' + (j === i ? ' sel' : '') + (i >= 0 && j !== i ? ' dim' : ''); });
-    if (i < 0) {
-      t1.textContent = 'Total portefeuille'; t2.textContent = TOTAL; t3.textContent = D.length + ' position' + (D.length > 1 ? 's' : '');
+    rows.forEach(function (rw, j) {
+      var a = on && isAct(j);
+      rw.className = 'row' + (a ? ' sel' : '') + (on && !a ? ' dim' : '');
+    });
+  }
+  function txt(c, a, b, d, e) { c[0].textContent = a; c[1].textContent = b; c[2].textContent = d; c[3].textContent = e; }
+
+  function render() {
+    var on = st.t !== null, actA = {}, actS = -1;
+    if (st.t === 'a') { actA[st.i] = 1; actS = D[st.i].s; }
+    else if (st.t === 's') { S[st.i].m.forEach(function (j) { actA[j] = 1; }); actS = st.i; }
+    // Une action sélectionnée surligne son secteur ; un secteur sélectionné surligne toutes ses actions.
+    paint(slA, angA, rowsA, function (j) { return !!actA[j]; }, on);
+    paint(slS, angS, rowsS, function (j) { return j === actS; }, on);
+    if (!on) {
+      txt(cA, 'Total portefeuille', TOTAL, plural(D.length, 'position', 'positions'), '');
+      txt(cS, 'Total portefeuille', TOTAL, plural(S.length, 'secteur', 'secteurs'), '');
       return;
     }
-    var d = D[i];
-    t1.textContent = cut(d.n, 22); t2.textContent = d.v; t3.textContent = d.pt + ' %';
+    var sc = S[actS];
+    if (st.t === 'a') {
+      var d = D[st.i];
+      txt(cA, cut(d.n, 20), d.v, d.pt + ' %', cut(sc.n, 22));
+    } else {
+      txt(cA, cut(sc.n, 20), sc.v, sc.pt + ' %', plural(sc.m.length, 'action', 'actions'));
+    }
+    txt(cS, cut(sc.n, 20), sc.v, sc.pt + ' %', plural(sc.m.length, 'action', 'actions'));
   }
-  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (sel >= 0) select(-1); });
+  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t !== null) { st = { t: null, i: -1 }; render(); } });
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
   // Doigt maintenu (~0,25 s) sur une part ou une ligne de légende, puis glissé : la sélection suit le doigt.
   var timer = null, scrub = false, sx = 0, sy = 0;
-  function idxAt(x, y) {
+  function hitAt(x, y) {
     var e = document.elementFromPoint(x, y);
     while (e && e !== document.body) {
       var v = e.getAttribute && e.getAttribute('data-i');
-      if (v !== null && v !== undefined) return +v;
+      if (v !== null && v !== undefined) return { t: e.getAttribute('data-t'), i: +v };
       e = e.parentNode;
     }
-    return -1;
+    return null;
   }
   function stopHold() { if (timer) { clearTimeout(timer); timer = null; } if (scrub) { scrub = false; mute = Date.now() + 450; } }
   document.addEventListener('touchstart', function (e) {
     stopHold();
     if (e.touches.length !== 1) return;
     sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-    if (idxAt(sx, sy) < 0) return;
+    if (!hitAt(sx, sy)) return;
     timer = setTimeout(function () {
       timer = null; scrub = true;
       if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
-      var i = idxAt(sx, sy); if (i >= 0) select(i);
+      var h = hitAt(sx, sy); if (h) { st = h; render(); }
     }, 250);
   }, { passive: true });
   document.addEventListener('touchmove', function (e) {
     var t = e.touches[0];
     if (scrub) {
       e.preventDefault();
-      var i = idxAt(t.clientX, t.clientY);
-      if (i >= 0 && i !== sel) select(i);
+      var h = hitAt(t.clientX, t.clientY);
+      if (h && (h.t !== st.t || h.i !== st.i)) { st = h; render(); }
     } else if (timer && (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10)) {
       clearTimeout(timer); timer = null;
     }
@@ -2316,37 +2538,36 @@ _ALLOC_HTML = r"""
   function fit() {
     try {
       var rt = document.getElementById('root');
-      rt.style.minHeight = '0';
       var h = Math.ceil(rt.getBoundingClientRect().height) + 10;
-      rt.style.minHeight = '';
       try { window.frameElement.style.height = h + 'px'; }
       catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
     } catch (e) {}
   }
-  select(-1); fit();
+  render(); fit();
   window.addEventListener('resize', fit); setTimeout(fit, 150);
 })();
 </script>
 """
 
 def _render_allocation(df_active, cash):
-    """Camembert (anneau) de la répartition du portefeuille : TOUTES les positions actives (même les
-    très petites), sans les liquidités. Composant 100 % côté navigateur (aucun rechargement de la
-    page au clic) : au repos le centre affiche le total du portefeuille ; au clic sur une part (ou
-    sur sa ligne de légende) le centre et l'infobulle affichent sa valeur et les autres parts sont
-    atténuées. Un second clic (ou un clic à côté) revient à l'état de départ."""
+    """Deux camemberts (anneaux) côte à côte : répartition par ACTION (toutes les positions actives, même
+    très petites, sans les liquidités) et répartition par SECTEUR. Composant 100 % côté navigateur (aucun
+    rechargement au clic). Au repos le centre affiche le total du portefeuille ; au clic sur une part (ou sa
+    ligne de légende) le centre affiche sa valeur et les autres parts sont atténuées. Les deux camemberts sont
+    liés : choisir une action surligne son secteur à droite (et le centre de l'action indique ce secteur) ;
+    choisir un secteur surligne toutes ses actions à gauche. Un second clic (ou un clic à côté) désélectionne."""
     import streamlit.components.v1 as components
     rows = []
     if df_active is not None and not df_active.empty:
         for _, r in df_active.iterrows():
             v = float(r["Valeur Actuelle (€)"])
             if v > 0:
-                rows.append((str(r["Nom"]), v))
+                rows.append((str(r["Nom"]), v, _secteur_fr(r.get("Secteur"))))
     if not rows:
         st.info("Aucune position à répartir pour le moment.")
         return
     rows.sort(key=lambda x: -x[1])
-    total = sum(v for _, v in rows)
+    total = sum(v for _, v, _ in rows)
     total_centre = total
     if _ALLOC_CENTER_INCLUDE_CASH and cash is not None and cash > 0.005:
         total_centre += float(cash)
@@ -2354,17 +2575,31 @@ def _render_allocation(df_active, cash):
     def _pct_txt(p):
         return f"{p:.2f}".replace(".", ",")
 
+    # Secteurs : valeur cumulée de leurs actions, triés par valeur décroissante.
+    sect_val = {}
+    for _, v, sc in rows:
+        sect_val[sc] = sect_val.get(sc, 0.0) + v
+    sect_order = sorted(sect_val, key=lambda k: -sect_val[k])
+    sect_idx = {k: i for i, k in enumerate(sect_order)}
+
     data = [
-        {"n": n, "v": fmt_eur(v), "pct": v / total * 100, "pt": _pct_txt(v / total * 100), "c": _alloc_color(i)}
-        for i, (n, v) in enumerate(rows)
+        {"n": n, "v": fmt_eur(v), "pct": v / total * 100, "pt": _pct_txt(v / total * 100),
+         "c": _alloc_color(i), "s": sect_idx[sc]}
+        for i, (n, v, sc) in enumerate(rows)
+    ]
+    sectors = [
+        {"n": k, "v": fmt_eur(sect_val[k]), "pct": sect_val[k] / total * 100, "pt": _pct_txt(sect_val[k] / total * 100),
+         "c": _alloc_color(i), "m": [j for j, (_, _, sc) in enumerate(rows) if sc == k]}
+        for i, k in enumerate(sect_order)
     ]
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    payload_s = json.dumps(sectors, ensure_ascii=False).replace("</", "<\\/")
     page = (_ALLOC_HTML
             .replace("__DATA__", payload)
+            .replace("__SECT__", payload_s)
             .replace("__TOTAL__", json.dumps(fmt_eur(total_centre), ensure_ascii=False)))
-    # Hauteur « pire cas » (anneau au-dessus de la légende, écran étroit) ; le script la réduit
-    # automatiquement à la hauteur réelle dès que le composant est affiché.
-    components.html(page, height=250 + 34 * len(rows))
+    # Hauteur « pire cas » ; le script la réduit automatiquement à la hauteur réelle une fois affiché.
+    components.html(page, height=260 + 32 * max(len(rows), len(sectors)))
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
@@ -5422,13 +5657,13 @@ def _tab_open(_tab):
 # de conservation de l'état). Les clés ci-dessous sont extraites automatiquement du code de
 # chaque onglet (widgets ayant un key= littéral).
 _TAB_STATE_KEYS = {
-    "tab_overview": ("k_objectif_cible", "apport_prevision_input", ),
+    "tab_overview": ("k_objectif_cible", "apport_prevision_input", "k_suivi_objectif_pas", ),
     "tab_apports": (),
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
     "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
     "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
-    "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_invest_mensuel", "k_rp_annees", "k_rp_rend", "k_rp_impot", "k_rp_retrait", "k_rp_infl", ),
+    "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_impot", "k_rp_retrait", "k_rp_infl", "k_sim_graph_mode", ),
 }
 _tab_objs_by_name = {
     "tab_overview": tab_overview, "tab_positions": tab_positions, "tab_apports": tab_apports, "tab_classements": tab_classements,
@@ -5474,15 +5709,27 @@ if _tab_open(tab_overview):
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>📈 Performances</p>", unsafe_allow_html=True)
                 with st.container(key="row_perf_wrap"):
-                    r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
-                    r2_c1.metric("Perf. Globale", fmt_perf_text_only(perf_globale), delta=(f"{total_gains_cumules:+,.2f} €".replace(",", " ").replace(".", ",")))
-                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=(f"{gain_total_yr:+,.2f} €".replace(",", " ").replace(".", ",")))
-                    r2_c3.metric("Perf. Mois", fmt_perf_text_only(perf_mois_en_cours), delta=(f"{gain_total_mo:+,.2f} €".replace(",", " ").replace(".", ",")))
-                    r2_c4.metric("Performance du jour", fmt_perf_text_only(perf_jour), delta=(f"{gain_total_j:+,.2f} €".replace(",", " ").replace(".", ",")))
+                    _delta = lambda g: f"{g:+,.2f} €".replace(",", " ").replace(".", ",")
+                    # Performance annuelle moyenne : performance globale ramenée à un taux annuel composé
+                    # (indisponible tant que l'historique fait moins de 3 mois).
+                    _ans_pea = max((_now_paris() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
+                    if _ans_pea >= 0.25 and (1 + perf_globale / 100) > 0:
+                        _perf_an_moy = ((1 + perf_globale / 100) ** (1 / _ans_pea) - 1) * 100
+                        _perf_an_txt = fmt_perf_text_only(_perf_an_moy)
+                    else:
+                        _perf_an_txt = "N/A"
+                    # Une seule rangée de 5 colonnes : sur ordinateur tout tient sur une ligne ; sur téléphone
+                    # elles passent 2 par ligne (Globale|Annuelle, YTD|Mois) et la dernière occupe toute la largeur.
+                    r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
+                    r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules))
+                    r2_c2.metric("Performance Annuelle Moyenne", _perf_an_txt)
+                    r2_c3.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr))
+                    r2_c4.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo))
+                    r2_c5.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>🏷️ Plus-values, Dividendes & Frais</p>", unsafe_allow_html=True)
                 with st.container(key="row_gains_wrap"):
-                    r3_c1, r3_c2, r3_c3, r3_c4 = st.columns(4)
+                    r3_c1, r3_c2, r3_c3, r3_c4, r3_c5 = st.columns(5)
                     # Plus-Value Latente : gain latent rapporté au capital actuellement investi dans les
                     # actions détenues (tot_invested = PRU × quantités en portefeuille aujourd'hui).
                     pct_latente = (global_pnl / tot_invested * 100) if tot_invested > 0 else 0.0
@@ -5493,6 +5740,17 @@ if _tab_open(tab_overview):
                     r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")))
                     r3_c3.metric("Dividendes Reçus", fmt_eur(net_divs_total))
                     r3_c4.metric("Frais Totaux", fmt_eur(tot_fees))
+
+                    # Rendement moyen des dividendes sur le capital investi : dividendes nets perçus, ramenés à
+                    # une année (si le PEA a plus de 3 mois), rapportés au capital actuellement investi.
+                    _ans_div = max((_now_paris() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
+                    if tot_invested > 0:
+                        _rend_cumule = net_divs_total / tot_invested * 100
+                        _rend_moy = _rend_cumule / _ans_div if _ans_div >= 0.25 else _rend_cumule
+                        _rend_moy_txt = f"{_rend_moy:.2f} %".replace(".", ",")
+                    else:
+                        _rend_moy_txt = "N/A"
+                    r3_c5.metric("Rendement Moyen des Dividendes", _rend_moy_txt)
 
         # --- Alerte watchlist : valeurs suivies proches de leur zone d'achat (voir l'onglet
         # "👁️ Watchlist"). Déplacée au-dessus de "Vue d'ensemble du Portefeuille", au même endroit
@@ -5517,16 +5775,21 @@ if _tab_open(tab_overview):
                         min_value=0, step=1, value=current_apport_prev_val, format="%d",
                         key="apport_prevision_input",
                     )
-                if new_target != current_target_val:
+                # Le suivi de trajectoire démarre le jour où l'opérateur renseigne (ou modifie) ces valeurs,
+                # avec la valeur du portefeuille de ce jour-là comme point de départ. Si aucune date n'est
+                # enregistrée (ou si elle date d'une année précédente), le suivi repart d'aujourd'hui.
+                _auj_iso = _today_paris().strftime("%Y-%m-%d")
+                _date_obj_cfg = str(app_config.get("objectif_date", "") or "")
+                _valeurs_modifiees = (new_target != current_target_val) or (apport_prevision != current_apport_prev_val)
+                _date_obsolete = (not _date_obj_cfg) or (_date_obj_cfg[:4] != _auj_iso[:4])
+                if _valeurs_modifiees or _date_obsolete:
                     app_config["yearly_target"] = int(new_target)
+                    app_config["apport_previsionnel"] = int(apport_prevision)
+                    app_config["objectif_date"] = _auj_iso
+                    app_config["objectif_v0"] = float(tot_value_globale)
                     _ok_cfg, _err_cfg = save_config(app_config)
                     if not _ok_cfg:
                         st.warning(_err_cfg)
-                if apport_prevision != current_apport_prev_val:
-                    app_config["apport_previsionnel"] = int(apport_prevision)
-                    _ok_cfg2, _err_cfg2 = save_config(app_config)
-                    if not _ok_cfg2:
-                        st.warning(_err_cfg2)
 
             # Résultats sous les champs, sur toute la largeur.
             # La barre de progression et "Restant à atteindre" intègrent l'épargne prévue :
@@ -5604,7 +5867,7 @@ if _tab_open(tab_overview):
             {_progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)}
             <div class="pea-stats">
                 <div class="pea-stat"><div class="k">Actuel</div><div class="v">{fmt_eur(tot_value_globale)}</div></div>
-                <div class="pea-stat"><div class="k">Restant (après épargne prévue)</div><div class="v" style="color:{badge_color};">{fmt_eur(montant_restant)}</div></div>
+                <div class="pea-stat"><div class="k">Reste à atteindre</div><div class="v" style="color:{badge_color};">{fmt_eur(montant_restant)}</div></div>
                 <div class="pea-stat"><div class="k">Cible</div><div class="v">{fmt_eur(new_target)}</div></div>
             </div>
             <div style="margin-top: 12px; padding: 10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid {badge_color}; border-radius:8px;">
@@ -5617,6 +5880,110 @@ if _tab_open(tab_overview):
             """, 
                 unsafe_allow_html=True
             )
+
+            # --- Suivi de la trajectoire vers l'objectif : valeur réelle du portefeuille vs valeur attendue sur une
+            # trajectoire linéaire (valeur au 31/12 de l'an dernier -> cible au 31/12), jour / semaine / mois. ---
+            if new_target > 0 and not df_transactions.empty:
+                # Ligne vide avant le suivi ; titre et sélecteur Jour/Semaine/Mois rapprochés.
+                st.markdown(
+                    "<div style='height:18px'></div>"
+                    "<style>.st-key-k_suivi_objectif_pas { margin-top: -0.75rem; }</style>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown("**📅 Suivi de la trajectoire vers l'objectif**")
+                _pas_suivi = st.radio("Pas du suivi", ["Jour", "Semaine", "Mois"], index=2, horizontal=True,
+                                      key="k_suivi_objectif_pas", label_visibility="collapsed")
+                _h_obj = get_portfolio_history(df_transactions)
+                _serie = _h_obj["Valeur du Portefeuille (€)"].dropna() if "Valeur du Portefeuille (€)" in _h_obj.columns else pd.Series(dtype=float)
+                _an = _today_paris().year
+                _debut_obj = pd.Timestamp(str(app_config.get("objectif_date") or _today_paris().strftime("%Y-%m-%d")))
+                _fin_obj = pd.Timestamp(_an, 12, 31)
+                _jours_obj = max((_fin_obj - _debut_obj).days, 1)
+                _v0 = float(app_config.get("objectif_v0", tot_value_globale))
+                _auj = _today_paris()
+                _auj = pd.Timestamp(_auj.year, _auj.month, _auj.day)
+                _att_fn = lambda d: _v0 + (new_target - _v0) * float(np.clip((d - _debut_obj).days / _jours_obj, 0.0, 1.0))
+
+                # Échéancier COMPLET, de la date de saisie jusqu'au 31/12 : chaque ligne donne la valeur théorique
+                # attendue à la fin de la période. La valeur réelle, l'écart et le statut se remplissent au fil des
+                # jours (périodes terminées uniquement) tant que l'objectif n'est pas modifié.
+                _starts, _ends = [], []
+                if _pas_suivi == "Jour":
+                    _jr = pd.bdate_range(_debut_obj, _fin_obj)
+                    _starts, _ends = list(_jr), list(_jr)
+                elif _pas_suivi == "Semaine":
+                    _cur_d = _debut_obj
+                    while _cur_d <= _fin_obj:
+                        _e = min(_cur_d + pd.Timedelta(days=(6 - _cur_d.weekday())), _fin_obj)
+                        _starts.append(_cur_d); _ends.append(_e)
+                        _cur_d = _e + pd.Timedelta(days=1)
+                else:
+                    _cur_d = _debut_obj
+                    while _cur_d <= _fin_obj:
+                        _e = min(_cur_d + pd.offsets.MonthEnd(0), _fin_obj)
+                        _starts.append(_cur_d); _ends.append(_e)
+                        _cur_d = _e + pd.Timedelta(days=1)
+
+                _rows_obj = []
+                for _d0, _d1 in zip(_starts, _ends):
+                    _att = _att_fn(_d1)
+                    _termine = _d1 <= _auj and len(_serie) > 0 and _d1 >= _serie.index[0]
+                    if _d1 <= _auj and len(_serie):
+                        _vr = _serie[_serie.index <= _d1]
+                        _vr = float(_vr.iloc[-1]) if len(_vr) else np.nan
+                    else:
+                        _vr = np.nan
+                    _en_cours = (_d0 <= _auj <= _d1) and not (_d1 <= _auj)
+                    _rows_obj.append((_d0, _d1, _att, _vr, _en_cours))
+
+                # Message de synthèse : écart d'aujourd'hui par rapport à la trajectoire théorique.
+                if len(_serie):
+                    _v_now = float(_serie.iloc[-1])
+                    _att_now = _att_fn(_auj)
+                    _ec_now = _v_now - _att_now
+                    _ok_now = _ec_now >= 0
+                    st.markdown(
+                        f"{'✅' if _ok_now else '❌'} **{'En avance' if _ok_now else 'En retard'}** de "
+                        f"**{fmt_eur(abs(_ec_now))}** sur la trajectoire (valeur attendue aujourd'hui : {fmt_eur(_att_now)})."
+                    )
+
+                def _lab_obj(d0, d1):
+                    if _pas_suivi == "Jour":
+                        return d1.strftime("%d/%m/%Y")
+                    if _pas_suivi == "Semaine":
+                        return f"Sem. {d1.isocalendar()[1]} (au {d1.strftime('%d/%m')})"
+                    return f"{d1.month:02d}/{d1.year}"
+
+                _lab, _vr_t, _att_t, _ecm_t, _ecp_t, _stat_t, _styles_t = [], [], [], [], [], [], []
+                _focus = None
+                for _k, (_d0, _d1, _att, _vr, _enc) in enumerate(_rows_obj):
+                    _lab.append(_lab_obj(_d0, _d1))
+                    _att_t.append(fmt_eur(_att))
+                    if not np.isnan(_vr):
+                        _ec = _vr - _att
+                        _vr_t.append(fmt_eur(_vr)); _ecm_t.append(fmt_eur_arrow(_ec))
+                        _ecp_t.append(fmt_perf_simple(_ec / _att * 100) if _att > 0 else "-")
+                        _stat_t.append("✅ En avance" if _ec >= 0 else "❌ En retard")
+                    else:
+                        _vr_t.append("-"); _ecm_t.append("-"); _ecp_t.append("-")
+                        _stat_t.append("⏳ En cours" if _enc else "🕒 À venir")
+                    _styles_t.append("background:rgba(2,132,199,0.10);" if _enc else "")
+                    if _enc and _focus is None:
+                        _focus = _k
+                if _focus is None:
+                    # Aucune période en cours (ex. suivi par jour) : on se place sur la première ligne à venir.
+                    _focus = next((k for k, r in enumerate(_rows_obj) if np.isnan(r[3])), None)
+                _tbl_obj = pd.DataFrame({
+                    "Période": _lab, "Valeur réelle": _vr_t, "Valeur attendue": _att_t,
+                    "Écart (€)": _ecm_t, "Écart (%)": _ecp_t, "Statut": _stat_t,
+                })
+                _html_table(
+                    _tbl_obj,
+                    row_styles=_styles_t,
+                    cell_style=lambda c, v: _style_perf_cell(v) if c in ("Écart (€)", "Écart (%)") else "",
+                    max_height=420,
+                    focus_row=_focus,
+                )
 
 # ------------------------------------------
 # ONGLÊT 2 : POSITIONS & TRANSACTIONS
@@ -5677,13 +6044,32 @@ if _tab_open(tab_positions):
                 # Affichage de toutes les lignes sans barre de scroll (height dynamique selon le nombre de lignes)
                 row_height = 35
                 header_height = 40
-                total_height = header_height + len(df_active_fmt) * row_height
+                total_height = header_height + (len(df_active_fmt) + 1) * row_height + 20  # +1 ligne : le Total
                 _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
                                        if c in df_active_fmt.columns]
+                # Ligne Total (sommes sur les positions actives, calculées sur les valeurs numériques d'origine).
+                # Performance et YoC : mêmes formules que par ligne, sur l'ensemble (gain latent / capital investi,
+                # dividendes / capital investi).
+                def _som_act(col):
+                    if col not in df_active.columns:
+                        return 0.0
+                    return float(pd.to_numeric(df_active[col], errors="coerce").fillna(0).sum())
+                _t_val, _t_gl, _t_gr = _som_act("Valeur Actuelle (€)"), _som_act("Gain Latent (€)"), _som_act("Gain Réalisé (€)")
+                _t_div, _t_cap = _som_act("Dividendes Reçus (€)"), _som_act("Capital Investi (€)")
+                _tot_act = {c: "" for c in df_active_fmt.columns}
+                _tot_act["Nom"] = "Total"
+                _tot_act["Valeur Actuel (€)"] = fmt_eur(_t_val)
+                _tot_act["Gain Latent (€)"] = fmt_eur_arrow(_t_gl)
+                _tot_act["Gain Réalisé (€)"] = fmt_eur_arrow(_t_gr)
+                _tot_act["Dividende Reçu (€)"] = fmt_eur(_t_div)
+                _tot_act["Performance (%)"] = fmt_perf(_t_gl / _t_cap * 100) if _t_cap > 0 else "N/A"
+                _tot_act["YoC (%)"] = f"{(_t_div / _t_cap * 100) if _t_cap > 0 else 0.0:.2f}%".replace(".", ",")
+                _tot_act = _dash_if_empty(pd.DataFrame([_tot_act])).iloc[0].to_dict()
                 _html_table(
                     _dash_if_empty(df_active_fmt),
                     cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_active else "",
                     max_height=min(max(total_height, 100), 1000),
+                    total_row=_tot_act,
                 )
             else:
                 st.info("Aucune position active pour le moment.")
@@ -5916,7 +6302,7 @@ if _tab_open(tab_positions):
                     _bg_tx = {"ACHAT": "#f0f7ff", "VENTE": "#fdf2f2", "DIVIDENDE": "#f2fcf5", "APPORT": "#e6f4ea",
                               "RETRAIT": "#f5f3ff", "SPLIT": "#fff7ed", "REGROUPEMENT": "#fff7ed", "SPLIT/REGROUPEMENT": "#fff7ed"}
                     _row_styles_tx = [f"background-color: {_bg_tx[t]};" if t in _bg_tx else "" for t in df_table["Type"]]
-                    _html_table(df_table, row_styles=_row_styles_tx, show_index=True, index_label="N°")
+                    _html_table(_dash_if_empty(df_table), row_styles=_row_styles_tx, show_index=True, index_label="N°")
                 else:
                     st.info("Aucune transaction trouvée avec ces critères.")
 
@@ -6087,14 +6473,31 @@ if _tab_open(tab_positions):
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
                 df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)']).copy()
-                # Flèches ▲ / ▼ remises sur chaque montant en € et chaque pourcentage.
-                for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)']:
+                # Même présentation que « Détail des Positions Actives » : chiffres colorés (▲ vert / ▼ rouge) sur
+                # les gains et la performance, dividendes en simple montant, une ligne grise sur deux (CSS du
+                # tableau) ; plus aucun dégradé de couleur sur le nom de l'action (gris uniquement).
+                for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)']:
                     df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur_arrow)
+                df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
 
-                # Dégradé continu (vert / rouge) selon le gain total de chaque ligne.
-                _row_styles_gain = get_smooth_gradient_styles(df_gain_rank['Gain Total Global (€)'].to_numpy(dtype=float))
-                _html_table(_dash_if_empty(df_gain_rank_fmt), row_styles=_row_styles_gain)
+                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)']
+                # Ligne Total : somme de chaque colonne sur toutes les actions du classement. La performance n'est pas
+                # totalisée ici (la base de calcul diffère selon que la position est ouverte ou soldée).
+                _tot_rank = {c: "" for c in df_gain_rank_fmt.columns}
+                _tot_rank["Nom"] = "Total"
+                _tot_rank['Gain Réalisé (€)'] = fmt_eur_arrow(df_gain_rank['Gain Réalisé (€)'].sum())
+                _tot_rank['Gain Latent (€)'] = fmt_eur_arrow(df_gain_rank['Gain Latent (€)'].sum())
+                _tot_rank['Dividendes Reçus (€)'] = fmt_eur(df_gain_rank['Dividendes Reçus (€)'].sum())
+                _tot_rank['Gain Total Global (€)'] = fmt_eur_arrow(df_gain_rank['Gain Total Global (€)'].sum())
+                _tot_rank['Nombre de mouvements'] = str(int(pd.to_numeric(df_gain_rank['Nombre de mouvements'], errors="coerce").fillna(0).sum()))
+                _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank])).iloc[0].to_dict()
+                _tot_rank["N°"] = ""
+                _html_table(
+                    _dash_if_empty(df_gain_rank_fmt),
+                    cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_rank else "",
+                    total_row=_tot_rank,
+                )
             else:
                 st.info("Aucune donnée disponible pour le classement des gains.")
 
@@ -6327,7 +6730,7 @@ if _tab_open(tab_classements):
                     customdata=_customdata,
                     text=_montants_fmt,
                     textposition="outside",
-                    textfont=dict(size=12, color=color),
+                    textfont=dict(size=11, color=color),
                     cliponaxis=False,
                     hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<br>%{customdata[2]}<extra></extra>",
                     showlegend=False,
@@ -6337,10 +6740,10 @@ if _tab_open(tab_classements):
                     _edge = 1 if color == "#16a34a" else -1
                 fig.update_layout(
                     height=max(220, 34 * _n + 40),
-                    margin=dict(l=14, r=64, t=6, b=6),
+                    margin=dict(l=14, r=56, t=6, b=6),
                     bargap=0.35,
                     xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _edge * 1.25], showticklabels=False),
-                    yaxis=dict(title=None, tickmode="array", tickvals=_y, ticktext=_labels, range=[-0.6, _n - 0.4]),
+                    yaxis=dict(title=None, tickmode="array", tickvals=_y, ticktext=_labels, range=[-0.6, _n - 0.4], tickfont=dict(size=11)),
                 )
                 apply_chart_theme(fig)
                 _plotly_chart(fig, use_container_width=True, key=f"chart_top10_{key_suffix}")
@@ -6411,7 +6814,7 @@ if _tab_open(tab_classements):
 
                     def _label_frise(row):
                         nom_l = str(row["Nom"])
-                        return nom_l if len(nom_l) <= 22 else nom_l[:21] + "…"
+                        return nom_l if len(nom_l) <= 14 else nom_l[:13] + "…"  # court : 2 graphiques côte à côte (nom complet au survol)
 
                     def _pct_str_frise(pct):
                         if pd.isna(pct):
@@ -6435,7 +6838,7 @@ if _tab_open(tab_classements):
                             customdata=customdata_list,
                             text=montants_fmt,
                             textposition="outside",
-                            textfont=dict(size=12, color=color),
+                            textfont=dict(size=11, color=color),
                             cliponaxis=False,
                             hovertemplate=(
                                 "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>"
@@ -6444,7 +6847,7 @@ if _tab_open(tab_classements):
                             showlegend=False,
                         )
 
-                    col_gains_frise, col_pertes_frise = _paired_columns("onecol_rank_col_gains_frise")
+                    col_gains_frise, col_pertes_frise = _paired_columns("sbs_rank_col_gains_frise")
 
                     # Totaux sur l'ENSEMBLE des ventes réalisées (pas seulement les 10 affichées dans
                     # chaque classement ci-dessous), sous la même forme de petite carte que "Total
@@ -6475,11 +6878,12 @@ if _tab_open(tab_classements):
                             # que de ventes dans le classement (jusqu'à 10).
                             _y_gains = list(range(_n_gains - 1, -1, -1))  # position 0 = tout en bas
                             _montants_fmt_gains = [fmt_eur(v) for v in _vals_gains]
+                            _full_names_gains = _df_gains_disp["Nom"].astype(str).tolist()
                             _customdata_gains = [
                                 (lbl, date_str, _tip_col("Plus-value", montant_str, val),
                                  _tip_col("Performance", _pct_str_frise(pct_val), val if pd.isna(pct_val) else pct_val))
                                 for lbl, date_str, montant_str, pct_val, val in zip(
-                                    _labels_gains, _df_gains_disp["Date_Str"], _montants_fmt_gains,
+                                    _full_names_gains, _df_gains_disp["Date_Str"], _montants_fmt_gains,
                                     _df_gains_disp["Gain Réalisé (%)"], _vals_gains
                                 )
                             ]
@@ -6494,13 +6898,13 @@ if _tab_open(tab_classements):
                             _max_gains = max(_vals_gains) if _vals_gains else 0
                             fig_gains_frise.update_layout(
                                 height=max(220, 34 * _n_gains + 40),
-                                margin=dict(l=14, r=64, t=6, b=6),
+                                margin=dict(l=14, r=56, t=6, b=6),
                                 bargap=0.35,
                                 xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _max_gains * 1.25], showticklabels=False),
                                 yaxis=dict(
                                     title=None,
                                     tickmode="array", tickvals=_y_gains, ticktext=_labels_gains,
-                                    range=[-0.6, _n_gains - 0.4],
+                                    range=[-0.6, _n_gains - 0.4], tickfont=dict(size=11),
                                 ),
                             )
                             apply_chart_theme(fig_gains_frise)
@@ -6527,11 +6931,12 @@ if _tab_open(tab_classements):
                             # entreprise (sinon Plotly les fusionnait sur une seule catégorie/ligne).
                             _y_pertes = list(range(_n_pertes - 1, -1, -1))  # position 0 = tout en bas
                             _montants_fmt_pertes = [fmt_eur(v) for v in _vals_pertes]
+                            _full_names_pertes = _df_pertes_disp["Nom"].astype(str).tolist()
                             _customdata_pertes = [
                                 (lbl, date_str, _tip_col("Moins-value", montant_str, val),
                                  _tip_col("Performance", _pct_str_frise(pct_val), val if pd.isna(pct_val) else pct_val))
                                 for lbl, date_str, montant_str, pct_val, val in zip(
-                                    _labels_pertes, _df_pertes_disp["Date_Str"], _montants_fmt_pertes,
+                                    _full_names_pertes, _df_pertes_disp["Date_Str"], _montants_fmt_pertes,
                                     _df_pertes_disp["Gain Réalisé (%)"], _vals_pertes
                                 )
                             ]
@@ -6547,13 +6952,13 @@ if _tab_open(tab_classements):
                             _min_pertes = min(_vals_pertes) if _vals_pertes else 0
                             fig_pertes_frise.update_layout(
                                 height=max(220, 34 * _n_pertes + 40),
-                                margin=dict(l=14, r=64, t=6, b=6),
+                                margin=dict(l=14, r=56, t=6, b=6),
                                 bargap=0.35,
                                 xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _min_pertes * 1.25], showticklabels=False),
                                 yaxis=dict(
                                     title=None,
                                     tickmode="array", tickvals=_y_pertes, ticktext=_labels_pertes,
-                                    range=[-0.6, _n_pertes - 0.4],
+                                    range=[-0.6, _n_pertes - 0.4], tickfont=dict(size=11),
                                 ),
                             )
                             apply_chart_theme(fig_pertes_frise)
@@ -6611,7 +7016,7 @@ if _tab_open(tab_classements):
                         st.markdown("#### Meilleures et pires journées du portefeuille (en €)")
                         df_best_days_eur = df_days_rank.nlargest(10, "PnL_Jour").sort_values("PnL_Jour", ascending=False)
                         df_worst_days_eur = df_days_rank.nsmallest(10, "PnL_Jour").sort_values("PnL_Jour", ascending=True)
-                        col_best_eur, col_worst_eur = _paired_columns("onecol_rank_col_best_eur")
+                        col_best_eur, col_worst_eur = _paired_columns("sbs_rank_col_best_eur")
                         with col_best_eur:
                             st.markdown("**📈 Top 10 des meilleures journées**")
                             _render_days_ranking(df_best_days_eur, "PnL_Jour", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6624,7 +7029,7 @@ if _tab_open(tab_classements):
                         st.markdown("#### Meilleures et pires journées du portefeuille (en %)")
                         df_best_days_pct = df_days_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                         df_worst_days_pct = df_days_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                        col_best_pct, col_worst_pct = _paired_columns("onecol_rank_col_best_pct")
+                        col_best_pct, col_worst_pct = _paired_columns("sbs_rank_col_best_pct")
                         with col_best_pct:
                             st.markdown("**📈 Top 10 des meilleures journées**")
                             _render_days_ranking(df_best_days_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -6653,7 +7058,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires mois du portefeuille (en €)")
                     df_best_months_eur = df_months_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_months_eur = df_months_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_m_eur, col_worst_m_eur = _paired_columns("onecol_rank_col_best_m_eur")
+                    col_best_m_eur, col_worst_m_eur = _paired_columns("sbs_rank_col_best_m_eur")
                     with col_best_m_eur:
                         st.markdown("**📈 Top 10 des meilleurs mois**")
                         _render_months_ranking(df_best_months_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6666,7 +7071,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires mois du portefeuille (en %)")
                     df_best_months_pct = df_months_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_months_pct = df_months_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_m_pct, col_worst_m_pct = _paired_columns("onecol_rank_col_best_m_pct")
+                    col_best_m_pct, col_worst_m_pct = _paired_columns("sbs_rank_col_best_m_pct")
                     with col_best_m_pct:
                         st.markdown("**📈 Top 10 des meilleurs mois**")
                         _render_months_ranking(df_best_months_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -6695,7 +7100,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleurs et pires trimestres du portefeuille (en €)")
                     df_best_q_eur = df_quarters_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_q_eur = df_quarters_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_q_eur, col_worst_q_eur = _paired_columns("onecol_rank_col_best_q_eur")
+                    col_best_q_eur, col_worst_q_eur = _paired_columns("sbs_rank_col_best_q_eur")
                     with col_best_q_eur:
                         st.markdown("**📈 Top 10 des meilleurs trimestres**")
                         _render_quarters_ranking(df_best_q_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6708,7 +7113,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleurs et pires trimestres du portefeuille (en %)")
                     df_best_q_pct = df_quarters_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_q_pct = df_quarters_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_q_pct, col_worst_q_pct = _paired_columns("onecol_rank_col_best_q_pct")
+                    col_best_q_pct, col_worst_q_pct = _paired_columns("sbs_rank_col_best_q_pct")
                     with col_best_q_pct:
                         st.markdown("**📈 Top 10 des meilleurs trimestres**")
                         _render_quarters_ranking(df_best_q_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -6737,7 +7142,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires années du portefeuille (en €)")
                     df_best_years_eur = df_years_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_years_eur = df_years_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_y_eur, col_worst_y_eur = _paired_columns("onecol_rank_col_best_y_eur")
+                    col_best_y_eur, col_worst_y_eur = _paired_columns("sbs_rank_col_best_y_eur")
                     with col_best_y_eur:
                         st.markdown("**📈 Meilleures années**")
                         _render_years_ranking(df_best_years_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6750,7 +7155,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires années du portefeuille (en %)")
                     df_best_years_pct = df_years_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_years_pct = df_years_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_y_pct, col_worst_y_pct = _paired_columns("onecol_rank_col_best_y_pct")
+                    col_best_y_pct, col_worst_y_pct = _paired_columns("sbs_rank_col_best_y_pct")
                     with col_best_y_pct:
                         st.markdown("**📈 Meilleures années**")
                         _render_years_ranking(df_best_years_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -7340,8 +7745,11 @@ if _tab_open(tab_perf):
                                 textposition=text_positions.get(name, "middle right"),
                                 cliponaxis=False,
                                 line=dict(color=color, width=width, dash='solid'),
-                                customdata=[f"{_arrow_sym(v)} {v:+,.2f}".replace(",", " ").replace(".", ",") for v in extended_y],
-                                hovertemplate=f"<b>{name}</b><br>Performance : %{{customdata}} %<extra></extra>"
+                                customdata=[
+                                    (f"<span style='color:{'#4ade80' if v >= 0 else '#f87171'};'><b>{name}</b><br>Performance : "
+                                     f"{_arrow_sym(v)} {v:+,.2f} %</span>").replace(",", " ").replace(".", ",")
+                                    if not pd.isna(v) else "" for v in extended_y],
+                                hovertemplate="%{customdata}<extra></extra>"
                             ))
 
                         fig.add_hline(
@@ -7471,6 +7879,15 @@ if _tab_open(tab_perf):
                                 gain_jour = (act_j0 - inv_j0) - (act_j1 - inv_j1) + (real_j0 - real_j1) + (div_j0 - div_j1)
                                 perf_port_jour = (gain_jour / base_j) * 100 if base_j > 0 else 0.0
 
+                            # Semaine en cours : depuis le lundi (même logique que « mois » = depuis le 1er du mois),
+                            # référence = valeur à la clôture de la veille du lundi.
+                            start_week_ts = today_dt - pd.Timedelta(days=int(today_dt.dayofweek))
+                            val_w_f, app_w_f, real_w_f, div_w_f, act_w_f, inv_w_f = get_h_val_comp(today_dt)
+                            val_w_i, app_w_i, real_w_i, div_w_i, act_w_i, inv_w_i = get_h_val_comp(start_week_ts - pd.Timedelta(seconds=1))
+                            base_w = val_w_i if val_w_i > 0 else (app_w_i if app_w_i > 0 else (tot_invested if tot_invested > 0 else 1.0))
+                            gain_w = (act_w_f - inv_w_f) - (act_w_i - inv_w_i) + (real_w_f - real_w_i) + (div_w_f - div_w_i)
+                            perf_port_semaine = (gain_w / base_w) * 100 if base_w > 0 else 0.0
+
                             start_month_ts = pd.Timestamp(_now_paris().year, _now_paris().month, 1)
                             val_mo_f, app_mo_f, real_mo_f, div_mo_f, act_mo_f, inv_mo_f = get_h_val_comp(today_dt)
                             val_mo_i, app_mo_i, real_mo_i, div_mo_i, act_mo_i, inv_mo_i = get_h_val_comp(start_month_ts - pd.Timedelta(seconds=1))
@@ -7489,6 +7906,7 @@ if _tab_open(tab_perf):
                             comparison_data.append({
                                 "Indice / Actif": "Mon Portefeuille",
                                 "Performance du jour (%)": perf_port_jour,
+                                "Performance de la semaine (%)": perf_port_semaine,
                                 "Performance du mois (%)": perf_port_mois,
                                 "Performance de l'année (%)": perf_port_annee,
                                 "Performance globale (%)": perf_port_comp
@@ -7524,6 +7942,17 @@ if _tab_open(tab_perf):
                                         else:
                                             b_jour = 0.0
 
+                                    # Semaine : depuis le lundi, par rapport à la dernière clôture avant le lundi
+                                    # (à défaut, première clôture de la semaine).
+                                    b_sem_apres = b_clean[b_clean.index >= start_week_ts]
+                                    b_sem_avant = b_clean[b_clean.index < start_week_ts]
+                                    if len(b_sem_apres) >= 1 and len(b_sem_avant) >= 1 and b_sem_avant.iloc[-1] > 0:
+                                        b_sem = ((b_sem_apres.iloc[-1] - b_sem_avant.iloc[-1]) / b_sem_avant.iloc[-1]) * 100
+                                    elif len(b_sem_apres) >= 2 and b_sem_apres.iloc[0] > 0:
+                                        b_sem = ((b_sem_apres.iloc[-1] - b_sem_apres.iloc[0]) / b_sem_apres.iloc[0]) * 100
+                                    else:
+                                        b_sem = 0.0
+
                                     b_clean_mois = b_clean[b_clean.index >= start_month_ts]
                                     if len(b_clean_mois) >= 2 and b_clean_mois.iloc[0] > 0:
                                         b_mois = ((b_clean_mois.iloc[-1] - b_clean_mois.iloc[0]) / b_clean_mois.iloc[0]) * 100
@@ -7537,11 +7966,12 @@ if _tab_open(tab_perf):
                                         b_annee = 0.0
 
                                 except Exception:
-                                    b_perf, b_jour, b_mois, b_annee = 0.0, "N/A", 0.0, 0.0
+                                    b_perf, b_jour, b_sem, b_mois, b_annee = 0.0, "N/A", 0.0, 0.0, 0.0
 
                                 comparison_data.append({
                                     "Indice / Actif": bench_name,
                                     "Performance du jour (%)": b_jour,
+                                    "Performance de la semaine (%)": b_sem,
                                     "Performance du mois (%)": b_mois,
                                     "Performance de l'année (%)": b_annee,
                                     "Performance globale (%)": b_perf
@@ -7550,6 +7980,7 @@ if _tab_open(tab_perf):
                             df_comp_res = pd.DataFrame(comparison_data)
                         
                             df_comp_res["Performance du jour"] = df_comp_res["Performance du jour (%)"].apply(lambda x: "N/A" if x == "N/A" else fmt_perf_simple(x))
+                            df_comp_res["Performance de la semaine"] = df_comp_res["Performance de la semaine (%)"].apply(lambda x: fmt_perf_simple(x))
                             df_comp_res["Performance du mois"] = df_comp_res["Performance du mois (%)"].apply(lambda x: fmt_perf_simple(x))
                             df_comp_res["Performance de l'année"] = df_comp_res["Performance de l'année (%)"].apply(lambda x: fmt_perf_simple(x))
                             df_comp_res["Performance globale"] = df_comp_res["Performance globale (%)"].apply(lambda x: fmt_perf_simple(x))
@@ -7557,6 +7988,7 @@ if _tab_open(tab_perf):
                             cols_final_comp = [
                                 "Indice / Actif", 
                                 "Performance du jour", 
+                                "Performance de la semaine", 
                                 "Performance du mois", 
                                 "Performance de l'année", 
                                 "Performance globale"
@@ -7815,7 +8247,8 @@ if _tab_open(tab_dividends):
                             # mois survolé d'un coup, où qu'on clique sur la colonne.
                             labels_mois = [f"{mois_abrev_fr[m - 1]} {a}" for (a, m) in mois_ordre]
                             noms_uniques_12m = sorted(df_occ_12m["Nom"].unique().tolist())
-                            palette_12m = pcolors.qualitative.Alphabet if len(noms_uniques_12m) > 10 else pcolors.qualitative.Plotly
+                            # Palette pastel du dashboard (la même que les camemberts) au lieu des couleurs vives de Plotly.
+                            palette_12m = [_alloc_color(k) for k in range(max(len(noms_uniques_12m), 1))]
 
                             traces_div_12m = []
                             for i, nom in enumerate(noms_uniques_12m):
@@ -7825,7 +8258,7 @@ if _tab_open(tab_dividends):
                                     name=nom,
                                     x=labels_mois,
                                     y=y_vals,
-                                    marker=dict(color=couleur, line=dict(width=0)),
+                                    marker=dict(color=couleur, line=dict(color="rgba(255,255,255,0.9)", width=1.5)),
                                     hoverinfo="skip",  # le détail est porté par la trace invisible ci-dessous
                                     # offsetgroup/alignmentgroup partagé avec la trace invisible ci-dessous :
                                     # sans ça, Plotly ne garantit pas que les deux occupent exactement la
@@ -7882,21 +8315,31 @@ if _tab_open(tab_dividends):
                                 alignmentgroup="mois_div_12m",
                             ))
 
-                            _grid_color_div12m = "#f1f5f9"
+                            # Total du mois écrit au-dessus de chaque barre (arrondi pour rester lisible sur téléphone).
+                            _tot_mois = [float(sum(agg_div_12m.get((mc, nom), 0.0) for nom in noms_uniques_12m)) for mc in mois_ordre]
+                            _fmt_tot = lambda t: ("" if t <= 0 else (f"{t:,.0f} €".replace(",", " ") if t >= 10 else f"{t:.1f} €".replace(".", ",")))
+                            traces_div_12m.append(go.Scatter(
+                                x=labels_mois, y=_tot_mois, mode="text",
+                                text=[_fmt_tot(t) for t in _tot_mois], textposition="top center",
+                                textfont=dict(size=11, color="#0f766e"),
+                                hoverinfo="skip", showlegend=False, cliponaxis=False,
+                            ))
+                            _grid_color_div12m = "rgba(148,163,184,0.18)"
                             fig_div_12m = go.Figure(data=traces_div_12m)
                             fig_div_12m.update_layout(
                                 barmode="stack",
                                 height=360,
-                                margin=dict(l=40, r=20, t=20, b=40),
-                                bargap=0.25,
-                                yaxis=dict(title="Montant estimé (€)", showgrid=True, gridcolor=_grid_color_div12m),
+                                margin=dict(l=36, r=10, t=20, b=36),
+                                bargap=0.35,
+                                yaxis=dict(title=None, showgrid=True, gridcolor=_grid_color_div12m, zeroline=False,
+                                           ticksuffix=" €", range=[0, max(max(_tot_mois), 1.0) * 1.2]),
                                 yaxis2=dict(overlaying="y", visible=False, range=[0, 1], fixedrange=True),
-                                xaxis=dict(title=None),
+                                xaxis=dict(title=None, showgrid=False, tickangle=-45 if len(labels_mois) > 8 else 0),
                                 hovermode="x",
                                 # Légende conservée (elle reste utile pour identifier les couleurs), même
                                 # avec beaucoup d'entreprises.
                                 showlegend=True,
-                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
                             )
                             apply_chart_theme(fig_div_12m)
                             _plotly_chart(fig_div_12m, use_container_width=True, key="chart_div_12_mois")
@@ -8028,6 +8471,9 @@ if _tab_open(tab_history):
                                 "Achats": achats_s[mask_actif].map(_fmt_eur_h),
                                 "Frais": frais_s[mask_actif].map(_fmt_eur_h),
                                 "Apport": apports_s[mask_actif].map(lambda v: _fmt_eur_h(v) if v > 0 else "N/A"),
+                                "_sale": daily_df.index[mask_actif].normalize().isin(
+                                    pd.DatetimeIndex(df_transactions.loc[df_transactions["Type"] == "VENTE", "Date_Heure"]).normalize()
+                                ),
                             }).sort_values("_dt", ascending=False).drop(columns=["_dt"])
                             # Numérotation façon "détail complet des transactions" : le jour le plus
                             # ancien affiché commence à 1, tandis que le tableau reste trié avec le jour
@@ -8035,8 +8481,10 @@ if _tab_open(tab_history):
                             df_q_res = df_q_res.reset_index(drop=True)
                             _total_q = len(df_q_res)
                             df_q_res.index = _total_q - df_q_res.index
+                            _sale_q = df_q_res.pop("_sale").to_numpy()
                             _rs_q = _row_styles_of(style_entire_row_gradient(df_q_res))
-                            _html_table(_dash_if_empty(df_q_res), row_styles=_rs_q, show_index=True, index_label="N°")
+                            _html_table(_dash_if_empty(df_q_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_q),
+                                        row_styles=_rs_q, show_index=True, index_label="N°")
                         else:
                             st.info("Pas encore assez d'historique pour établir ce tableau.")
 
@@ -8048,6 +8496,8 @@ if _tab_open(tab_history):
                         perf_records = []
                         get_h_val = _make_get_h_val(history_df)
                         _tx_agg = _make_tx_period_agg(df_transactions)
+                        _sale_dts = pd.DatetimeIndex(df_transactions.loc[df_transactions["Type"] == "VENTE", "Date_Heure"])
+                        _sale_ym = set(zip(_sale_dts.year, _sale_dts.month))
                         for i in range(len(monthly_df)):
                             current_date = monthly_df.index[i]
                             current_val = monthly_df.iloc[i]["Valeur Actions (€)"]
@@ -8080,7 +8530,8 @@ if _tab_open(tab_history):
                                 "Valeur Actions Fin Mois": _fmt_eur_h(current_val),
                                 "Achats": _fmt_eur_h(achats_mois),
                                 "Frais": _fmt_eur_h(frais_mois),
-                                "Apport": apports_str
+                                "Apport": apports_str,
+                                "_sale": (current_date.year, current_date.month) in _sale_ym,
                             })
                         df_m_res = pd.DataFrame(perf_records).sort_values("_dt", ascending=False).drop(columns=["_dt"])
                         # Numérotation façon "détail complet des transactions" : le mois le plus ancien
@@ -8088,8 +8539,10 @@ if _tab_open(tab_history):
                         df_m_res = df_m_res.reset_index(drop=True)
                         _total_m = len(df_m_res)
                         df_m_res.index = _total_m - df_m_res.index
+                        _sale_m = df_m_res.pop("_sale").to_numpy()
                         _rs_m = _row_styles_of(style_entire_row_gradient(df_m_res))
-                        _html_table(_dash_if_empty(df_m_res), row_styles=_rs_m, show_index=True, index_label="N°")
+                        _html_table(_dash_if_empty(df_m_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_m),
+                                    row_styles=_rs_m, show_index=True, index_label="N°")
 
             with st.expander("📅 Historique des performances annuelles", expanded=True):
                 if not df_transactions.empty:
@@ -8097,6 +8550,7 @@ if _tab_open(tab_history):
                     if history_df is not None:
                         yearly_df = history_df.resample('YE').last()
                         perf_year_records = []
+                        _sale_years = set(pd.DatetimeIndex(df_transactions.loc[df_transactions["Type"] == "VENTE", "Date_Heure"]).year)
                         get_h_val = _make_get_h_val(history_df)
                         _tx_agg = _make_tx_period_agg(df_transactions)
                         for i in range(len(yearly_df)):
@@ -8136,7 +8590,8 @@ if _tab_open(tab_history):
                                 "Valeur Actions Fin Année": _fmt_eur_h(current_val),
                                 "Achats": _fmt_eur_h(achats_an),
                                 "Frais": _fmt_eur_h(frais_an),
-                                "Apport": apports_an_str
+                                "Apport": apports_an_str,
+                                "_sale": current_year in _sale_years,
                             })
                         df_y_res = pd.DataFrame(perf_year_records).sort_values("_year", ascending=False).drop(columns=["_year"])
                         # Numérotation façon "détail complet des transactions" : l'année la plus ancienne
@@ -8144,8 +8599,10 @@ if _tab_open(tab_history):
                         df_y_res = df_y_res.reset_index(drop=True)
                         _total_y = len(df_y_res)
                         df_y_res.index = _total_y - df_y_res.index
+                        _sale_y = df_y_res.pop("_sale").to_numpy()
                         _rs_y = _row_styles_of(style_entire_row_gradient(df_y_res))
-                        _html_table(_dash_if_empty(df_y_res), row_styles=_rs_y, show_index=True, index_label="N°")
+                        _html_table(_dash_if_empty(df_y_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_y),
+                                    row_styles=_rs_y, show_index=True, index_label="N°")
         _rendu_onglet_historique(df_transactions, tot_invested, _now_paris().strftime("%Y-%m-%d"), _epoch_now)
 
 
@@ -8703,34 +9160,57 @@ def _stacked_growth_chart(n, base, verses, interets, base_name, height=260):
     return fig
 
 
-def _render_sim_projection():
-    """Projection de la valeur du portefeuille : croissance d'abord, apports mensuels versés en fin d'année
-    (hypothèse prudente), apports bornés par le plafond de versements du PEA (150 000 €)."""
-    st.markdown("### 📈 Projection de la Valeur du Portefeuille")
-    with st.expander("🔮 Simulation de croissance à long terme", expanded=True):
+@fragment_wrapper
+def _render_sim_epargne(valeur_depart):
+    """Simulateur unique « épargne & revenu passif » (regroupe l'ancienne projection de valeur et l'ancien
+    simulateur de revenu passif, qui partageaient la même mécanique) : croissance d'abord, versements en fin
+    d'année, versements bornés par le plafond du PEA (150 000 €). Résultats : valeur brute, valeur nette (impôt sur
+    l'ensemble des intérêts, en pouvoir d'achat d'aujourd'hui) et revenu passif mensuel."""
+    st.markdown("### 📈 Simulateur d'épargne & de revenu passif")
+    with st.expander("🔮 Valeur du portefeuille, valeur nette et revenu passif", expanded=True):
         annees_ecoulees, perf_annualisee = _anciennete_et_perf_annualisee()
         moy_mensuel = _apport_mensuel_moyen_hist()
-        _default_perf_proj_hist = round(perf_annualisee * 100, 2)
+        _default_perf_hist = round(perf_annualisee * 100, 2) if perf_annualisee > 0 else 7.0
 
-        # ---- Valeurs modifiables (en haut)
+        # ---- Valeurs modifiables (en haut) : un seul jeu de paramètres pour tous les résultats
         with st.container(border=True):
             with st.container(key="compact_cols_proj"):
-                col_h, col_a = st.columns(2)
-                horizon_annees = col_h.number_input(
-                    "Nombre d'années", min_value=1, max_value=50, step=1, format="%d",
-                    value=int(app_config.get("horizon_projection_annees", 10)), key="k_horizon_projection",
+                c1, c2 = st.columns(2)
+                pf0 = c1.number_input(
+                    "Portefeuille actuel (€)", min_value=0.0, step=1000.0, format="%.0f",
+                    value=float(max(round(valeur_depart), 0)), key="k_rp_depart",
                 )
-                apport_mensuel = col_a.number_input(
+                apport_mensuel = c2.number_input(
                     "Apport prévu par mois (€)", min_value=0, step=10, format="%d",
                     value=_apport_mensuel_defaut(), key="k_apport_mensuel_projection",
                     help="Ajouté chaque mois (cumulé et versé en fin d'année dans la simulation), en plus de la croissance du portefeuille.",
                 )
-                col_p, col_i = st.columns(2)
-                perf_annuelle_proj_pct = col_p.number_input(
-                    "Performance annuelle retenue (%)", step=0.01, format="%.2f",
-                    value=float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)),
+                c3, c4 = st.columns(2)
+                horizon_annees = c3.number_input(
+                    "Nombre d'années", min_value=1, max_value=50, step=1, format="%d",
+                    value=int(app_config.get("horizon_projection_annees", 10)), key="k_horizon_projection",
+                )
+                perf_annuelle_proj_pct = c4.number_input(
+                    "Performance annuelle retenue (%)", min_value=-50.0, max_value=100.0, step=0.5, format="%.2f",
+                    value=float(app_config.get("perf_annuelle_projection", _default_perf_hist)),
                     key="k_perf_annuelle_projection",
                     help="Utilisée pour faire croître le portefeuille d'une année sur l'autre.",
+                )
+                c5, c6 = st.columns(2)
+                impot = c5.number_input(
+                    "Imposition des gains (%)", min_value=0.0, max_value=100.0, step=0.1,
+                    value=float(app_config.get("taux_prelevements_sociaux", 18.6)), key="k_rp_impot",
+                    help="Par défaut : le taux de prélèvements sociaux réglé dans l'application. Appliqué à l'ensemble des "
+                         "intérêts (gains déjà acquis inclus) pour la valeur nette.",
+                )
+                infl = c6.number_input(
+                    "Inflation (%)", min_value=0.0, max_value=20.0, step=0.1, value=2.0, key="k_rp_infl",
+                    help="La valeur nette et le revenu passif sont corrigés de l'inflation (pouvoir d'achat d'aujourd'hui).",
+                )
+                c7, _c8 = st.columns(2)
+                taux_ret = c7.number_input(
+                    "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25, value=3.0, key="k_rp_retrait",
+                    help="Part du capital net retirée chaque année pour le revenu passif.",
                 )
             _fiable = "" if annees_ecoulees >= 1 else " ⚠️ historique court, peu fiable"
             st.caption(
@@ -8749,56 +9229,73 @@ def _render_sim_projection():
             _ok2, _err2 = save_config(app_config)
             if not _ok2:
                 st.warning(_err2)
-        if round(perf_annuelle_proj_pct, 2) != round(float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)), 2):
+        if round(perf_annuelle_proj_pct, 2) != round(float(app_config.get("perf_annuelle_projection", _default_perf_hist)), 2):
             app_config["perf_annuelle_projection"] = float(perf_annuelle_proj_pct)
             _ok3, _err3 = save_config(app_config)
             if not _ok3:
                 st.warning(_err3)
 
-        apport_annuel_proj = apport_mensuel * 12.0
-        perf_annuelle_retenue = perf_annuelle_proj_pct / 100.0
-
-        # ---- Calcul année par année : croissance, puis apports de l'année ; le plafond de versements (150 000 €)
-        # porte sur le cumul des APPORTS nets : une fois atteint, seule la performance joue.
-        n_ans = int(horizon_annees)
-        valeurs_annuelles = [tot_value_globale]
-        verses = [apports_totaux]                       # versements cumulés : apports déjà réalisés inclus
-        interets = [tot_value_globale - apports_totaux]  # intérêts cumulés : gains déjà acquis inclus
-        v_courant, ap_courant = tot_value_globale, apports_totaux
-        for _an in range(1, n_ans + 1):
-            place_restante = max(PLAFOND_PEA_VERSEMENTS - ap_courant, 0.0)
-            apport_reel_annee = min(apport_annuel_proj, place_restante)
-            v_courant = v_courant * (1 + perf_annuelle_retenue) + apport_reel_annee
-            ap_courant += apport_reel_annee
-            valeurs_annuelles.append(v_courant)
-            verses.append(ap_courant)
-            interets.append(v_courant - ap_courant)
-
-        valeur_projetee_finale = valeurs_annuelles[-1]
-        apports_cumules_finaux = min(ap_courant, PLAFOND_PEA_VERSEMENTS)
-        interets_estimes = interets[-1]
+        # ---- Calcul année par année (croissance, puis versements de l'année, plafonnés à 150 000 € d'apports nets)
+        n = int(horizon_annees)
+        inv = apport_mensuel * 12.0
+        r = perf_annuelle_proj_pct / 100.0
+        f = 1.0 + infl / 100.0
+        verses0 = min(max(float(apports_totaux), 0.0), pf0)   # point de départ : versements actuels du portefeuille
+        vals, verses = [pf0], [verses0]
+        ap_cur = float(apports_totaux)
+        for _k in range(1, n + 1):
+            place_restante = max(PLAFOND_PEA_VERSEMENTS - ap_cur, 0.0)
+            ap_annee = min(inv, place_restante)
+            vals.append(vals[-1] * (1 + r) + ap_annee)
+            ap_cur += ap_annee
+            verses.append(verses[-1] + ap_annee)
+        interets = [v - vs for v, vs in zip(vals, verses)]
+        # Valeur nette année par année : impôt sur l'ensemble des intérêts, puis pouvoir d'achat d'aujourd'hui.
+        nettes_reelles = []
+        for k, (v, vs) in enumerate(zip(vals, verses)):
+            net_k = v - max(v - vs, 0.0) * impot / 100.0
+            nettes_reelles.append(net_k / f ** k)
+        valeur_brute = vals[-1]
+        impot_du = max(valeur_brute - verses[-1], 0.0) * impot / 100.0
+        valeur_nette_reelle = nettes_reelles[-1]
+        revenu_mensuel = valeur_nette_reelle * taux_ret / 100.0 / 12.0
+        apports_cumules_finaux = min(ap_cur, PLAFOND_PEA_VERSEMENTS)
 
         # Échéance d'atteinte du plafond au rythme de l'apport prévu (versement continu et régulier).
         montant_restant_plafond = PLAFOND_PEA_VERSEMENTS - apports_totaux
         annees_avant_plafond = None
         if montant_restant_plafond <= 0:
             date_plafond_str = "Déjà atteint"
-        elif apport_annuel_proj > 0:
-            annees_avant_plafond = montant_restant_plafond / apport_annuel_proj
+        elif inv > 0:
+            annees_avant_plafond = montant_restant_plafond / inv
             date_plafond_str = (_now_paris() + pd.Timedelta(days=annees_avant_plafond * 365.25)).strftime("%d/%m/%Y")
         else:
             date_plafond_str = "Jamais (aucun apport prévu)"
 
-        # ---- Résultats (en dessous) : même gabarit que le simulateur de revenu passif
-        _sim_headline(f"Valeur projetée dans {n_ans} {_plural(n_ans)}", fmt_eur(valeur_projetee_finale), color="#0284c7")
-        _sim_stats(
-            _sim_stat("Apports actuels", fmt_eur(apports_totaux), "#475569"),
-            _sim_stat("Apports prévus", fmt_eur(ap_courant - apports_totaux), "#0284c7"),
-            _sim_stat("Intérêts estimés", fmt_eur(interets_estimes), "#d97706"),
-            small=True,
+        # ---- Résultats (en dessous)
+        _sim_headline_duo([
+            (f"Valeur brute dans {n} {_plural(n)}", fmt_eur(valeur_brute), "", False, "#0284c7"),
+            ("Valeur nette (€ d'aujourd'hui)", fmt_eur(valeur_nette_reelle), "", False),
+        ])
+        _sim_headline_duo([
+            ("Revenu passif / mois", fmt_eur(revenu_mensuel), "", True),
+            ("Impôt estimé sur les gains", fmt_eur(impot_du), "", False, "#dc2626"),
+        ])
+        _sim_headline_duo([
+            ("Versements cumulés", fmt_eur(verses[-1]), "", False, "#0284c7"),
+            ("Intérêts bruts", fmt_eur(valeur_brute - verses[-1]), "", False, "#d97706"),
+            ("Dont versements prévus", fmt_eur(verses[-1] - verses0), "", False, "#475569"),
+        ])
+        mode_graph = st.radio(
+            "Affichage du graphique", ["Valeur brute", "Valeur nette (€ d'aujourd'hui)"], horizontal=True,
+            key="k_sim_graph_mode", label_visibility="collapsed",
         )
-        fig_proj = _stacked_growth_chart(n_ans, None, verses, interets, "")
-        _plotly_chart(fig_proj, use_container_width=True, theme=None, key="projection_valeur_chart")
+        if mode_graph == "Valeur brute":
+            interets_chart = interets
+        else:
+            interets_chart = [nr - vs for nr, vs in zip(nettes_reelles, verses)]
+        fig_sim = _stacked_growth_chart(n, None, verses, interets_chart, "")
+        _plotly_chart(fig_sim, use_container_width=True, theme=None, key="chart_sim_epargne")
 
         # Plafond de versements : la barre reflète les apports cumulés PROJETÉS en fin d'horizon.
         pct_plafond = min(max((apports_cumules_finaux / PLAFOND_PEA_VERSEMENTS) * 100, 0.0), 100.0)
@@ -8814,110 +9311,9 @@ def _render_sim_projection():
             f'📅 Atteinte estimée du plafond : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
             unsafe_allow_html=True,
         )
-        if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n_ans and apport_annuel_proj > 0:
+        if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n and inv > 0:
             st.caption(f"⚠️ Au rythme prévu, le plafond de versements du PEA ({fmt_eur(PLAFOND_PEA_VERSEMENTS)}) serait atteint avant la fin de l'horizon : les apports sont plafonnés à partir de cette échéance.")
         st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
-
-
-@fragment_wrapper
-def _render_sim_revenu_passif(valeur_depart, apport_mensuel_defaut, rendement_defaut, taux_impot_defaut):
-    """Simulateur de revenu passif : projection année par année du portefeuille, nette d'impôt sur les gains ET
-    corrigée de l'inflation (tous les montants « nets » sont en pouvoir d'achat d'aujourd'hui), avec revenu passif
-    mensuel (taux de retrait). Croissance d'abord, versements en fin d'année."""
-    st.markdown("### 🧭 Simulateur de revenu passif")
-    with st.expander("🌱 Valeur nette et revenu passif", expanded=True):
-        with st.container(border=True):
-            with st.container(key="compact_cols_rp"):
-                c1, c2 = st.columns(2)
-                pf0 = c1.number_input(
-                    "Portefeuille actuel (€)", min_value=0.0, step=1000.0, format="%.0f",
-                    value=float(max(round(valeur_depart), 0)), key="k_rp_depart",
-                )
-                inv_mois = c2.number_input(
-                    "Investissements mensuels (€)", min_value=0.0, step=10.0, format="%.0f",
-                    value=float(max(apport_mensuel_defaut, 0)), key="k_rp_invest_mensuel",
-                )
-                c3, c4 = st.columns(2)
-                ans = c3.number_input(
-                    "Années d'épargne", min_value=1, max_value=50, step=1, format="%d", value=15, key="k_rp_annees",
-                )
-                rend = c4.number_input(
-                    "Rendement (%)", min_value=-50.0, max_value=100.0, step=0.5,
-                    value=float(rendement_defaut), key="k_rp_rend",
-                )
-                c5, c6 = st.columns(2)
-                impot = c5.number_input(
-                    "Imposition des gains (%)", min_value=0.0, max_value=100.0, step=0.1,
-                    value=float(taux_impot_defaut), key="k_rp_impot",
-                    help="Par défaut : le taux de prélèvements sociaux réglé dans l'application.",
-                )
-                infl = c6.number_input(
-                    "Inflation (%)", min_value=0.0, max_value=20.0, step=0.1, value=2.0, key="k_rp_infl",
-                    help="Tous les montants nets affichés sont corrigés de l'inflation (pouvoir d'achat d'aujourd'hui).",
-                )
-                c7, _c8 = st.columns(2)
-                taux_ret = c7.number_input(
-                    "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25, value=3.0, key="k_rp_retrait",
-                    help="Part du capital net retirée chaque année pour le revenu passif.",
-                )
-
-        # ---- Calcul année par année (croissance, puis versement en fin d'année), en € constants
-        n = int(ans)
-        inv = inv_mois * 12.0
-        r = rend / 100.0
-        f = 1.0 + infl / 100.0
-        vals = [pf0]
-        for k in range(1, n + 1):
-            vals.append(vals[-1] * (1 + r) + inv)
-        # versements et valeurs exprimés en pouvoir d'achat d'aujourd'hui (un euro versé l'année k vaut 1/f^k)
-        verses_reels = [0.0]
-        for k in range(1, n + 1):
-            verses_reels.append(verses_reels[-1] + inv / f ** k)
-        vals_reelles = [v / f ** k for k, v in enumerate(vals)]
-        interets_reels = [vr - pf0 - vs for vr, vs in zip(vals_reelles, verses_reels)]
-
-        valeur_future = vals[-1]
-        plus_value = valeur_future - pf0 - inv * n                # gain nominal : base de l'impôt
-        impot_du = max(plus_value, 0.0) * impot / 100.0
-        valeur_nette = valeur_future - impot_du
-        defl = f ** n
-        valeur_nette_reelle = valeur_nette / defl
-        revenu_mensuel = valeur_nette_reelle * taux_ret / 100.0 / 12.0
-        # Versements AFFICHÉS = ce que l'utilisateur verse réellement (montant mensuel × 12 × années), sans correction
-        # d'inflation : plus de décimales parasites. Les intérêts nets sont le complément, en pouvoir d'achat actuel.
-        verses_nominaux = [inv * k for k in range(n + 1)]
-        # Valeur nette année par année (impôt sur les gains prélevé à chaque horizon, en € constants) : la courbe
-        # finit exactement sur la « valeur nette » affichée en haut.
-        nettes_reelles = []
-        for k, v in enumerate(vals):
-            gain_k = v - pf0 - inv * k
-            net_k = v - max(gain_k, 0.0) * impot / 100.0
-            nettes_reelles.append(net_k / f ** k)
-        interets_chart = [nr - pf0 - vn for nr, vn in zip(nettes_reelles, verses_nominaux)]
-        interets_nets = valeur_nette_reelle - pf0 - verses_nominaux[-1]
-
-        # ---- Résultats (en dessous)
-        _sim_headline_duo([
-            (f"Valeur nette dans {n} {_plural(n)}", fmt_eur(valeur_nette_reelle), "", False),
-            ("Revenu passif / mois", fmt_eur(revenu_mensuel), "", True),
-        ])
-        _sim_headline_duo([
-            ("Portefeuille initial", fmt_eur(pf0), "", False, "#475569"),
-            ("Versements", fmt_eur(verses_nominaux[-1]), "", False, "#0284c7"),
-            ("Intérêts nets", fmt_eur(interets_nets), "", False, "#d97706"),
-        ])
-        # Point de départ du graphique (aujourd'hui) : versements et intérêts ACTUELS du portefeuille.
-        verses0 = min(max(float(apports_totaux), 0.0), pf0)
-        verses_chart = [verses0 + inv * k for k in range(n + 1)]
-        interets_chart = [nr - vc for nr, vc in zip(nettes_reelles, verses_chart)]
-        fig_rp = _stacked_growth_chart(n, None, verses_chart, interets_chart, "")
-        _plotly_chart(fig_rp, use_container_width=True, theme=None, key="chart_sim_revenu_passif")
-
-        _sim_stats(
-            _sim_stat("Valeur future brute", fmt_eur(valeur_future / defl)),
-            _sim_stat("Dont intérêts", fmt_eur_arrow(plus_value / defl), "#16a34a" if plus_value >= 0 else "#dc2626"),
-            small=True,
-        )
 
 
 def _render_sim_retrait():
@@ -9001,13 +9397,5 @@ def _render_sim_retrait():
 
 if _tab_open(tab_simulateur):
     with tab_simulateur:
-        _render_sim_projection()
-        _perf_hist = _anciennete_et_perf_annualisee()[1]
-        _perf_defaut_rp = round(float(_perf_hist) * 100, 2) if _perf_hist > 0 else 7.0
-        _render_sim_revenu_passif(
-            float(tot_value_globale),
-            _apport_mensuel_defaut(),
-            _perf_defaut_rp,
-            float(app_config.get("taux_prelevements_sociaux", 18.6)),
-        )
+        _render_sim_epargne(float(tot_value_globale))
         _render_sim_retrait()
