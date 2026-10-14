@@ -4549,15 +4549,22 @@ def dialog_simulation_operation():
         # ne jamais diverger de celui-ci.
         prix_net_wi = (montant_total_wi / qte_wi) if qte_wi > 0 else 0.0
         _label_net_wi = "Prix d'achat par action net de frais" if type_wi == "Achat" else "Prix de vente par action net de frais"
+        _acc_op = "#0284c7" if type_wi == "Achat" else "#7c3aed"
+        _bg_op = "linear-gradient(135deg,#f0f9ff,#e0f2fe)" if type_wi == "Achat" else "linear-gradient(135deg,#f5f3ff,#ede9fe)"
+        _bd_op = "#bae6fd" if type_wi == "Achat" else "#c4b5fd"
         st.markdown(
-            f'<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 14px; margin-top:4px;">'
-            f'<div class="h-scroll" style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:6px;">'
-            f'<div><div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Montant de l\'opération</div>'
-            f'<div style="font-size:0.78rem; color:#64748b; margin-top:2px;">{qte_wi:g} × {fmt_eur(prix_wi)} ({_detail_frais_str_wi})</div></div>'
-            f'<div style="text-align:right;"><div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">Total {"payé" if type_wi == "Achat" else "perçu"}</div>'
-            f'<div style="font-size:1.05rem; font-weight:800; color:#0f172a;">{fmt_eur(montant_total_wi)}</div></div>'
-            f'</div>'
-            f'<div style="margin-top:6px; font-size:0.78rem; color:#64748b;">💶 {_label_net_wi} : <b style="color:#0f172a;">{fmt_price_dynamic(prix_net_wi, include_comm=False)}</b></div>'
+            f'<div style="background:{_bg_op}; border:1px solid {_bd_op}; border-left:5px solid {_acc_op}; border-radius:12px; '
+            f'padding:14px 18px; margin-top:6px; box-shadow:0 2px 8px rgba(15,23,42,0.06);">'
+            f'<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">'
+            f'<div><div style="font-size:0.7rem; color:{_acc_op}; text-transform:uppercase; font-weight:800; letter-spacing:0.06em;">'
+            f'{"🛒" if type_wi == "Achat" else "📤"} Montant de l\'opération</div>'
+            f'<div style="font-size:0.82rem; color:#475569; margin-top:4px;">{qte_wi:g} × {fmt_eur(prix_wi)}</div>'
+            f'<div style="font-size:0.74rem; color:#64748b; margin-top:2px;">{_detail_frais_str_wi}</div></div>'
+            f'<div style="text-align:right;"><div style="font-size:0.7rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.05em;">'
+            f'Total {"payé" if type_wi == "Achat" else "perçu"}</div>'
+            f'<div style="font-size:1.55rem; font-weight:800; color:{_acc_op}; line-height:1.15;">{fmt_eur(montant_total_wi)}</div></div></div>'
+            f'<div style="margin-top:10px; padding-top:8px; border-top:1px dashed {_bd_op}; font-size:0.8rem; color:#475569;">'
+            f'💶 {_label_net_wi} : <b style="color:#0f172a;">{fmt_price_dynamic(prix_net_wi, include_comm=False)}</b></div>'
             f'</div>',
             unsafe_allow_html=True
         )
@@ -4915,7 +4922,14 @@ def dialog_simulation_operation():
                         ("Gain net en %", _pct_txt(gain_pct_av), _col_pct),
                         ("Gain net en €", _sg(gain_net_av), _col_pct),
                     ])
-                    st.caption(f"Montant de vente : {fmt_eur(montant_vente_brut_av)} − commission {fmt_eur(commission_vente_av)} = {fmt_eur(montant_vente_recu_av)} reçus.")
+                    st.markdown(
+                        '<div style="margin-top:8px; padding:10px 14px; background:linear-gradient(135deg,#f5f3ff,#ede9fe); '
+                        'border:1px solid #c4b5fd; border-left:4px solid #7c3aed; border-radius:10px; '
+                        'display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">'
+                        '<span style="font-size:0.7rem; color:#6d28d9; text-transform:uppercase; font-weight:800; letter-spacing:0.05em;">💰 Montant total vendu</span>'
+                        f'<span style="font-size:1.25rem; font-weight:800; color:#5b21b6;">{fmt_eur(montant_vente_brut_av)}</span></div>',
+                        unsafe_allow_html=True,
+                    )
 
     else:
         # --- Simulation d'un SPLIT / regroupement ---
@@ -6230,10 +6244,10 @@ if _tab_open(tab_positions):
                 df_active["Ancienneté (jours)"] = df_active["Jours Détention"] if "Jours Détention" in df_active.columns else np.nan
 
                 cols_to_keep = [
-                    'Nom', 'Ancienneté (jours)', 'Quantité', 'PRU Net (€)', 'Prix Actuel (€)',
-                    'Var Jour (€)', 'Var Jour (%)',
+                    'Nom', 'Quantité', 'PRU Net (€)', 'Prix Actuel (€)',
+                    'Var Jour (%)',
                     'Valeur Actuelle (€)', 'Gain Latent (€)', 'Gain Réalisé (€)',
-                    'Dividendes Reçus (€)', 'Performance Active (%)'
+                    'Dividendes Reçus (€)', 'Performance Active (%)', 'Ancienneté (jours)'
                 ]
 
                 existing_cols = [c for c in cols_to_keep if c in df_active.columns]
@@ -6243,7 +6257,6 @@ if _tab_open(tab_positions):
                     'Prix Actuel (€)': 'Prix actuel (€)',
                     'Valeur Actuelle (€)': 'Valeur Actuel (€)',
                     'Dividendes Reçus (€)': 'Dividende Reçu (€)',
-                    'Var Jour (€)': 'Variation jour (€)',
                     'Var Jour (%)': 'Variation jour (%)',
                     'Performance Active (%)': 'Performance (%)'
                 }
@@ -6260,20 +6273,27 @@ if _tab_open(tab_positions):
                             return f"{q:,.4f}".replace(",", " ").rstrip("0").rstrip(",")
                     df_active_fmt["Quantité"] = df_active_fmt["Quantité"].apply(clean_qty_display)
 
-                for col in ["PRU Net (€)", "Prix actuel (€)"]:
-                    if col in df_active_fmt.columns:
-                        df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_price_dynamic(x))
+                if "PRU Net (€)" in df_active_fmt.columns:
+                    df_active_fmt["PRU Net (€)"] = df_active_fmt["PRU Net (€)"].apply(lambda x: fmt_price_dynamic(x))
+                if "Prix actuel (€)" in df_active_fmt.columns:
+                    # Variation du jour en % entre parenthèses, à côté du prix actuel.
+                    _vj_pct_col = df_active_fmt["Variation jour (%)"] if "Variation jour (%)" in df_active_fmt.columns else None
+                    df_active_fmt["Prix actuel (€)"] = [
+                        fmt_price_dynamic(px) + ("" if (_vj_pct_col is None or pd.isna(vp)) else f" ({fmt_perf(vp)})")
+                        for px, vp in zip(df_active_fmt["Prix actuel (€)"], _vj_pct_col if _vj_pct_col is not None else [np.nan] * len(df_active_fmt))
+                    ]
+                    if _vj_pct_col is not None:
+                        df_active_fmt = df_active_fmt.drop(columns=["Variation jour (%)"])
 
                 for col in ["Valeur Actuel (€)", "Dividende Reçu (€)"]:
                     if col in df_active_fmt.columns:
                         df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_eur(x))
-                for col in ["Gain Latent (€)", "Gain Réalisé (€)", "Variation jour (€)"]:
+                for col in ["Gain Latent (€)", "Gain Réalisé (€)"]:
                     if col in df_active_fmt.columns:
                         df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_eur_arrow(x))
 
-                for col in ["Performance (%)", "Variation jour (%)"]:
-                    if col in df_active_fmt.columns:
-                        df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_perf(x))
+                if "Performance (%)" in df_active_fmt.columns:
+                    df_active_fmt["Performance (%)"] = df_active_fmt["Performance (%)"].apply(lambda x: fmt_perf(x))
 
                 if "Ancienneté (jours)" in df_active_fmt.columns:
                     df_active_fmt["Ancienneté (jours)"] = df_active_fmt["Ancienneté (jours)"].apply(
@@ -6283,9 +6303,15 @@ if _tab_open(tab_positions):
                 row_height = 35
                 header_height = 40
                 total_height = header_height + (len(df_active_fmt) + 1) * row_height + 20  # +1 ligne : le Total
-                _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)",
-                                                   "Variation jour (€)", "Variation jour (%)"]
+                _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
                                        if c in df_active_fmt.columns]
+                def _style_prix_actif(v):
+                    sv = str(v)
+                    if "(▲" in sv:
+                        return "color:#16a34a; font-weight:700;"
+                    if "(▼" in sv:
+                        return "color:#dc2626; font-weight:700;"
+                    return ""
                 # Ligne Total (sommes sur les positions actives, calculées sur les valeurs numériques d'origine).
                 # Performance et YoC : mêmes formules que par ligne, sur l'ensemble (gain latent / capital investi,
                 # dividendes / capital investi).
@@ -6304,12 +6330,12 @@ if _tab_open(tab_positions):
                 _tot_act["Performance (%)"] = fmt_perf(_t_gl / _t_cap * 100) if _t_cap > 0 else "N/A"
                 _t_vj = _som_act("Var Jour (€)")
                 _t_val_veille = _t_val - _t_vj
-                _tot_act["Variation jour (€)"] = fmt_eur_arrow(_t_vj)
-                _tot_act["Variation jour (%)"] = fmt_perf(_t_vj / _t_val_veille * 100) if _t_val_veille > 0 else "N/A"
+                _tot_act["Prix actuel (€)"] = f"({fmt_perf(_t_vj / _t_val_veille * 100)})" if _t_val_veille > 0 else ""
                 _tot_act = _dash_if_empty(pd.DataFrame([_tot_act])).iloc[0].to_dict()
                 _html_table(
                     _dash_if_empty(df_active_fmt),
-                    cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_active else "",
+                    cell_style=lambda c, v: (_style_perf_cell(v) if c in _cols_fleche_active
+                                             else (_style_prix_actif(v) if c == "Prix actuel (€)" else "")),
                     max_height=min(max(total_height, 100), 1000),
                     total_row=_tot_act,
                 )
@@ -7982,7 +8008,7 @@ if _tab_open(tab_perf):
                         # Longue période : on n'affiche qu'environ 600 points (un point sur N, dernier point toujours
                         # conservé) — la courbe reste fidèle mais n'est plus hachée/écrasée par des milliers de points.
                         _n_pts = len(sub_history_graph.index)
-                        _pas_ds = max(1, int(np.ceil(_n_pts / 500)))
+                        _pas_ds = max(1, int(np.ceil(_n_pts / 400)))
                         if _pas_ds > 1:
                             _keep_pos = sorted(set(range(0, _n_pts, _pas_ds)) | {_n_pts - 1})
                             _idx_aff = sub_history_graph.index[_keep_pos]
