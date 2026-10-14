@@ -891,6 +891,19 @@ st.markdown(
         div[class*="st-key-onecol_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
             flex: 1 1 100% !important; min-width: 100% !important;
         }
+        /* Onglet Classements : paires vert / rouge TOUJOURS côte à côte (comme les camemberts). */
+        div[class*="st-key-sbs_"] [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: 0.4rem !important; }
+        div[class*="st-key-sbs_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+            flex: 1 1 0 !important; min-width: 0 !important; width: auto !important;
+        }
+        div[class*="st-key-sbs_"] [data-testid="stMarkdownContainer"] p {
+            font-size: 0.8rem !important; line-height: 1.3 !important; min-height: 2.6em; margin-bottom: 0.2rem !important;
+        }
+        div[class*="st-key-sbs_"] .pea-card { padding: 8px 10px !important; }
+        div[class*="st-key-sbs_"] .pea-card .k { font-size: 0.6rem; }
+        div[class*="st-key-sbs_"] .pea-card div[style*="font-size:1.55rem"] { font-size: 1.05rem !important; }
+        div[class*="st-key-sbs_"] .js-plotly-plot .ytick text,
+        div[class*="st-key-sbs_"] .js-plotly-plot .barlayer text { font-size: 10px !important; }
         .pea-wl .hm { display: none; }
         .pea-wl th, .pea-wl td { padding: 5px 3px !important; font-size: 0.7rem !important; white-space: normal !important; }
         .pea-cards { grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -1143,8 +1156,9 @@ _TIP_JS = r"""
 
 
 def _paired_columns(key):
-    """Deux colonnes côte à côte sur ordinateur ; empilées (une par ligne, pleine largeur) sur téléphone grâce au
-    conteneur « onecol_* » : les deux graphiques d'une paire ne se décalent plus quand un titre passe à la ligne."""
+    """Deux colonnes côte à côte, sur ordinateur ET sur téléphone (conteneur « sbs_* », cf. CSS « Affichage
+    téléphone » : colonnes de largeur égale, titres sur 2 lignes réservées pour que les deux graphiques restent
+    alignés)."""
     with st.container(key=key):
         return st.columns(2, gap="small")
 
@@ -1894,6 +1908,8 @@ html, body { margin: 0; height: 100%; background: transparent; font-family: Manr
 .pea-tbl td, .pea-tbl th.ix { text-align: center; padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #f1f5f9; }
 .pea-tbl th.ix { position: static; background: transparent; color: inherit; text-transform: none; font-size: inherit; font-weight: 600; cursor: default; }
 .pea-tbl tbody tr:nth-child(even) { background: rgba(148,163,184,0.10); }
+.pea-tbl tfoot td, .pea-tbl tfoot th { position: sticky; bottom: 0; z-index: 2; background: #f1f5f9; font-weight: 800;
+                                       border-top: 2px solid #cbd5e1; border-bottom: none; }
 .pea-tbl .ca { display: inline-flex; align-items: baseline; gap: 0.12em; }
 .pea-tbl .ar { display: inline-block; width: 0.85em; text-align: center; }
 .pea-tbl .rv { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }
@@ -1940,11 +1956,12 @@ _TBL_IFRAME_JS = r"""
 
 _CELL_RE = re.compile(r"^(?:([▲▼▬=])\s)?(.*\d.*?)\s?(€|%)?$")
 
-def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None, focus_row=None):
+def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None, focus_row=None, total_row=None):
     """Tableau HTML avec toutes les valeurs centrées. row_styles : une chaîne CSS par ligne ;
     cell_style(colonne, valeur) -> chaîne CSS d'une cellule. Défilement interne au-delà de 25 lignes.
     Dans les colonnes qui contiennent une flèche (▲ ▼ ▬ =) ou une unité (€ %), la flèche, le nombre et l'unité
-    occupent chacun une position fixe : flèches et unités sont alignées verticalement d'une ligne à l'autre."""
+    occupent chacun une position fixe : flèches et unités sont alignées verticalement d'une ligne à l'autre.
+    total_row : dict {colonne: texte déjà formaté} -> ligne « Total » figée en bas du tableau (hors tri)."""
     cols = list(df.columns)
     head = ("<th>" + _esc(str(index_label)) + "</th>" if show_index else "") + "".join(f"<th>{_esc(str(c))}</th>" for c in cols)
     idx = list(df.index)
@@ -1952,6 +1969,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
     parsed, num_w, has_arrow = {}, {}, {}
     for c in cols:
         vals = df[c].astype(str).tolist()
+        if total_row is not None:
+            vals = vals + [str(total_row.get(c, ""))]  # la ligne Total participe à l'alignement des colonnes
         pl, w, ar, structured = [], 0, False, False
         for t in vals:
             m = _CELL_RE.match(t) if ("€" in t or "%" in t or t[:1] in "▲▼▬=") else None
@@ -1985,18 +2004,39 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
             tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
         _rid = ' id="cur"' if (focus_row is not None and i == focus_row) else ""
         rows.append(f'<tr{_rid} style="{rs}">' + "".join(tds) + "</tr>" if rs else f"<tr{_rid}>" + "".join(tds) + "</tr>")
+    foot = ""
+    if total_row is not None:
+        _n_body = len(rows)
+        tds = ['<th class="ix"></th>'] if show_index else []
+        for c in cols:
+            v = total_row.get(c, "")
+            cs = (cell_style(c, v) if cell_style else "") or ""
+            p = parsed[c][_n_body] if c in parsed else None
+            if p is not None:
+                arrow, num, unit = p
+                inner = '<span class="ca">'
+                if has_arrow[c]:
+                    inner += f'<span class="ar">{arrow}</span>'
+                inner += f'<span class="rv" style="min-width:{num_w[c]}ch">{_esc(num)}</span>'
+                if unit:
+                    inner += f'<span class="un">{unit}</span>'
+                inner += "</span>"
+            else:
+                inner = _esc(str(v))
+            tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
+        foot = "<tfoot><tr>" + "".join(tds) + "</tr></tfoot>"
     cap = int(max_height) if max_height else 640
     n_rows = len(rows)
-    height = int(min(cap, 34 + 30 * n_rows + 14))
+    height = int(min(cap, 34 + 30 * n_rows + 14 + (36 if total_row is not None else 0)))
     doc = (f"<style>{_TBL_IFRAME_CSS}</style>"
            f'<div class="pea-tbl-wrap"><table class="pea-tbl" id="t"><thead><tr>{head}</tr></thead>'
-           f'<tbody>{"".join(rows)}</tbody></table></div><script>{_TBL_IFRAME_JS}</script>')
+           f'<tbody>{"".join(rows)}</tbody>{foot}</table></div><script>{_TBL_IFRAME_JS}</script>')
     try:
         import streamlit.components.v1 as _components
         _components.html(doc, height=height, scrolling=False)
     except Exception:
         st.markdown(f'<div class="pea-tbl-wrap"><table class="pea-tbl"><thead><tr>{head}</tr></thead>'
-                    f'<tbody>{"".join(rows)}</tbody></table></div>', unsafe_allow_html=True)
+                    f'<tbody>{"".join(rows)}</tbody>{foot}</table></div>', unsafe_allow_html=True)
 
 def _lerp_hex(c1, c2, t):
     a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
@@ -6004,13 +6044,32 @@ if _tab_open(tab_positions):
                 # Affichage de toutes les lignes sans barre de scroll (height dynamique selon le nombre de lignes)
                 row_height = 35
                 header_height = 40
-                total_height = header_height + len(df_active_fmt) * row_height
+                total_height = header_height + (len(df_active_fmt) + 1) * row_height + 20  # +1 ligne : le Total
                 _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
                                        if c in df_active_fmt.columns]
+                # Ligne Total (sommes sur les positions actives, calculées sur les valeurs numériques d'origine).
+                # Performance et YoC : mêmes formules que par ligne, sur l'ensemble (gain latent / capital investi,
+                # dividendes / capital investi).
+                def _som_act(col):
+                    if col not in df_active.columns:
+                        return 0.0
+                    return float(pd.to_numeric(df_active[col], errors="coerce").fillna(0).sum())
+                _t_val, _t_gl, _t_gr = _som_act("Valeur Actuelle (€)"), _som_act("Gain Latent (€)"), _som_act("Gain Réalisé (€)")
+                _t_div, _t_cap = _som_act("Dividendes Reçus (€)"), _som_act("Capital Investi (€)")
+                _tot_act = {c: "" for c in df_active_fmt.columns}
+                _tot_act["Nom"] = "Total"
+                _tot_act["Valeur Actuel (€)"] = fmt_eur(_t_val)
+                _tot_act["Gain Latent (€)"] = fmt_eur_arrow(_t_gl)
+                _tot_act["Gain Réalisé (€)"] = fmt_eur_arrow(_t_gr)
+                _tot_act["Dividende Reçu (€)"] = fmt_eur(_t_div)
+                _tot_act["Performance (%)"] = fmt_perf(_t_gl / _t_cap * 100) if _t_cap > 0 else "N/A"
+                _tot_act["YoC (%)"] = f"{(_t_div / _t_cap * 100) if _t_cap > 0 else 0.0:.2f}%".replace(".", ",")
+                _tot_act = _dash_if_empty(pd.DataFrame([_tot_act])).iloc[0].to_dict()
                 _html_table(
                     _dash_if_empty(df_active_fmt),
                     cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_active else "",
                     max_height=min(max(total_height, 100), 1000),
+                    total_row=_tot_act,
                 )
             else:
                 st.info("Aucune position active pour le moment.")
@@ -6416,20 +6475,28 @@ if _tab_open(tab_positions):
                 df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)']).copy()
                 # Même présentation que « Détail des Positions Actives » : chiffres colorés (▲ vert / ▼ rouge) sur
                 # les gains et la performance, dividendes en simple montant, une ligne grise sur deux (CSS du
-                # tableau) ; le dégradé de couleur ne porte plus que sur le NOM de l'action.
+                # tableau) ; plus aucun dégradé de couleur sur le nom de l'action (gris uniquement).
                 for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)']:
                     df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur_arrow)
                 df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
 
-                # Dégradé continu (vert / rouge) selon le gain total de chaque ligne, appliqué au seul nom.
-                _grad_gain = get_smooth_gradient_styles(df_gain_rank['Gain Total Global (€)'].to_numpy(dtype=float))
-                _style_nom_gain = {str(n): g for n, g in zip(df_gain_rank['Nom'], _grad_gain)}
                 _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)']
+                # Ligne Total : somme de chaque colonne sur toutes les actions du classement. La performance n'est pas
+                # totalisée ici (la base de calcul diffère selon que la position est ouverte ou soldée).
+                _tot_rank = {c: "" for c in df_gain_rank_fmt.columns}
+                _tot_rank["Nom"] = "Total"
+                _tot_rank['Gain Réalisé (€)'] = fmt_eur_arrow(df_gain_rank['Gain Réalisé (€)'].sum())
+                _tot_rank['Gain Latent (€)'] = fmt_eur_arrow(df_gain_rank['Gain Latent (€)'].sum())
+                _tot_rank['Dividendes Reçus (€)'] = fmt_eur(df_gain_rank['Dividendes Reçus (€)'].sum())
+                _tot_rank['Gain Total Global (€)'] = fmt_eur_arrow(df_gain_rank['Gain Total Global (€)'].sum())
+                _tot_rank['Nombre de mouvements'] = str(int(pd.to_numeric(df_gain_rank['Nombre de mouvements'], errors="coerce").fillna(0).sum()))
+                _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank])).iloc[0].to_dict()
+                _tot_rank["N°"] = ""
                 _html_table(
                     _dash_if_empty(df_gain_rank_fmt),
-                    cell_style=lambda c, v: (_style_perf_cell(v) if c in _cols_fleche_rank
-                                             else (_style_nom_gain.get(str(v), "") if c == 'Nom' else "")),
+                    cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_rank else "",
+                    total_row=_tot_rank,
                 )
             else:
                 st.info("Aucune donnée disponible pour le classement des gains.")
@@ -6663,7 +6730,7 @@ if _tab_open(tab_classements):
                     customdata=_customdata,
                     text=_montants_fmt,
                     textposition="outside",
-                    textfont=dict(size=12, color=color),
+                    textfont=dict(size=11, color=color),
                     cliponaxis=False,
                     hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<br>%{customdata[2]}<extra></extra>",
                     showlegend=False,
@@ -6673,10 +6740,10 @@ if _tab_open(tab_classements):
                     _edge = 1 if color == "#16a34a" else -1
                 fig.update_layout(
                     height=max(220, 34 * _n + 40),
-                    margin=dict(l=14, r=64, t=6, b=6),
+                    margin=dict(l=14, r=56, t=6, b=6),
                     bargap=0.35,
                     xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _edge * 1.25], showticklabels=False),
-                    yaxis=dict(title=None, tickmode="array", tickvals=_y, ticktext=_labels, range=[-0.6, _n - 0.4]),
+                    yaxis=dict(title=None, tickmode="array", tickvals=_y, ticktext=_labels, range=[-0.6, _n - 0.4], tickfont=dict(size=11)),
                 )
                 apply_chart_theme(fig)
                 _plotly_chart(fig, use_container_width=True, key=f"chart_top10_{key_suffix}")
@@ -6747,7 +6814,7 @@ if _tab_open(tab_classements):
 
                     def _label_frise(row):
                         nom_l = str(row["Nom"])
-                        return nom_l if len(nom_l) <= 22 else nom_l[:21] + "…"
+                        return nom_l if len(nom_l) <= 14 else nom_l[:13] + "…"  # court : 2 graphiques côte à côte (nom complet au survol)
 
                     def _pct_str_frise(pct):
                         if pd.isna(pct):
@@ -6771,7 +6838,7 @@ if _tab_open(tab_classements):
                             customdata=customdata_list,
                             text=montants_fmt,
                             textposition="outside",
-                            textfont=dict(size=12, color=color),
+                            textfont=dict(size=11, color=color),
                             cliponaxis=False,
                             hovertemplate=(
                                 "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>"
@@ -6780,7 +6847,7 @@ if _tab_open(tab_classements):
                             showlegend=False,
                         )
 
-                    col_gains_frise, col_pertes_frise = _paired_columns("onecol_rank_col_gains_frise")
+                    col_gains_frise, col_pertes_frise = _paired_columns("sbs_rank_col_gains_frise")
 
                     # Totaux sur l'ENSEMBLE des ventes réalisées (pas seulement les 10 affichées dans
                     # chaque classement ci-dessous), sous la même forme de petite carte que "Total
@@ -6815,10 +6882,11 @@ if _tab_open(tab_classements):
                                 (lbl, date_str, _tip_col("Plus-value", montant_str, val),
                                  _tip_col("Performance", _pct_str_frise(pct_val), val if pd.isna(pct_val) else pct_val))
                                 for lbl, date_str, montant_str, pct_val, val in zip(
-                                    _labels_gains, _df_gains_disp["Date_Str"], _montants_fmt_gains,
+                                    _full_names_gains, _df_gains_disp["Date_Str"], _montants_fmt_gains,
                                     _df_gains_disp["Gain Réalisé (%)"], _vals_gains
                                 )
                             ]
+                            _full_names_gains = _df_gains_disp["Nom"].astype(str).tolist()
                             fig_gains_frise = go.Figure()
                             fig_gains_frise.add_trace(_build_bar_trace(
                                 _vals_gains, _y_gains, "#16a34a", _customdata_gains, _montants_fmt_gains
@@ -6830,13 +6898,13 @@ if _tab_open(tab_classements):
                             _max_gains = max(_vals_gains) if _vals_gains else 0
                             fig_gains_frise.update_layout(
                                 height=max(220, 34 * _n_gains + 40),
-                                margin=dict(l=14, r=64, t=6, b=6),
+                                margin=dict(l=14, r=56, t=6, b=6),
                                 bargap=0.35,
                                 xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _max_gains * 1.25], showticklabels=False),
                                 yaxis=dict(
                                     title=None,
                                     tickmode="array", tickvals=_y_gains, ticktext=_labels_gains,
-                                    range=[-0.6, _n_gains - 0.4],
+                                    range=[-0.6, _n_gains - 0.4], tickfont=dict(size=11),
                                 ),
                             )
                             apply_chart_theme(fig_gains_frise)
@@ -6867,10 +6935,11 @@ if _tab_open(tab_classements):
                                 (lbl, date_str, _tip_col("Moins-value", montant_str, val),
                                  _tip_col("Performance", _pct_str_frise(pct_val), val if pd.isna(pct_val) else pct_val))
                                 for lbl, date_str, montant_str, pct_val, val in zip(
-                                    _labels_pertes, _df_pertes_disp["Date_Str"], _montants_fmt_pertes,
+                                    _full_names_pertes, _df_pertes_disp["Date_Str"], _montants_fmt_pertes,
                                     _df_pertes_disp["Gain Réalisé (%)"], _vals_pertes
                                 )
                             ]
+                            _full_names_pertes = _df_pertes_disp["Nom"].astype(str).tolist()
                             fig_pertes_frise = go.Figure()
                             fig_pertes_frise.add_trace(_build_bar_trace(
                                 _vals_pertes, _y_pertes, "#dc2626", _customdata_pertes, _montants_fmt_pertes
@@ -6883,13 +6952,13 @@ if _tab_open(tab_classements):
                             _min_pertes = min(_vals_pertes) if _vals_pertes else 0
                             fig_pertes_frise.update_layout(
                                 height=max(220, 34 * _n_pertes + 40),
-                                margin=dict(l=14, r=64, t=6, b=6),
+                                margin=dict(l=14, r=56, t=6, b=6),
                                 bargap=0.35,
                                 xaxis=dict(title=None, showgrid=False, zeroline=True, range=[0, _min_pertes * 1.25], showticklabels=False),
                                 yaxis=dict(
                                     title=None,
                                     tickmode="array", tickvals=_y_pertes, ticktext=_labels_pertes,
-                                    range=[-0.6, _n_pertes - 0.4],
+                                    range=[-0.6, _n_pertes - 0.4], tickfont=dict(size=11),
                                 ),
                             )
                             apply_chart_theme(fig_pertes_frise)
@@ -6947,7 +7016,7 @@ if _tab_open(tab_classements):
                         st.markdown("#### Meilleures et pires journées du portefeuille (en €)")
                         df_best_days_eur = df_days_rank.nlargest(10, "PnL_Jour").sort_values("PnL_Jour", ascending=False)
                         df_worst_days_eur = df_days_rank.nsmallest(10, "PnL_Jour").sort_values("PnL_Jour", ascending=True)
-                        col_best_eur, col_worst_eur = _paired_columns("onecol_rank_col_best_eur")
+                        col_best_eur, col_worst_eur = _paired_columns("sbs_rank_col_best_eur")
                         with col_best_eur:
                             st.markdown("**📈 Top 10 des meilleures journées**")
                             _render_days_ranking(df_best_days_eur, "PnL_Jour", "#16a34a", "Gain (€)", False, "best_eur")
@@ -6960,7 +7029,7 @@ if _tab_open(tab_classements):
                         st.markdown("#### Meilleures et pires journées du portefeuille (en %)")
                         df_best_days_pct = df_days_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                         df_worst_days_pct = df_days_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                        col_best_pct, col_worst_pct = _paired_columns("onecol_rank_col_best_pct")
+                        col_best_pct, col_worst_pct = _paired_columns("sbs_rank_col_best_pct")
                         with col_best_pct:
                             st.markdown("**📈 Top 10 des meilleures journées**")
                             _render_days_ranking(df_best_days_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -6989,7 +7058,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires mois du portefeuille (en €)")
                     df_best_months_eur = df_months_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_months_eur = df_months_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_m_eur, col_worst_m_eur = _paired_columns("onecol_rank_col_best_m_eur")
+                    col_best_m_eur, col_worst_m_eur = _paired_columns("sbs_rank_col_best_m_eur")
                     with col_best_m_eur:
                         st.markdown("**📈 Top 10 des meilleurs mois**")
                         _render_months_ranking(df_best_months_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -7002,7 +7071,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires mois du portefeuille (en %)")
                     df_best_months_pct = df_months_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_months_pct = df_months_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_m_pct, col_worst_m_pct = _paired_columns("onecol_rank_col_best_m_pct")
+                    col_best_m_pct, col_worst_m_pct = _paired_columns("sbs_rank_col_best_m_pct")
                     with col_best_m_pct:
                         st.markdown("**📈 Top 10 des meilleurs mois**")
                         _render_months_ranking(df_best_months_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -7031,7 +7100,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleurs et pires trimestres du portefeuille (en €)")
                     df_best_q_eur = df_quarters_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_q_eur = df_quarters_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_q_eur, col_worst_q_eur = _paired_columns("onecol_rank_col_best_q_eur")
+                    col_best_q_eur, col_worst_q_eur = _paired_columns("sbs_rank_col_best_q_eur")
                     with col_best_q_eur:
                         st.markdown("**📈 Top 10 des meilleurs trimestres**")
                         _render_quarters_ranking(df_best_q_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -7044,7 +7113,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleurs et pires trimestres du portefeuille (en %)")
                     df_best_q_pct = df_quarters_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_q_pct = df_quarters_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_q_pct, col_worst_q_pct = _paired_columns("onecol_rank_col_best_q_pct")
+                    col_best_q_pct, col_worst_q_pct = _paired_columns("sbs_rank_col_best_q_pct")
                     with col_best_q_pct:
                         st.markdown("**📈 Top 10 des meilleurs trimestres**")
                         _render_quarters_ranking(df_best_q_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -7073,7 +7142,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires années du portefeuille (en €)")
                     df_best_years_eur = df_years_rank.nlargest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=False)
                     df_worst_years_eur = df_years_rank.nsmallest(10, "PnL_Periode").sort_values("PnL_Periode", ascending=True)
-                    col_best_y_eur, col_worst_y_eur = _paired_columns("onecol_rank_col_best_y_eur")
+                    col_best_y_eur, col_worst_y_eur = _paired_columns("sbs_rank_col_best_y_eur")
                     with col_best_y_eur:
                         st.markdown("**📈 Meilleures années**")
                         _render_years_ranking(df_best_years_eur, "PnL_Periode", "#16a34a", "Gain (€)", False, "best_eur")
@@ -7086,7 +7155,7 @@ if _tab_open(tab_classements):
                     st.markdown("#### Meilleures et pires années du portefeuille (en %)")
                     df_best_years_pct = df_years_rank.nlargest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=False)
                     df_worst_years_pct = df_years_rank.nsmallest(10, "Impact_Pct").sort_values("Impact_Pct", ascending=True)
-                    col_best_y_pct, col_worst_y_pct = _paired_columns("onecol_rank_col_best_y_pct")
+                    col_best_y_pct, col_worst_y_pct = _paired_columns("sbs_rank_col_best_y_pct")
                     with col_best_y_pct:
                         st.markdown("**📈 Meilleures années**")
                         _render_years_ranking(df_best_years_pct, "Impact_Pct", "#16a34a", "Impact (%)", True, "best_pct")
@@ -7810,6 +7879,15 @@ if _tab_open(tab_perf):
                                 gain_jour = (act_j0 - inv_j0) - (act_j1 - inv_j1) + (real_j0 - real_j1) + (div_j0 - div_j1)
                                 perf_port_jour = (gain_jour / base_j) * 100 if base_j > 0 else 0.0
 
+                            # Semaine en cours : depuis le lundi (même logique que « mois » = depuis le 1er du mois),
+                            # référence = valeur à la clôture de la veille du lundi.
+                            start_week_ts = today_dt - pd.Timedelta(days=int(today_dt.dayofweek))
+                            val_w_f, app_w_f, real_w_f, div_w_f, act_w_f, inv_w_f = get_h_val_comp(today_dt)
+                            val_w_i, app_w_i, real_w_i, div_w_i, act_w_i, inv_w_i = get_h_val_comp(start_week_ts - pd.Timedelta(seconds=1))
+                            base_w = val_w_i if val_w_i > 0 else (app_w_i if app_w_i > 0 else (tot_invested if tot_invested > 0 else 1.0))
+                            gain_w = (act_w_f - inv_w_f) - (act_w_i - inv_w_i) + (real_w_f - real_w_i) + (div_w_f - div_w_i)
+                            perf_port_semaine = (gain_w / base_w) * 100 if base_w > 0 else 0.0
+
                             start_month_ts = pd.Timestamp(_now_paris().year, _now_paris().month, 1)
                             val_mo_f, app_mo_f, real_mo_f, div_mo_f, act_mo_f, inv_mo_f = get_h_val_comp(today_dt)
                             val_mo_i, app_mo_i, real_mo_i, div_mo_i, act_mo_i, inv_mo_i = get_h_val_comp(start_month_ts - pd.Timedelta(seconds=1))
@@ -7828,6 +7906,7 @@ if _tab_open(tab_perf):
                             comparison_data.append({
                                 "Indice / Actif": "Mon Portefeuille",
                                 "Performance du jour (%)": perf_port_jour,
+                                "Performance de la semaine (%)": perf_port_semaine,
                                 "Performance du mois (%)": perf_port_mois,
                                 "Performance de l'année (%)": perf_port_annee,
                                 "Performance globale (%)": perf_port_comp
@@ -7863,6 +7942,17 @@ if _tab_open(tab_perf):
                                         else:
                                             b_jour = 0.0
 
+                                    # Semaine : depuis le lundi, par rapport à la dernière clôture avant le lundi
+                                    # (à défaut, première clôture de la semaine).
+                                    b_sem_apres = b_clean[b_clean.index >= start_week_ts]
+                                    b_sem_avant = b_clean[b_clean.index < start_week_ts]
+                                    if len(b_sem_apres) >= 1 and len(b_sem_avant) >= 1 and b_sem_avant.iloc[-1] > 0:
+                                        b_sem = ((b_sem_apres.iloc[-1] - b_sem_avant.iloc[-1]) / b_sem_avant.iloc[-1]) * 100
+                                    elif len(b_sem_apres) >= 2 and b_sem_apres.iloc[0] > 0:
+                                        b_sem = ((b_sem_apres.iloc[-1] - b_sem_apres.iloc[0]) / b_sem_apres.iloc[0]) * 100
+                                    else:
+                                        b_sem = 0.0
+
                                     b_clean_mois = b_clean[b_clean.index >= start_month_ts]
                                     if len(b_clean_mois) >= 2 and b_clean_mois.iloc[0] > 0:
                                         b_mois = ((b_clean_mois.iloc[-1] - b_clean_mois.iloc[0]) / b_clean_mois.iloc[0]) * 100
@@ -7876,11 +7966,12 @@ if _tab_open(tab_perf):
                                         b_annee = 0.0
 
                                 except Exception:
-                                    b_perf, b_jour, b_mois, b_annee = 0.0, "N/A", 0.0, 0.0
+                                    b_perf, b_jour, b_sem, b_mois, b_annee = 0.0, "N/A", 0.0, 0.0, 0.0
 
                                 comparison_data.append({
                                     "Indice / Actif": bench_name,
                                     "Performance du jour (%)": b_jour,
+                                    "Performance de la semaine (%)": b_sem,
                                     "Performance du mois (%)": b_mois,
                                     "Performance de l'année (%)": b_annee,
                                     "Performance globale (%)": b_perf
@@ -7889,6 +7980,7 @@ if _tab_open(tab_perf):
                             df_comp_res = pd.DataFrame(comparison_data)
                         
                             df_comp_res["Performance du jour"] = df_comp_res["Performance du jour (%)"].apply(lambda x: "N/A" if x == "N/A" else fmt_perf_simple(x))
+                            df_comp_res["Performance de la semaine"] = df_comp_res["Performance de la semaine (%)"].apply(lambda x: fmt_perf_simple(x))
                             df_comp_res["Performance du mois"] = df_comp_res["Performance du mois (%)"].apply(lambda x: fmt_perf_simple(x))
                             df_comp_res["Performance de l'année"] = df_comp_res["Performance de l'année (%)"].apply(lambda x: fmt_perf_simple(x))
                             df_comp_res["Performance globale"] = df_comp_res["Performance globale (%)"].apply(lambda x: fmt_perf_simple(x))
@@ -7896,6 +7988,7 @@ if _tab_open(tab_perf):
                             cols_final_comp = [
                                 "Indice / Actif", 
                                 "Performance du jour", 
+                                "Performance de la semaine", 
                                 "Performance du mois", 
                                 "Performance de l'année", 
                                 "Performance globale"
