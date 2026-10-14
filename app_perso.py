@@ -841,6 +841,9 @@ st.markdown(
                   white-space: nowrap; border-bottom: 1px solid #e2e8f0; }
     .pea-tbl td, .pea-tbl th.ix { text-align: center; padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #f1f5f9; }
     .pea-tbl th.ix { position: static; background: transparent; color: inherit; text-transform: none; font-size: inherit; font-weight: 600; }
+    .pea-tbl .ca { display: inline-flex; align-items: baseline; gap: 0.4em; }
+    .pea-tbl .ar { display: inline-block; width: 1em; text-align: center; }
+    .pea-tbl .rv { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }
     .pea-tbl tbody tr:nth-child(even) { background: rgba(148,163,184,0.10); }
     @media (max-width: 640px) { .pea-tbl { font-size: 0.72rem; } .pea-tbl td, .pea-tbl th { padding: 5px 5px; } }
     .pea-head { text-align: center; padding: 6px 0 2px 0; }
@@ -1825,23 +1828,40 @@ import re
 
 _TBL_ZERO_RE = re.compile(r"^[▬▲▼\s+\-−]*0+([,.]0+)?\s*(€|%)?$")
 
-def _dash_if_empty(df):
-    """Remplace 0, N/A et valeurs vides d'un tableau déjà formaté par un « - »."""
-    def _f(v):
+def _dash_if_empty(df, eq_cols=(), sale_flag=None, sale_col="PV actées"):
+    """Remplace 0, N/A et valeurs vides d'un tableau déjà formaté par un « - ».
+    eq_cols : colonnes où un zéro est une vraie valeur (ex. performance) -> « = » (N/A reste « - »).
+    sale_flag : tableau de booléens (une vente a eu lieu sur la période) ; dans sale_col, un zéro devient
+    « = » si une vente a été actée à 0, sinon « - »."""
+    def _is_empty(v):
         if v is None:
-            return "-"
+            return True
         try:
             if pd.isna(v):
-                return "-"
+                return True
         except Exception:
             pass
+        return isinstance(v, str) and v.strip() in ("", "N/A", "nan", "NaN", "None")
+
+    def _is_zero(v):
         if isinstance(v, (int, float, np.integer, np.floating)):
-            return "-" if v == 0 else v
-        t = str(v).strip()
-        if t in ("", "N/A", "nan", "NaN", "None"):
-            return "-"
-        return "-" if _TBL_ZERO_RE.match(t) else v
-    return df.apply(lambda col: col.map(_f))
+            return v == 0
+        return bool(_TBL_ZERO_RE.match(str(v).strip()))
+
+    out = df.copy()
+    flags = None if sale_flag is None else np.asarray(sale_flag, dtype=bool)
+    for col in out.columns:
+        ser = out[col]
+        empty = ser.map(_is_empty)
+        zero = (~empty) & ser.map(_is_zero)
+        if col in eq_cols:
+            res = ser.mask(zero, "=").mask(empty, "-")
+        elif flags is not None and col == sale_col:
+            res = ser.mask(zero & flags, "=").mask((zero & ~flags) | empty, "-")
+        else:
+            res = ser.mask(zero | empty, "-")
+        out[col] = res
+    return out
 
 def _row_styles_of(styles_df):
     """Style de ligne (une chaîne CSS par ligne) à partir d'un DataFrame de styles uniformes par ligne."""
@@ -1855,13 +1875,27 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
     cols = list(df.columns)
     head = ("<th>" + _esc(str(index_label)) + "</th>" if show_index else "") + "".join(f"<th>{_esc(str(c))}</th>" for c in cols)
     idx = list(df.index)
+    # Colonnes contenant des flèches ▲ / ▼ / ▬ : flèche en colonne fixe, montant aligné à droite -> flèches alignées.
+    _ARR = ("▲", "▼", "▬")
+    arrow_w = {}
+    for c in cols:
+        ser = df[c].astype(str)
+        m = ser.str[:1].isin(_ARR)
+        if m.any():
+            arrow_w[c] = int(ser[m].str.len().sub(2).max())
     rows = []
     for i, row in enumerate(df.itertuples(index=False, name=None)):
         rs = (row_styles[i] if row_styles is not None else "") or ""
         tds = [f'<th class="ix">{_esc(str(idx[i]))}</th>'] if show_index else []
         for c, v in zip(cols, row):
             cs = (cell_style(c, v) if cell_style else "") or ""
-            tds.append(f'<td style="{cs}">{_esc(str(v))}</td>' if cs else f"<td>{_esc(str(v))}</td>")
+            t = str(v)
+            if c in arrow_w and t[:1] in _ARR:
+                inner = (f'<span class="ca"><span class="ar">{t[0]}</span>'
+                         f'<span class="rv" style="min-width:{arrow_w[c]}ch">{_esc(t[2:])}</span></span>')
+            else:
+                inner = _esc(t)
+            tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
         rows.append(f'<tr style="{rs}">' + "".join(tds) + "</tr>" if rs else "<tr>" + "".join(tds) + "</tr>")
     if max_height is None and len(df) > 25:
         max_height = 620
@@ -5604,7 +5638,7 @@ if _tab_open(tab_overview):
             {_progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)}
             <div class="pea-stats">
                 <div class="pea-stat"><div class="k">Actuel</div><div class="v">{fmt_eur(tot_value_globale)}</div></div>
-                <div class="pea-stat"><div class="k">Restant (après épargne prévue)</div><div class="v" style="color:{badge_color};">{fmt_eur(montant_restant)}</div></div>
+                <div class="pea-stat"><div class="k">Reste à atteindre</div><div class="v" style="color:{badge_color};">{fmt_eur(montant_restant)}</div></div>
                 <div class="pea-stat"><div class="k">Cible</div><div class="v">{fmt_eur(new_target)}</div></div>
             </div>
             <div style="margin-top: 12px; padding: 10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid {badge_color}; border-radius:8px;">
@@ -5916,7 +5950,7 @@ if _tab_open(tab_positions):
                     _bg_tx = {"ACHAT": "#f0f7ff", "VENTE": "#fdf2f2", "DIVIDENDE": "#f2fcf5", "APPORT": "#e6f4ea",
                               "RETRAIT": "#f5f3ff", "SPLIT": "#fff7ed", "REGROUPEMENT": "#fff7ed", "SPLIT/REGROUPEMENT": "#fff7ed"}
                     _row_styles_tx = [f"background-color: {_bg_tx[t]};" if t in _bg_tx else "" for t in df_table["Type"]]
-                    _html_table(df_table, row_styles=_row_styles_tx, show_index=True, index_label="N°")
+                    _html_table(_dash_if_empty(df_table), row_styles=_row_styles_tx, show_index=True, index_label="N°")
                 else:
                     st.info("Aucune transaction trouvée avec ces critères.")
 
@@ -8028,6 +8062,9 @@ if _tab_open(tab_history):
                                 "Achats": achats_s[mask_actif].map(_fmt_eur_h),
                                 "Frais": frais_s[mask_actif].map(_fmt_eur_h),
                                 "Apport": apports_s[mask_actif].map(lambda v: _fmt_eur_h(v) if v > 0 else "N/A"),
+                                "_sale": daily_df.index[mask_actif].normalize().isin(
+                                    pd.DatetimeIndex(df_transactions.loc[df_transactions["Type"] == "VENTE", "Date_Heure"]).normalize()
+                                ),
                             }).sort_values("_dt", ascending=False).drop(columns=["_dt"])
                             # Numérotation façon "détail complet des transactions" : le jour le plus
                             # ancien affiché commence à 1, tandis que le tableau reste trié avec le jour
@@ -8035,8 +8072,10 @@ if _tab_open(tab_history):
                             df_q_res = df_q_res.reset_index(drop=True)
                             _total_q = len(df_q_res)
                             df_q_res.index = _total_q - df_q_res.index
+                            _sale_q = df_q_res.pop("_sale").to_numpy()
                             _rs_q = _row_styles_of(style_entire_row_gradient(df_q_res))
-                            _html_table(_dash_if_empty(df_q_res), row_styles=_rs_q, show_index=True, index_label="N°")
+                            _html_table(_dash_if_empty(df_q_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_q),
+                                        row_styles=_rs_q, show_index=True, index_label="N°")
                         else:
                             st.info("Pas encore assez d'historique pour établir ce tableau.")
 
@@ -8048,6 +8087,8 @@ if _tab_open(tab_history):
                         perf_records = []
                         get_h_val = _make_get_h_val(history_df)
                         _tx_agg = _make_tx_period_agg(df_transactions)
+                        _sale_dts = pd.DatetimeIndex(df_transactions.loc[df_transactions["Type"] == "VENTE", "Date_Heure"])
+                        _sale_ym = set(zip(_sale_dts.year, _sale_dts.month))
                         for i in range(len(monthly_df)):
                             current_date = monthly_df.index[i]
                             current_val = monthly_df.iloc[i]["Valeur Actions (€)"]
@@ -8080,7 +8121,8 @@ if _tab_open(tab_history):
                                 "Valeur Actions Fin Mois": _fmt_eur_h(current_val),
                                 "Achats": _fmt_eur_h(achats_mois),
                                 "Frais": _fmt_eur_h(frais_mois),
-                                "Apport": apports_str
+                                "Apport": apports_str,
+                                "_sale": (current_date.year, current_date.month) in _sale_ym,
                             })
                         df_m_res = pd.DataFrame(perf_records).sort_values("_dt", ascending=False).drop(columns=["_dt"])
                         # Numérotation façon "détail complet des transactions" : le mois le plus ancien
@@ -8088,8 +8130,10 @@ if _tab_open(tab_history):
                         df_m_res = df_m_res.reset_index(drop=True)
                         _total_m = len(df_m_res)
                         df_m_res.index = _total_m - df_m_res.index
+                        _sale_m = df_m_res.pop("_sale").to_numpy()
                         _rs_m = _row_styles_of(style_entire_row_gradient(df_m_res))
-                        _html_table(_dash_if_empty(df_m_res), row_styles=_rs_m, show_index=True, index_label="N°")
+                        _html_table(_dash_if_empty(df_m_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_m),
+                                    row_styles=_rs_m, show_index=True, index_label="N°")
 
             with st.expander("📅 Historique des performances annuelles", expanded=True):
                 if not df_transactions.empty:
@@ -8097,6 +8141,7 @@ if _tab_open(tab_history):
                     if history_df is not None:
                         yearly_df = history_df.resample('YE').last()
                         perf_year_records = []
+                        _sale_years = set(pd.DatetimeIndex(df_transactions.loc[df_transactions["Type"] == "VENTE", "Date_Heure"]).year)
                         get_h_val = _make_get_h_val(history_df)
                         _tx_agg = _make_tx_period_agg(df_transactions)
                         for i in range(len(yearly_df)):
@@ -8136,7 +8181,8 @@ if _tab_open(tab_history):
                                 "Valeur Actions Fin Année": _fmt_eur_h(current_val),
                                 "Achats": _fmt_eur_h(achats_an),
                                 "Frais": _fmt_eur_h(frais_an),
-                                "Apport": apports_an_str
+                                "Apport": apports_an_str,
+                                "_sale": current_year in _sale_years,
                             })
                         df_y_res = pd.DataFrame(perf_year_records).sort_values("_year", ascending=False).drop(columns=["_year"])
                         # Numérotation façon "détail complet des transactions" : l'année la plus ancienne
@@ -8144,8 +8190,10 @@ if _tab_open(tab_history):
                         df_y_res = df_y_res.reset_index(drop=True)
                         _total_y = len(df_y_res)
                         df_y_res.index = _total_y - df_y_res.index
+                        _sale_y = df_y_res.pop("_sale").to_numpy()
                         _rs_y = _row_styles_of(style_entire_row_gradient(df_y_res))
-                        _html_table(_dash_if_empty(df_y_res), row_styles=_rs_y, show_index=True, index_label="N°")
+                        _html_table(_dash_if_empty(df_y_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_y),
+                                    row_styles=_rs_y, show_index=True, index_label="N°")
         _rendu_onglet_historique(df_transactions, tot_invested, _now_paris().strftime("%Y-%m-%d"), _epoch_now)
 
 
