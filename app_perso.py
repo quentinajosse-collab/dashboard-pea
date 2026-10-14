@@ -1974,6 +1974,27 @@ _TBL_IFRAME_JS = r"""
 })();
 """
 
+_PAREN_RE = re.compile(r"^(.*?)\s?\((▲|▼|▬|=)\s?([^()]*\d[^()]*)\)$")
+
+def _paren_cell(v, pw=0, nw=0):
+    """Cellule « prix (▲ +1,20%) » : prix en couleur par défaut, seule la parenthèse est colorée ;
+    prix, flèche, nombre et % occupent des positions fixes (alignés d'une ligne à l'autre)."""
+    m = _PAREN_RE.match(str(v))
+    if not m:
+        return None
+    px, ar, num = m.groups()
+    col = "#16a34a" if ar == "▲" else ("#dc2626" if ar == "▼" else "#64748b")
+    if ar == "▬":
+        ar = "="
+    unit = "%" if num.endswith("%") else ""
+    num = num[:-1] if unit else num
+    return ('<span class="ca">'
+            f'<span class="rv" style="min-width:{pw}ch">{_esc(px)}</span>'
+            f'<span style="color:{col};font-weight:700;display:inline-flex;align-items:baseline;gap:0.12em;margin-left:0.4em;">'
+            f'<span>(</span><span class="ar">{ar}</span>'
+            f'<span class="rv" style="min-width:{nw}ch">{_esc(num)}</span>'
+            f'<span>{unit})</span></span></span>')
+
 _CELL_RE = re.compile(r"^(?:([▲▼▬=])\s)?(.*\d.*?)\s?(€|%)?$")
 
 def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None, focus_row=None, total_row=None):
@@ -2003,6 +2024,13 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
                 pl.append(None)
         if structured:
             parsed[c], num_w[c], has_arrow[c] = pl, w, ar
+    paren_w = {}
+    for c in cols:
+        _ms = [_PAREN_RE.match(t) for t in (df[c].astype(str).tolist() + ([str(total_row.get(c, ""))] if total_row is not None else []))]
+        _ms = [m for m in _ms if m]
+        if _ms:
+            paren_w[c] = (max(len(m.group(1)) for m in _ms),
+                          max(len(m.group(3).rstrip("%")) for m in _ms))
     rows = []
     for i, row in enumerate(df.itertuples(index=False, name=None)):
         rs = (row_styles[i] if row_styles is not None else "") or ""
@@ -2020,7 +2048,7 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
                     inner += f'<span class="un">{unit}</span>'
                 inner += "</span>"
             else:
-                inner = _esc(str(v))
+                inner = (_paren_cell(v, *paren_w[c]) if c in paren_w else None) or _esc(str(v))
             tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
         _rid = ' id="cur"' if (focus_row is not None and i == focus_row) else ""
         rows.append(f'<tr{_rid} style="{rs}">' + "".join(tds) + "</tr>" if rs else f"<tr{_rid}>" + "".join(tds) + "</tr>")
@@ -2042,7 +2070,7 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
                     inner += f'<span class="un">{unit}</span>'
                 inner += "</span>"
             else:
-                inner = _esc(str(v))
+                inner = (_paren_cell(v, *paren_w[c]) if c in paren_w else None) or _esc(str(v))
             tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
         foot = "<tfoot><tr>" + "".join(tds) + "</tr></tfoot>"
     cap = int(max_height) if max_height else 640
@@ -6335,7 +6363,7 @@ if _tab_open(tab_positions):
                 _html_table(
                     _dash_if_empty(df_active_fmt),
                     cell_style=lambda c, v: (_style_perf_cell(v) if c in _cols_fleche_active
-                                             else (_style_prix_actif(v) if c == "Prix actuel (€)" else "")),
+                                             else ""),
                     max_height=min(max(total_height, 100), 1000),
                     total_row=_tot_act,
                 )
