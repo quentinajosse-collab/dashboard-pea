@@ -1949,7 +1949,7 @@ _TBL_IFRAME_JS = r"""
     return s === '-' || s === '' ? null : s.toLowerCase();
   }
   var cur = document.getElementById('cur'), wrap = document.querySelector('.pea-tbl-wrap');
-  if (cur && wrap) { wrap.scrollTop = Math.max(0, cur.offsetTop - 70); }
+  if (cur && wrap) { wrap.scrollTop = Math.max(0, cur.offsetTop - hr.offsetHeight); }
   var dir = {}, last = -1;
   Array.prototype.forEach.call(hr.cells, function (th, i) {
     if (th.className === 'ix') return;
@@ -3246,6 +3246,7 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
         realized_pnl = 0
         pnl_round_trips = []
         first_buy_date = None
+        sold_out_date = None
         total_commissions_ticker = 0
         total_ttf_ticker = 0
         nb_mouvements_ticker = 0
@@ -3265,9 +3266,10 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
             if t == "ACHAT":
                 if first_buy_date is None:
                     first_buy_date = row["Date_Heure"]
+                sold_out_date = None
                 total_shares += qty
                 total_invested += (qty * p) + f
-                total_achats_historiques += (qty * p) + f 
+                total_achats_historiques += (qty * p) + f
                 total_commissions_ticker += comm
                 total_ttf_ticker += ttf_val
             elif t == "VENTE":
@@ -3284,6 +3286,8 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
 
                     total_shares -= qty
                     total_invested = total_shares * current_pru
+                    if total_shares <= 0.0001:
+                        sold_out_date = row["Date_Heure"]
             elif t == "SPLIT":
                 _rompu_deja_compte = False
                 # Un rompu dont la date de versement (Date_Rompus) est encore dans le futur n'a
@@ -3389,6 +3393,11 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
                 "Gain Total Global (€)": total_gain_with_div,
                 "Performance (%)": perf_pct,
                 "Performance Active (%)": active_perf_pct,
+                "Jours Détention": (
+                    max((((sold_out_date if (total_shares <= 0.0001 and sold_out_date is not None)
+                           else (target_datetime if is_historical_check else _now_paris())) - first_buy_date).days), 0)
+                    if first_buy_date is not None else 0
+                ),
                 "Commission Pct": comm_pct_val,
                 "TTF Pct": total_ttf_ticker,
             })
@@ -4383,6 +4392,14 @@ def dialog_simulation_operation():
             return "▼ " + fmt_eur(delta_val), color
         return "▬ " + fmt_eur(0.0), color
 
+    def _delta_prix(delta_val):
+        color = "#16a34a" if delta_val > 0.00005 else ("#dc2626" if delta_val < -0.00005 else "#64748b")
+        if delta_val > 0.00005:
+            return "▲ +" + fmt_price_dynamic(delta_val, include_comm=False), color
+        if delta_val < -0.00005:
+            return "▼ " + fmt_price_dynamic(delta_val, include_comm=False), color
+        return "▬ " + fmt_price_dynamic(0.0, include_comm=False), color
+
     def _delta_pct(delta_val):
         color = "#16a34a" if delta_val > 0.005 else ("#dc2626" if delta_val < -0.005 else "#64748b")
         if delta_val > 0.005:
@@ -4477,7 +4494,7 @@ def dialog_simulation_operation():
         # d'origine est conservé.
         _prix_label_base_wi = "Prix d'achat (€)" if type_wi == "Achat" else "Prix de vente (€)"
         _prix_label_wi = (
-            f"{_prix_label_base_wi} (PRU actuel : {fmt_eur(float(pos_existante['PRU Net (€)']))})"
+            f"{_prix_label_base_wi} (PRU actuel : {fmt_price_dynamic(float(pos_existante['PRU Net (€)']), include_comm=False)})"
             if pos_existante is not None else _prix_label_base_wi
         )
         _field_label(_prix_label_wi)
@@ -4625,7 +4642,7 @@ def dialog_simulation_operation():
             d_qte = qte_apres - qte_avant
             d_qte_color = "#16a34a" if d_qte > 0 else ("#dc2626" if d_qte < 0 else "#64748b")
             d_qte_str = f"{_arrow_sym(d_qte, 1e-9)} {'+' if d_qte > 0 else ''}{d_qte:g} titre(s)"
-            d_pru, c_pru = _delta_eur(pru_apres - pru_avant)
+            d_pru, c_pru = _delta_prix(pru_apres - pru_avant)
             d_valpos, c_valpos = _delta_eur(valeur_pos_apres - valeur_pos_avant)
             d_gainlat, c_gainlat = _delta_eur(gain_latent_apres - gain_latent_avant)
             d_poids, c_poids = _delta_pct(poids_apres - poids_avant)
@@ -4875,11 +4892,28 @@ def dialog_simulation_operation():
                     _col_pct = "#16a34a" if gain_net_av > 0.005 else ("#dc2626" if gain_net_av < -0.005 else "#64748b")
                     _col_brut = "#16a34a" if gain_brut_av > 0.005 else ("#dc2626" if gain_brut_av < -0.005 else "#64748b")
                     _sg = lambda v: ("+" if v > 0.005 else "") + fmt_eur(v)
-                    _sim_headline_duo([
-                        ("Gain en %", ("+" if gain_pct_av > 0.005 else "") + f"{gain_pct_av:,.2f} %".replace(",", " ").replace(".", ","),
-                         "net de frais", True, _col_pct),
-                        ("Gain brut de frais", _sg(gain_brut_av), "", False, _col_brut),
-                        ("Gain net de frais", _sg(gain_net_av), "", False, _col_pct),
+                    gain_brut_pct_av = (gain_brut_av / montant_brut_achat_av * 100) if montant_brut_achat_av > 0 else 0.0
+                    _pct_txt = lambda v: ("+" if v > 0.005 else "") + f"{v:,.2f} %".replace(",", " ").replace(".", ",")
+                    _col_brut_pct = "#16a34a" if gain_brut_pct_av > 0.005 else ("#dc2626" if gain_brut_pct_av < -0.005 else "#64748b")
+
+                    def _gain_duo(items):
+                        _bgs = {"#16a34a": ("#f0fdf4", "#86efac"), "#dc2626": ("#fef2f2", "#fca5a5")}
+                        parts = []
+                        for lab, val, col in items:
+                            bg, bd = _bgs.get(col, ("#f8fafc", "#e2e8f0"))
+                            parts.append(
+                                f'<div class="pea-duo-item" style="background:{bg}; border:1px solid {bd}; border-top:3px solid {col};">'
+                                f'<div class="k">{lab}</div><div class="v" style="color:{col};">{val}</div></div>'
+                            )
+                        st.markdown(f'<div class="pea-duo">{"".join(parts)}</div>', unsafe_allow_html=True)
+
+                    _gain_duo([
+                        ("Gain brut en %", _pct_txt(gain_brut_pct_av), _col_brut_pct),
+                        ("Gain brut en €", _sg(gain_brut_av), _col_brut),
+                    ])
+                    _gain_duo([
+                        ("Gain net en %", _pct_txt(gain_pct_av), _col_pct),
+                        ("Gain net en €", _sg(gain_net_av), _col_pct),
                     ])
                     st.caption(f"Montant de vente : {fmt_eur(montant_vente_brut_av)} − commission {fmt_eur(commission_vente_av)} = {fmt_eur(montant_vente_recu_av)} reçus.")
 
@@ -4918,12 +4952,12 @@ def dialog_simulation_operation():
             d_qte = qte_apres - qte_avant
             d_qte_color = "#16a34a" if d_qte > 0 else ("#dc2626" if d_qte < 0 else "#64748b")
             d_qte_str = f"{_arrow_sym(d_qte, 1e-9)} {'+' if d_qte > 0 else ''}{d_qte:g} titre(s)"
-            d_pru, c_pru = _delta_eur(pru_apres - pru_avant)
+            d_pru, c_pru = _delta_prix(pru_apres - pru_avant)
 
             _render_before_after([
                 ("💰 Poche espèces", fmt_eur(cash_avant), fmt_eur(cash_apres), d_cash, c_cash),
                 ("📦 Quantité détenue", f"{qte_avant:g}", f"{qte_apres:g}", d_qte_str, d_qte_color),
-                ("🎯 PRU net", fmt_eur(pru_avant), fmt_eur(pru_apres), d_pru, c_pru),
+                ("🎯 PRU net", fmt_price_dynamic(pru_avant, include_comm=False), fmt_price_dynamic(pru_apres, include_comm=False), d_pru, c_pru),
             ])
             st.caption(f"Nouveau prix théorique du titre après split : {fmt_eur(prix_apres_wi)} (contre {fmt_eur(prix_actuel_wi)} avant).")
 
@@ -5758,7 +5792,7 @@ _TAB_STATE_KEYS = {
     "tab_apports": (),
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
-    "tab_perf": ("k_periode_perf", "k_perf_echelle", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
+    "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
     "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
     "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_impot", "k_rp_retrait", "k_rp_infl", ),
 }
@@ -6097,6 +6131,7 @@ if _tab_open(tab_overview):
                 _rows_obj = []
                 for _d0, _d1 in zip(_starts, _ends):
                     _att = _att_fn(_d1)
+                    _att_cmp = _att
                     _termine = _d1 <= _auj and len(_serie) > 0 and _d1 >= _serie.index[0]
                     if _d1 <= _auj and len(_serie):
                         _vr = _serie[_serie.index <= _d1]
@@ -6108,20 +6143,10 @@ if _tab_open(tab_overview):
                         # Période (semaine / mois / année) EN COURS : on n'attend pas sa fin. Valeur réelle = valeur
                         # du jour, comparée à la valeur attendue AUJOURD'HUI sur la trajectoire (et non à celle
                         # attendue en fin de période, ce qui donnerait un faux « en retard »).
+                        # La colonne « Valeur attendue » affiche, elle, la valeur attendue à la FIN de la période.
                         _vr = float(_serie.iloc[-1])
-                        _att = _att_fn(_auj)
-                    _rows_obj.append((_d0, _d1, _att, _vr, _en_cours))
-
-                # Message de synthèse : écart d'aujourd'hui par rapport à la trajectoire théorique.
-                if len(_serie):
-                    _v_now = float(_serie.iloc[-1])
-                    _att_now = _att_fn(_auj)
-                    _ec_now = _v_now - _att_now
-                    _ok_now = _ec_now >= 0
-                    st.markdown(
-                        f"{'✅' if _ok_now else '❌'} **{'En avance' if _ok_now else 'En retard'}** de "
-                        f"**{fmt_eur(abs(_ec_now))}** sur la trajectoire (valeur attendue aujourd'hui : {fmt_eur(_att_now)})."
-                    )
+                        _att_cmp = _att_fn(_auj)
+                    _rows_obj.append((_d0, _d1, _att, _vr, _en_cours, _att_cmp))
 
                 def _lab_obj(d0, d1):
                     if _pas_suivi == "Jour":
@@ -6134,19 +6159,19 @@ if _tab_open(tab_overview):
 
                 _lab, _vr_t, _att_t, _ecm_t, _ecp_t, _stat_t, _styles_t = [], [], [], [], [], [], []
                 _focus = None
-                for _k, (_d0, _d1, _att, _vr, _enc) in enumerate(_rows_obj):
+                for _k, (_d0, _d1, _att, _vr, _enc, _att_cmp) in enumerate(_rows_obj):
                     _lab.append(_lab_obj(_d0, _d1))
-                    _att_t.append(fmt_eur(_att) + (" (auj.)" if _enc and not np.isnan(_vr) else ""))
+                    _att_t.append(fmt_eur(_att))
                     if not np.isnan(_vr):
-                        _ec = _vr - _att
+                        _ec = _vr - _att_cmp
                         _vr_t.append(fmt_eur(_vr)); _ecm_t.append(fmt_eur_arrow(_ec))
-                        _ecp_t.append(fmt_perf_simple(_ec / _att * 100) if _att > 0 else "-")
+                        _ecp_t.append(fmt_perf_simple(_ec / _att_cmp * 100) if _att_cmp > 0 else "-")
                         _stat_t.append(("✅ En avance" if _ec >= 0 else "❌ En retard") + (" · en cours" if _enc else ""))
                     else:
                         _vr_t.append("-"); _ecm_t.append("-"); _ecp_t.append("-")
                         _stat_t.append("⏳ En cours" if _enc else "🕒 À venir")
                     _styles_t.append("background:rgba(2,132,199,0.10);" if _enc else "")
-                    if _enc and _focus is None:
+                    if _d0 <= _auj <= _d1 and _focus is None:
                         _focus = _k
                 if _focus is None:
                     # Aucune période en cours (ex. suivi par jour) : on se place sur la première ligne à venir.
@@ -6172,21 +6197,54 @@ if _tab_open(tab_positions):
 
         with st.expander("📌 Détail des Positions Actives", expanded=True):
             if not df_active.empty:
-                yoc_col = next((col for col in ['YoC (%) **', 'YoC (%)', 'YoC'] if col in df_active.columns), 'YoC (%) **')
-                cols_to_keep = [
-                    'Nom', 'Quantité', 'PRU Net (€)', 'Prix Actuel (€)', 
-                    'Valeur Actuelle (€)', 'Gain Latent (€)', 'Gain Réalisé (€)', 
-                    'Dividendes Reçus (€)', yoc_col, 'Performance Active (%)'
+                # Variation du jour par titre (cours en direct vs dernière clôture AVANT aujourd'hui),
+                # à partir de l'historique déjà préchargé (même date de départ que le préchargement).
+                def _var_jour_ticker(ticker):
+                    try:
+                        if not _start_date_str_precharge:
+                            return None
+                        h = get_ticker_history(ticker, _start_date_str_precharge)
+                        if h is None or h.empty or "Close" not in h.columns:
+                            return None
+                        cl = h["Close"].dropna()
+                        if cl.empty:
+                            return None
+                        if getattr(cl.index, "tz", None) is not None:
+                            cl.index = cl.index.tz_localize(None)
+                        cl.index = cl.index.normalize()
+                        avant = cl[cl.index < _today_paris()]
+                        ref = avant.iloc[-1] if not avant.empty else cl.iloc[-1]
+                        px = get_live_price(ticker)
+                        if px is None or not ref:
+                            return None
+                        return float(px - ref), float((px - ref) / ref * 100)
+                    except Exception:
+                        return None
+
+                df_active = df_active.copy()
+                _vj = {t: _var_jour_ticker(t) for t in df_active["Ticker"]}
+                df_active["Var Jour (€)"] = [
+                    (_vj[t][0] * q) if _vj.get(t) else np.nan for t, q in zip(df_active["Ticker"], df_active["Quantité"])
                 ]
-            
+                df_active["Var Jour (%)"] = [(_vj[t][1]) if _vj.get(t) else np.nan for t in df_active["Ticker"]]
+                df_active["Ancienneté (jours)"] = df_active["Jours Détention"] if "Jours Détention" in df_active.columns else np.nan
+
+                cols_to_keep = [
+                    'Nom', 'Ancienneté (jours)', 'Quantité', 'PRU Net (€)', 'Prix Actuel (€)',
+                    'Var Jour (€)', 'Var Jour (%)',
+                    'Valeur Actuelle (€)', 'Gain Latent (€)', 'Gain Réalisé (€)',
+                    'Dividendes Reçus (€)', 'Performance Active (%)'
+                ]
+
                 existing_cols = [c for c in cols_to_keep if c in df_active.columns]
                 df_active_table = df_active[existing_cols].copy()
-            
+
                 rename_mapping = {
                     'Prix Actuel (€)': 'Prix actuel (€)',
                     'Valeur Actuelle (€)': 'Valeur Actuel (€)',
                     'Dividendes Reçus (€)': 'Dividende Reçu (€)',
-                    yoc_col: 'YoC (%)',
+                    'Var Jour (€)': 'Variation jour (€)',
+                    'Var Jour (%)': 'Variation jour (%)',
                     'Performance Active (%)': 'Performance (%)'
                 }
                 df_active_fmt = df_active_table.rename(columns=rename_mapping)
@@ -6209,21 +6267,24 @@ if _tab_open(tab_positions):
                 for col in ["Valeur Actuel (€)", "Dividende Reçu (€)"]:
                     if col in df_active_fmt.columns:
                         df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_eur(x))
-                for col in ["Gain Latent (€)", "Gain Réalisé (€)"]:
+                for col in ["Gain Latent (€)", "Gain Réalisé (€)", "Variation jour (€)"]:
                     if col in df_active_fmt.columns:
                         df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_eur_arrow(x))
-                    
-                if "Performance (%)" in df_active_fmt.columns:
-                    df_active_fmt["Performance (%)"] = df_active_fmt["Performance (%)"].apply(lambda x: fmt_perf(x))
-                
-                if "YoC (%)" in df_active_fmt.columns:
-                    df_active_fmt["YoC (%)"] = df_active_fmt["YoC (%)"].apply(lambda x: f"{x:.2f}%".replace(".", ","))
-                    
+
+                for col in ["Performance (%)", "Variation jour (%)"]:
+                    if col in df_active_fmt.columns:
+                        df_active_fmt[col] = df_active_fmt[col].apply(lambda x: fmt_perf(x))
+
+                if "Ancienneté (jours)" in df_active_fmt.columns:
+                    df_active_fmt["Ancienneté (jours)"] = df_active_fmt["Ancienneté (jours)"].apply(
+                        lambda x: "N/A" if pd.isna(x) else f"{int(x)}")
+
                 # Affichage de toutes les lignes sans barre de scroll (height dynamique selon le nombre de lignes)
                 row_height = 35
                 header_height = 40
                 total_height = header_height + (len(df_active_fmt) + 1) * row_height + 20  # +1 ligne : le Total
-                _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
+                _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)",
+                                                   "Variation jour (€)", "Variation jour (%)"]
                                        if c in df_active_fmt.columns]
                 # Ligne Total (sommes sur les positions actives, calculées sur les valeurs numériques d'origine).
                 # Performance et YoC : mêmes formules que par ligne, sur l'ensemble (gain latent / capital investi,
@@ -6241,7 +6302,10 @@ if _tab_open(tab_positions):
                 _tot_act["Gain Réalisé (€)"] = fmt_eur_arrow(_t_gr)
                 _tot_act["Dividende Reçu (€)"] = fmt_eur(_t_div)
                 _tot_act["Performance (%)"] = fmt_perf(_t_gl / _t_cap * 100) if _t_cap > 0 else "N/A"
-                _tot_act["YoC (%)"] = f"{(_t_div / _t_cap * 100) if _t_cap > 0 else 0.0:.2f}%".replace(".", ",")
+                _t_vj = _som_act("Var Jour (€)")
+                _t_val_veille = _t_val - _t_vj
+                _tot_act["Variation jour (€)"] = fmt_eur_arrow(_t_vj)
+                _tot_act["Variation jour (%)"] = fmt_perf(_t_vj / _t_val_veille * 100) if _t_val_veille > 0 else "N/A"
                 _tot_act = _dash_if_empty(pd.DataFrame([_tot_act])).iloc[0].to_dict()
                 _html_table(
                     _dash_if_empty(df_active_fmt),
@@ -6644,8 +6708,9 @@ if _tab_open(tab_positions):
                 # Retour à la "Performance (%)" (à la demande) à la place du YoC, et ajout d'une
                 # colonne "Nombre de mouvements" (nombre d'ACHATs + VENTEs sur la valeur) pour
                 # visualiser d'un coup d'œil l'activité de chaque ligne du classement.
-                df_gain_rank = df_port[['Nom', 'Capital Investi (€)', 'Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)', 'Performance (%)', 'Nb Mouvements']].copy()
-                df_gain_rank = df_gain_rank.rename(columns={'Nb Mouvements': 'Nombre de mouvements'})
+                df_gain_rank = df_port[['Nom', 'Capital Investi (€)', 'Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)', 'Performance (%)', 'Nb Mouvements', 'Jours Détention']].copy()
+                df_gain_rank = df_gain_rank.rename(columns={'Nb Mouvements': 'Nombre de mouvements',
+                                                            'Jours Détention': 'Durée de détention (jours)'})
 
                 df_gain_rank = df_gain_rank.sort_values(by='Gain Total Global (€)', ascending=False).reset_index(drop=True)
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
@@ -6658,6 +6723,8 @@ if _tab_open(tab_positions):
                     df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur_arrow)
                 df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
+                df_gain_rank_fmt['Durée de détention (jours)'] = df_gain_rank_fmt['Durée de détention (jours)'].apply(
+                    lambda x: "N/A" if pd.isna(x) else f"{int(x)}")
 
                 _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)']
                 # Ligne Total : somme de chaque colonne sur toutes les actions du classement. La performance n'est pas
@@ -7865,19 +7932,7 @@ if _tab_open(tab_perf):
                             key="multiselect_indices_benchmarks",
                             help="Sélectionnez un ou plusieurs indices pour comparer la performance de votre portefeuille."
                         )
-                        # Longue période : échelle logarithmique en option (base 100) — les écarts relatifs restent lisibles
-                        # quand une courbe (indice, ou premières semaines du PEA) écrase toutes les autres en linéaire.
                         _perf_longue = (graph_date_fin - graph_date_debut).days > 365
-                        if _perf_longue:
-                            _echelle_perf = st.radio(
-                                "Échelle du graphique", ["Linéaire", "Logarithmique"], horizontal=True,
-                                key="k_perf_echelle",
-                                help="Logarithmique : les variations en % ont la même hauteur partout (base 100). "
-                                     "Utile sur plusieurs années, quand la courbe s'écrase. Le survol affiche toujours la performance en %.",
-                            )
-                        else:
-                            _echelle_perf = "Linéaire"
-                        _log_perf = (_echelle_perf == "Logarithmique")
                         chart_slot = st.container()          # graphique (rempli plus bas)
                         placeholder_legende = st.empty()     # légende (remplie plus bas)
 
@@ -7927,7 +7982,7 @@ if _tab_open(tab_perf):
                         # Longue période : on n'affiche qu'environ 600 points (un point sur N, dernier point toujours
                         # conservé) — la courbe reste fidèle mais n'est plus hachée/écrasée par des milliers de points.
                         _n_pts = len(sub_history_graph.index)
-                        _pas_ds = max(1, int(np.ceil(_n_pts / 600)))
+                        _pas_ds = max(1, int(np.ceil(_n_pts / 500)))
                         if _pas_ds > 1:
                             _keep_pos = sorted(set(range(0, _n_pts, _pas_ds)) | {_n_pts - 1})
                             _idx_aff = sub_history_graph.index[_keep_pos]
@@ -7969,7 +8024,7 @@ if _tab_open(tab_perf):
                             extended_y = pd.concat([series, pd.Series([val_fin], index=[future_date])])
                             # En échelle logarithmique on trace l'indice base 100 (100 + perf %) ; le survol,
                             # lui, affiche toujours la performance en % (customdata calculé sur extended_y).
-                            _y_plot = (extended_y + 100.0) if _log_perf else extended_y
+                            _y_plot = extended_y
                         
                             text_arr = [''] * len(extended_y)
                             if not pd.isna(val_fin):
@@ -7991,7 +8046,7 @@ if _tab_open(tab_perf):
                             ))
 
                         fig.add_hline(
-                            y=(100 if _log_perf else 0),
+                            y=0,
                             line_dash="dash", 
                             line_color="#64748b", 
                             line_width=1.5,
@@ -8012,21 +8067,6 @@ if _tab_open(tab_perf):
                             xaxis=dict(range=[dt_graph_start, future_date + pd.Timedelta(days=10)], autorange=False)
                         )
                         fig.update_yaxes(automargin=True)
-                        if _log_perf:
-                            _all_y = np.concatenate([np.asarray(t.y, dtype=float) for t in fig.data])
-                            _all_y = _all_y[np.isfinite(_all_y) & (_all_y > 0)]
-                            if _all_y.size:
-                                _lo, _hi = float(_all_y.min()) * 0.95, float(_all_y.max()) * 1.05
-                                _perf_ticks = [p for p in (-75, -50, -25, -10, 0, 10, 25, 50, 100, 200, 300, 500, 1000, 2000)
-                                               if _lo <= 100 + p <= _hi]
-                                if len(_perf_ticks) >= 2:
-                                    fig.update_yaxes(
-                                        type="log", tickmode="array",
-                                        tickvals=[100 + p for p in _perf_ticks],
-                                        ticktext=[f"{p:+d} %" if p else "0 %" for p in _perf_ticks],
-                                    )
-                                else:
-                                    fig.update_yaxes(type="log")
                         if _perf_longue:
                             # Boutons de zoom rapide (6 mois / 1 an / 3 ans / tout) au-dessus du graphique.
                             fig.update_layout(height=420, margin=dict(l=8, r=72, t=44, b=8))
@@ -9387,14 +9427,16 @@ def _stacked_growth_chart(n, base, verses, interets, base_name, height=260):
         ))
     fig.add_trace(go.Scatter(
         x=cats, y=verses, name="Versements", mode="lines", stackgroup="s",
-        line=dict(color="#38bdf8", width=1.5), fill="tonexty" if base is not None else "tozeroy",
-        fillcolor="rgba(56,189,248,0.30)",
-        customdata=[fmt_eur(v) for v in verses], hovertemplate="Versements cumulés : %{customdata}<extra></extra>",
+        line=dict(color="#6366f1", width=1.5), fill="tonexty" if base is not None else "tozeroy",
+        fillcolor="rgba(99,102,241,0.30)",
+        customdata=[fmt_eur(v) for v in verses],
+        hovertemplate="<span style='color:#a5b4fc;'>●</span> <span style='color:#a5b4fc;'>Versements cumulés : <b>%{customdata}</b></span><extra></extra>",
     ))
     fig.add_trace(go.Scatter(
         x=cats, y=[max(i, 0.0) for i in interets], name="Intérêts", mode="lines", stackgroup="s",
-        line=dict(color="#f59e0b", width=2.2), fill="tonexty", fillcolor="rgba(245,158,11,0.30)",
-        customdata=[fmt_eur(v) for v in interets], hovertemplate="Intérêts cumulés : %{customdata}<extra></extra>",
+        line=dict(color="#10b981", width=2.2), fill="tonexty", fillcolor="rgba(16,185,129,0.30)",
+        customdata=[fmt_eur(v) for v in interets],
+        hovertemplate="<span style='color:#6ee7b7;'>●</span> <span style='color:#6ee7b7;'>Intérêts cumulés : <b>%{customdata}</b></span><extra></extra>",
     ))
     fig.update_layout(
         height=height, margin=dict(l=8, r=12, t=6, b=6), hovermode="x unified", showlegend=False,
@@ -9525,16 +9567,16 @@ def _render_sim_epargne(valeur_depart):
 
         # ---- Résultats (en dessous)
         _sim_headline_duo([
-            (f"Valeur dans {n} {_plural(n)} (€ d'aujourd'hui)", fmt_eur(valeur_reelle), "", True, "#0284c7"),
+            ("Valorisation", fmt_eur(valeur_reelle), "", True, "#0284c7"),
         ])
         _sim_headline_duo([
             ("Revenu passif / mois", fmt_eur(revenu_mensuel_brut), "avant impôts", False),
             ("Revenu passif / mois net d'impôts", fmt_eur(revenu_mensuel_net),
-             f"imposition des gains : {_fr_num(_taux_impot_retrait, 1)} % (PEA de {_fr_num(_anciennete_fin, 1)} ans)", True, "#16a34a"),
+             "", True, "#16a34a"),
         ])
         _sim_headline_duo([
-            ("Versements cumulés", fmt_eur(verses[-1]), "", False, "#0284c7"),
-            ("Intérêts", fmt_eur(max(valeur_reelle - verses[-1], 0.0)), "", False, "#d97706"),
+            ("Versements cumulés", fmt_eur(verses[-1]), "", False, "#6366f1"),
+            ("Intérêts", fmt_eur(max(valeur_reelle - verses[-1], 0.0)), "", False, "#10b981"),
         ])
         interets_chart = interets_reels
         fig_sim = _stacked_growth_chart(n, None, verses, interets_chart, "")
@@ -9551,7 +9593,7 @@ def _render_sim_epargne(valeur_depart):
             '<div style="background:#e2e8f0; border-radius:999px; height:12px; overflow:hidden;">'
             f'<div style="width:{pct_plafond}%; height:100%; background:{grad_plafond}; border-radius:999px;"></div></div>'
             '<div style="margin-top:8px; font-size:0.78rem; color:#475569;">'
-            f'📅 Date de plafonnement estimée (selon vos valeurs saisies) : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
+            f'📅 Date de plafonnement selon les valeurs saisies : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
             unsafe_allow_html=True,
         )
         if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n and inv > 0:
