@@ -1912,6 +1912,8 @@ _TBL_IFRAME_JS = r"""
     if (/^[+\-]?\d+(\.\d+)?$/.test(c)) return parseFloat(c);
     return s === '-' || s === '' ? null : s.toLowerCase();
   }
+  var cur = document.getElementById('cur'), wrap = document.querySelector('.pea-tbl-wrap');
+  if (cur && wrap) { wrap.scrollTop = Math.max(0, cur.offsetTop - 70); }
   var dir = {}, last = -1;
   Array.prototype.forEach.call(hr.cells, function (th, i) {
     if (th.className === 'ix') return;
@@ -1938,7 +1940,7 @@ _TBL_IFRAME_JS = r"""
 
 _CELL_RE = re.compile(r"^(?:([▲▼▬=])\s)?(.*\d.*?)\s?(€|%)?$")
 
-def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None):
+def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None, focus_row=None):
     """Tableau HTML avec toutes les valeurs centrées. row_styles : une chaîne CSS par ligne ;
     cell_style(colonne, valeur) -> chaîne CSS d'une cellule. Défilement interne au-delà de 25 lignes.
     Dans les colonnes qui contiennent une flèche (▲ ▼ ▬ =) ou une unité (€ %), la flèche, le nombre et l'unité
@@ -1981,7 +1983,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
             else:
                 inner = _esc(str(v))
             tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
-        rows.append(f'<tr style="{rs}">' + "".join(tds) + "</tr>" if rs else "<tr>" + "".join(tds) + "</tr>")
+        _rid = ' id="cur"' if (focus_row is not None and i == focus_row) else ""
+        rows.append(f'<tr{_rid} style="{rs}">' + "".join(tds) + "</tr>" if rs else f"<tr{_rid}>" + "".join(tds) + "</tr>")
     cap = int(max_height) if max_height else 640
     n_rows = len(rows)
     height = int(min(cap, 34 + 30 * n_rows + 14))
@@ -5857,48 +5860,90 @@ if _tab_open(tab_overview):
                 _fin_obj = pd.Timestamp(_an, 12, 31)
                 _jours_obj = max((_fin_obj - _debut_obj).days, 1)
                 _v0 = float(app_config.get("objectif_v0", tot_value_globale))
-                _s_an = _serie[_serie.index >= _debut_obj]
-                if len(_s_an):
-                    _dfo = _s_an.to_frame("v")
-                    if _pas_suivi == "Semaine":
-                        _dfo["k"] = _dfo.index.to_period("W")
-                        _dfo = _dfo.groupby("k").tail(1)
-                    elif _pas_suivi == "Mois":
-                        _dfo["k"] = _dfo.index.to_period("M")
-                        _dfo = _dfo.groupby("k").tail(1)
-                    _frac = np.clip((_dfo.index - _debut_obj).days.to_numpy() / _jours_obj, 0.0, 1.0)
-                    _att = _v0 + (new_target - _v0) * _frac
-                    _dfo["att"] = _att
-                    _dfo["ec"] = _dfo["v"] - _dfo["att"]
-                    _dfo["ecp"] = np.where(_dfo["att"] > 0, _dfo["ec"] / _dfo["att"] * 100, np.nan)
-                    _dfo = _dfo.sort_index(ascending=False)
-                    _last = _dfo.iloc[0]
-                    _ok_last = _last["ec"] >= 0
-                    st.markdown(
-                        f"{'✅' if _ok_last else '❌'} **{'En avance' if _ok_last else 'En retard'}** de "
-                        f"**{fmt_eur(abs(_last['ec']))}** sur la trajectoire (valeur attendue aujourd'hui : {fmt_eur(_last['att'])})."
-                    )
-                    if _pas_suivi == "Jour":
-                        _lab = [d.strftime("%d/%m/%Y") for d in _dfo.index]
-                    elif _pas_suivi == "Semaine":
-                        _lab = [f"Sem. {d.isocalendar()[1]} (au {d.strftime('%d/%m')})" for d in _dfo.index]
-                    else:
-                        _lab = [f"{d.month:02d}/{d.year}" for d in _dfo.index]
-                    _tbl_obj = pd.DataFrame({
-                        "Période": _lab,
-                        "Valeur réelle": _dfo["v"].map(fmt_eur).to_numpy(),
-                        "Valeur attendue": _dfo["att"].map(fmt_eur).to_numpy(),
-                        "Écart (€)": _dfo["ec"].map(fmt_eur_arrow).to_numpy(),
-                        "Écart (%)": [fmt_perf_simple(x) for x in _dfo["ecp"]],
-                        "Statut": ["✅ En avance" if e >= 0 else "❌ En retard" for e in _dfo["ec"]],
-                    })
-                    _html_table(
-                        _tbl_obj,
-                        cell_style=lambda c, v: _style_perf_cell(v) if c in ("Écart (€)", "Écart (%)") else "",
-                        max_height=420,
-                    )
+                _auj = _today_paris()
+                _auj = pd.Timestamp(_auj.year, _auj.month, _auj.day)
+                _att_fn = lambda d: _v0 + (new_target - _v0) * float(np.clip((d - _debut_obj).days / _jours_obj, 0.0, 1.0))
+
+                # Échéancier COMPLET, de la date de saisie jusqu'au 31/12 : chaque ligne donne la valeur théorique
+                # attendue à la fin de la période. La valeur réelle, l'écart et le statut se remplissent au fil des
+                # jours (périodes terminées uniquement) tant que l'objectif n'est pas modifié.
+                _starts, _ends = [], []
+                if _pas_suivi == "Jour":
+                    _jr = pd.bdate_range(_debut_obj, _fin_obj)
+                    _starts, _ends = list(_jr), list(_jr)
+                elif _pas_suivi == "Semaine":
+                    _cur_d = _debut_obj
+                    while _cur_d <= _fin_obj:
+                        _e = min(_cur_d + pd.Timedelta(days=(6 - _cur_d.weekday())), _fin_obj)
+                        _starts.append(_cur_d); _ends.append(_e)
+                        _cur_d = _e + pd.Timedelta(days=1)
                 else:
-                    st.caption("Pas encore d'historique depuis la saisie de l'objectif pour suivre la trajectoire.")
+                    _cur_d = _debut_obj
+                    while _cur_d <= _fin_obj:
+                        _e = min(_cur_d + pd.offsets.MonthEnd(0), _fin_obj)
+                        _starts.append(_cur_d); _ends.append(_e)
+                        _cur_d = _e + pd.Timedelta(days=1)
+
+                _rows_obj = []
+                for _d0, _d1 in zip(_starts, _ends):
+                    _att = _att_fn(_d1)
+                    _termine = _d1 <= _auj and len(_serie) > 0 and _d1 >= _serie.index[0]
+                    if _d1 <= _auj and len(_serie):
+                        _vr = _serie[_serie.index <= _d1]
+                        _vr = float(_vr.iloc[-1]) if len(_vr) else np.nan
+                    else:
+                        _vr = np.nan
+                    _en_cours = (_d0 <= _auj <= _d1) and not (_d1 <= _auj)
+                    _rows_obj.append((_d0, _d1, _att, _vr, _en_cours))
+
+                # Message de synthèse : écart d'aujourd'hui par rapport à la trajectoire théorique.
+                if len(_serie):
+                    _v_now = float(_serie.iloc[-1])
+                    _att_now = _att_fn(_auj)
+                    _ec_now = _v_now - _att_now
+                    _ok_now = _ec_now >= 0
+                    st.markdown(
+                        f"{'✅' if _ok_now else '❌'} **{'En avance' if _ok_now else 'En retard'}** de "
+                        f"**{fmt_eur(abs(_ec_now))}** sur la trajectoire (valeur attendue aujourd'hui : {fmt_eur(_att_now)})."
+                    )
+
+                def _lab_obj(d0, d1):
+                    if _pas_suivi == "Jour":
+                        return d1.strftime("%d/%m/%Y")
+                    if _pas_suivi == "Semaine":
+                        return f"Sem. {d1.isocalendar()[1]} (au {d1.strftime('%d/%m')})"
+                    return f"{d1.month:02d}/{d1.year}"
+
+                _lab, _vr_t, _att_t, _ecm_t, _ecp_t, _stat_t, _styles_t = [], [], [], [], [], [], []
+                _focus = None
+                for _k, (_d0, _d1, _att, _vr, _enc) in enumerate(_rows_obj):
+                    _lab.append(_lab_obj(_d0, _d1))
+                    _att_t.append(fmt_eur(_att))
+                    if not np.isnan(_vr):
+                        _ec = _vr - _att
+                        _vr_t.append(fmt_eur(_vr)); _ecm_t.append(fmt_eur_arrow(_ec))
+                        _ecp_t.append(fmt_perf_simple(_ec / _att * 100) if _att > 0 else "-")
+                        _stat_t.append("✅ En avance" if _ec >= 0 else "❌ En retard")
+                    else:
+                        _vr_t.append("-"); _ecm_t.append("-"); _ecp_t.append("-")
+                        _stat_t.append("⏳ En cours" if _enc else "🕒 À venir")
+                    _styles_t.append("background:rgba(2,132,199,0.10);" if _enc else "")
+                    if _enc and _focus is None:
+                        _focus = _k
+                if _focus is None:
+                    # Aucune période en cours (ex. suivi par jour) : on se place sur la première ligne à venir.
+                    _focus = next((k for k, r in enumerate(_rows_obj) if np.isnan(r[3])), None)
+                _tbl_obj = pd.DataFrame({
+                    "Période": _lab, "Valeur réelle": _vr_t, "Valeur attendue": _att_t,
+                    "Écart (€)": _ecm_t, "Écart (%)": _ecp_t, "Statut": _stat_t,
+                })
+                _html_table(
+                    _tbl_obj,
+                    row_styles=_styles_t,
+                    cell_style=lambda c, v: _style_perf_cell(v) if c in ("Écart (€)", "Écart (%)") else "",
+                    max_height=420,
+                    focus_row=_focus,
+                )
 
 # ------------------------------------------
 # ONGLÊT 2 : POSITIONS & TRANSACTIONS
@@ -6369,14 +6414,23 @@ if _tab_open(tab_positions):
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
                 df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)']).copy()
-                # Flèches ▲ / ▼ remises sur chaque montant en € et chaque pourcentage.
-                for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)']:
+                # Même présentation que « Détail des Positions Actives » : chiffres colorés (▲ vert / ▼ rouge) sur
+                # les gains et la performance, dividendes en simple montant, une ligne grise sur deux (CSS du
+                # tableau) ; le dégradé de couleur ne porte plus que sur le NOM de l'action.
+                for col in ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)']:
                     df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur_arrow)
+                df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
 
-                # Dégradé continu (vert / rouge) selon le gain total de chaque ligne.
-                _row_styles_gain = get_smooth_gradient_styles(df_gain_rank['Gain Total Global (€)'].to_numpy(dtype=float))
-                _html_table(_dash_if_empty(df_gain_rank_fmt), row_styles=_row_styles_gain)
+                # Dégradé continu (vert / rouge) selon le gain total de chaque ligne, appliqué au seul nom.
+                _grad_gain = get_smooth_gradient_styles(df_gain_rank['Gain Total Global (€)'].to_numpy(dtype=float))
+                _style_nom_gain = {str(n): g for n, g in zip(df_gain_rank['Nom'], _grad_gain)}
+                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)']
+                _html_table(
+                    _dash_if_empty(df_gain_rank_fmt),
+                    cell_style=lambda c, v: (_style_perf_cell(v) if c in _cols_fleche_rank
+                                             else (_style_nom_gain.get(str(v), "") if c == 'Nom' else "")),
+                )
             else:
                 st.info("Aucune donnée disponible pour le classement des gains.")
 
@@ -8100,7 +8154,8 @@ if _tab_open(tab_dividends):
                             # mois survolé d'un coup, où qu'on clique sur la colonne.
                             labels_mois = [f"{mois_abrev_fr[m - 1]} {a}" for (a, m) in mois_ordre]
                             noms_uniques_12m = sorted(df_occ_12m["Nom"].unique().tolist())
-                            palette_12m = pcolors.qualitative.Alphabet if len(noms_uniques_12m) > 10 else pcolors.qualitative.Plotly
+                            # Palette pastel du dashboard (la même que les camemberts) au lieu des couleurs vives de Plotly.
+                            palette_12m = [_alloc_color(k) for k in range(max(len(noms_uniques_12m), 1))]
 
                             traces_div_12m = []
                             for i, nom in enumerate(noms_uniques_12m):
@@ -8110,7 +8165,7 @@ if _tab_open(tab_dividends):
                                     name=nom,
                                     x=labels_mois,
                                     y=y_vals,
-                                    marker=dict(color=couleur, line=dict(width=0)),
+                                    marker=dict(color=couleur, line=dict(color="rgba(255,255,255,0.9)", width=1.5)),
                                     hoverinfo="skip",  # le détail est porté par la trace invisible ci-dessous
                                     # offsetgroup/alignmentgroup partagé avec la trace invisible ci-dessous :
                                     # sans ça, Plotly ne garantit pas que les deux occupent exactement la
@@ -8167,21 +8222,31 @@ if _tab_open(tab_dividends):
                                 alignmentgroup="mois_div_12m",
                             ))
 
-                            _grid_color_div12m = "#f1f5f9"
+                            # Total du mois écrit au-dessus de chaque barre (arrondi pour rester lisible sur téléphone).
+                            _tot_mois = [float(sum(agg_div_12m.get((mc, nom), 0.0) for nom in noms_uniques_12m)) for mc in mois_ordre]
+                            _fmt_tot = lambda t: ("" if t <= 0 else (f"{t:,.0f} €".replace(",", " ") if t >= 10 else f"{t:.1f} €".replace(".", ",")))
+                            traces_div_12m.append(go.Scatter(
+                                x=labels_mois, y=_tot_mois, mode="text",
+                                text=[_fmt_tot(t) for t in _tot_mois], textposition="top center",
+                                textfont=dict(size=11, color="#0f766e"),
+                                hoverinfo="skip", showlegend=False, cliponaxis=False,
+                            ))
+                            _grid_color_div12m = "rgba(148,163,184,0.18)"
                             fig_div_12m = go.Figure(data=traces_div_12m)
                             fig_div_12m.update_layout(
                                 barmode="stack",
                                 height=360,
-                                margin=dict(l=40, r=20, t=20, b=40),
-                                bargap=0.25,
-                                yaxis=dict(title="Montant estimé (€)", showgrid=True, gridcolor=_grid_color_div12m),
+                                margin=dict(l=36, r=10, t=20, b=36),
+                                bargap=0.35,
+                                yaxis=dict(title=None, showgrid=True, gridcolor=_grid_color_div12m, zeroline=False,
+                                           ticksuffix=" €", range=[0, max(max(_tot_mois), 1.0) * 1.2]),
                                 yaxis2=dict(overlaying="y", visible=False, range=[0, 1], fixedrange=True),
-                                xaxis=dict(title=None),
+                                xaxis=dict(title=None, showgrid=False, tickangle=-45 if len(labels_mois) > 8 else 0),
                                 hovermode="x",
                                 # Légende conservée (elle reste utile pour identifier les couleurs), même
                                 # avec beaucoup d'entreprises.
                                 showlegend=True,
-                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(size=11)),
                             )
                             apply_chart_theme(fig_div_12m)
                             _plotly_chart(fig_div_12m, use_container_width=True, key="chart_div_12_mois")
