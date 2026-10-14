@@ -1876,6 +1876,82 @@ def _row_styles_of(styles_df):
         return None
     return [str(x) for x in styles_df.iloc[:, 0].tolist()]
 
+
+_TBL_IFRAME_CSS = """
+html, body { margin: 0; height: 100%; background: transparent; font-family: Manrope, Inter, system-ui, sans-serif; }
+.pea-tbl-wrap { height: 100%; overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px; background: #ffffff; box-sizing: border-box; }
+.pea-tbl { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 0.8rem; color: #0f172a; }
+.pea-tbl th { position: sticky; top: 0; z-index: 2; background: #f8fafc; color: #475569; text-transform: uppercase;
+              font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; padding: 8px 8px; text-align: center;
+              white-space: nowrap; border-bottom: 1px solid #e2e8f0; cursor: pointer; user-select: none; }
+.pea-tbl th.f { top: 33px; z-index: 2; padding: 3px 4px; cursor: default; text-transform: none; }
+.pea-tbl th.f input { width: 100%; min-width: 56px; box-sizing: border-box; font-size: 0.72rem; text-align: center; padding: 3px 4px;
+                      border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #0f172a; }
+.pea-tbl th.s-asc::after { content: " ▲"; font-size: 0.6rem; } .pea-tbl th.s-desc::after { content: " ▼"; font-size: 0.6rem; }
+.pea-tbl td, .pea-tbl th.ix { text-align: center; padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #f1f5f9; }
+.pea-tbl th.ix { position: static; background: transparent; color: inherit; text-transform: none; font-size: inherit; font-weight: 600; cursor: default; }
+.pea-tbl tbody tr:nth-child(even) { background: rgba(148,163,184,0.10); }
+.pea-tbl .ca { display: inline-flex; align-items: baseline; gap: 0.12em; }
+.pea-tbl .ar { display: inline-block; width: 0.85em; text-align: center; }
+.pea-tbl .rv { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }
+.pea-tbl .un { display: inline-block; width: 0.9em; text-align: left; padding-left: 0.15em; }
+"""
+
+_TBL_IFRAME_JS = r"""
+(function () {
+  var t = document.getElementById('t'); if (!t) return;
+  var tb = t.tBodies[0], hr = t.tHead.rows[0], fr = t.tHead.rows[1];
+  var off = hr.cells.length - fr.cells.length;
+  function key(s) {
+    s = (s || '').trim();
+    var m = s.match(/^(\d{2})[-\/](\d{2})[-\/](\d{4})$/); if (m) return +(m[3] + m[2] + m[1]);
+    m = s.match(/^(\d{2})\/(\d{4})$/); if (m) return +(m[2] + m[1]);
+    var c = s.replace(/[\u00a0\u202f\s€%▲▼▬=]/g, '').replace('\u2212', '-').replace(',', '.');
+    if (/^[+\-]?\d+(\.\d+)?$/.test(c)) return parseFloat(c);
+    return s === '-' || s === '' ? null : s.toLowerCase();
+  }
+  var dir = {}, last = -1;
+  Array.prototype.forEach.call(hr.cells, function (th, i) {
+    if (th.className === 'ix') return;
+    th.addEventListener('click', function () {
+      var d = (last === i && dir[i] === 1) ? -1 : 1; dir[i] = d; last = i;
+      Array.prototype.forEach.call(hr.cells, function (x) { x.classList.remove('s-asc', 's-desc'); });
+      th.classList.add(d === 1 ? 's-asc' : 's-desc');
+      var rows = Array.prototype.slice.call(tb.rows);
+      var keys = rows.map(function (r) { return key(r.cells[i].textContent); });
+      var idx = rows.map(function (_, k) { return k; });
+      idx.sort(function (a, b) {
+        var x = keys[a], y = keys[b];
+        if (x === null && y === null) return a - b; if (x === null) return 1; if (y === null) return -1;
+        if (typeof x === 'number' && typeof y === 'number') return (x - y) * d || (a - b);
+        return String(x).localeCompare(String(y), 'fr') * d || (a - b);
+      });
+      var frag = document.createDocumentFragment();
+      idx.forEach(function (k) { frag.appendChild(rows[k]); });
+      tb.appendChild(frag);
+    });
+  });
+  function apply() {
+    var fs = Array.prototype.map.call(fr.querySelectorAll('input'), function (e) { return e.value.trim().toLowerCase(); });
+    Array.prototype.forEach.call(tb.rows, function (r) {
+      var ok = true;
+      for (var j = 0; j < fs.length && ok; j++) {
+        var f = fs[j]; if (!f) continue;
+        var txt = r.cells[j + off].textContent.toLowerCase();
+        var m = f.match(/^(>=|<=|>|<)\s*(-?[\d.,]+)$/);
+        if (m) {
+          var v = key(r.cells[j + off].textContent), n = parseFloat(m[2].replace(',', '.'));
+          if (typeof v !== 'number') { ok = false; break; }
+          ok = m[1] === '>' ? v > n : m[1] === '<' ? v < n : m[1] === '>=' ? v >= n : v <= n;
+        } else { ok = txt.indexOf(f) !== -1; }
+      }
+      r.style.display = ok ? '' : 'none';
+    });
+  }
+  fr.addEventListener('input', apply);
+})();
+"""
+
 _CELL_RE = re.compile(r"^(?:([▲▼▬=])\s)?(.*\d.*?)\s?(€|%)?$")
 
 def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None):
@@ -1922,28 +1998,20 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
                 inner = _esc(str(v))
             tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
         rows.append(f'<tr style="{rs}">' + "".join(tds) + "</tr>" if rs else "<tr>" + "".join(tds) + "</tr>")
-    if max_height is None and len(df) > 25:
-        max_height = 620
-    wrap_style = f' style="max-height:{int(max_height)}px;"' if max_height else ""
-
-    def _tbl(rs):
-        return (f'<div class="pea-tbl-wrap"{wrap_style}><table class="pea-tbl"><thead><tr>{head}</tr></thead>'
-                f'<tbody>{"".join(rs)}</tbody></table></div>')
-
-    # Gros tableaux : les 300 premières lignes (les plus récentes) sont affichées tout de suite, le reste est
-    # replié dans un bloc « Afficher les lignes plus anciennes » (rien n'est supprimé, mais le navigateur ne
-    # calcule pas la mise en page des milliers de lignes cachées).
-    LIM = 300
-    html = _tbl(rows[:LIM])
-    if len(rows) > LIM:
-        html += (f'<details style="margin:2px 0 8px 0;"><summary style="cursor:pointer; font-size:0.8rem; color:#475569; '
-                 f'padding:4px 2px;">Afficher les {len(rows) - LIM} lignes plus anciennes</summary>'
-                 + _tbl(rows[LIM:]) + "</details>")
-    # st.html évite le parseur Markdown de Streamlit, très lent sur de gros blocs HTML.
-    if hasattr(st, "html"):
-        st.html(html)
-    else:
-        st.markdown(html, unsafe_allow_html=True)
+    cap = int(max_height) if max_height else 640
+    n_rows = len(rows)
+    height = int(min(cap, 34 + 36 + 30 * n_rows + 12))
+    filt = ("<th class=\"f\"></th>" if show_index else "") + "".join(
+        '<th class="f"><input type="text" placeholder="Filtrer" aria-label="Filtrer"></th>' for _ in cols)
+    doc = (f"<style>{_TBL_IFRAME_CSS}</style>"
+           f'<div class="pea-tbl-wrap"><table class="pea-tbl" id="t"><thead><tr>{head}</tr><tr>{filt}</tr></thead>'
+           f'<tbody>{"".join(rows)}</tbody></table></div><script>{_TBL_IFRAME_JS}</script>')
+    try:
+        import streamlit.components.v1 as _components
+        _components.html(doc, height=height, scrolling=False)
+    except Exception:
+        st.markdown(f'<div class="pea-tbl-wrap"><table class="pea-tbl"><thead><tr>{head}</tr></thead>'
+                    f'<tbody>{"".join(rows)}</tbody></table></div>', unsafe_allow_html=True)
 
 def _lerp_hex(c1, c2, t):
     a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
@@ -5481,13 +5549,13 @@ def _tab_open(_tab):
 # de conservation de l'état). Les clés ci-dessous sont extraites automatiquement du code de
 # chaque onglet (widgets ayant un key= littéral).
 _TAB_STATE_KEYS = {
-    "tab_overview": ("k_objectif_cible", "apport_prevision_input", ),
+    "tab_overview": ("k_objectif_cible", "apport_prevision_input", "k_suivi_objectif_pas", ),
     "tab_apports": (),
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
     "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
     "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
-    "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_invest_mensuel", "k_rp_annees", "k_rp_rend", "k_rp_impot", "k_rp_retrait", "k_rp_infl", ),
+    "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_impot", "k_rp_retrait", "k_rp_infl", "k_sim_graph_mode", ),
 }
 _tab_objs_by_name = {
     "tab_overview": tab_overview, "tab_positions": tab_positions, "tab_apports": tab_apports, "tab_classements": tab_classements,
@@ -5533,11 +5601,22 @@ if _tab_open(tab_overview):
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>📈 Performances</p>", unsafe_allow_html=True)
                 with st.container(key="row_perf_wrap"):
-                    r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
-                    r2_c1.metric("Perf. Globale", fmt_perf_text_only(perf_globale), delta=(f"{total_gains_cumules:+,.2f} €".replace(",", " ").replace(".", ",")))
-                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=(f"{gain_total_yr:+,.2f} €".replace(",", " ").replace(".", ",")))
-                    r2_c3.metric("Perf. Mois", fmt_perf_text_only(perf_mois_en_cours), delta=(f"{gain_total_mo:+,.2f} €".replace(",", " ").replace(".", ",")))
-                    r2_c4.metric("Performance du jour", fmt_perf_text_only(perf_jour), delta=(f"{gain_total_j:+,.2f} €".replace(",", " ").replace(".", ",")))
+                    _delta = lambda g: f"{g:+,.2f} €".replace(",", " ").replace(".", ",")
+                    # Performance annuelle moyenne : performance globale ramenée à un taux annuel composé
+                    # (indisponible tant que l'historique fait moins de 3 mois).
+                    _ans_pea = max((_now_paris() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
+                    if _ans_pea >= 0.25 and (1 + perf_globale / 100) > 0:
+                        _perf_an_moy = ((1 + perf_globale / 100) ** (1 / _ans_pea) - 1) * 100
+                        _perf_an_txt, _perf_an_sub = fmt_perf_text_only(_perf_an_moy), f"sur {_ans_pea:.1f} an".replace(".", ",") + ("s" if _ans_pea >= 2 else "")
+                    else:
+                        _perf_an_txt, _perf_an_sub = "N/A", "historique < 3 mois"
+                    r2_c1, r2_c2, r2_c3 = st.columns(3)
+                    r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules))
+                    r2_c2.metric("Performance Annuelle Moyenne", _perf_an_txt, delta=_perf_an_sub, delta_color="off")
+                    r2_c3.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr))
+                    r2b_c1, r2b_c2, r2b_c3 = st.columns(3)
+                    r2b_c1.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo))
+                    r2b_c2.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>🏷️ Plus-values, Dividendes & Frais</p>", unsafe_allow_html=True)
                 with st.container(key="row_gains_wrap"):
@@ -5552,6 +5631,22 @@ if _tab_open(tab_overview):
                     r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")))
                     r3_c3.metric("Dividendes Reçus", fmt_eur(net_divs_total))
                     r3_c4.metric("Frais Totaux", fmt_eur(tot_fees))
+
+                    # Rendement moyen des dividendes sur le capital investi : dividendes nets perçus, ramenés à
+                    # une année (si le PEA a plus de 3 mois), rapportés au capital actuellement investi.
+                    _ans_div = max((_now_paris() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
+                    if tot_invested > 0:
+                        _rend_cumule = net_divs_total / tot_invested * 100
+                        if _ans_div >= 0.25:
+                            _rend_moy_txt = f"{_rend_cumule / _ans_div:.2f} %".replace(".", ",")
+                            _rend_moy_sub = f"{_rend_cumule:.2f} % cumulé".replace(".", ",")
+                        else:
+                            _rend_moy_txt, _rend_moy_sub = f"{_rend_cumule:.2f} %".replace(".", ","), "cumulé (historique < 3 mois)"
+                    else:
+                        _rend_moy_txt, _rend_moy_sub = "N/A", "aucun capital investi"
+                    r4_c1, _r4_c2, _r4_c3, _r4_c4 = st.columns(4)
+                    r4_c1.metric("Rendement Moyen des Dividendes", _rend_moy_txt, delta=_rend_moy_sub, delta_color="off",
+                                 help="Dividendes nets perçus, ramenés à une année, rapportés au capital actuellement investi dans les actions.")
 
         # --- Alerte watchlist : valeurs suivies proches de leur zone d'achat (voir l'onglet
         # "👁️ Watchlist"). Déplacée au-dessus de "Vue d'ensemble du Portefeuille", au même endroit
@@ -5676,6 +5771,63 @@ if _tab_open(tab_overview):
             """, 
                 unsafe_allow_html=True
             )
+
+            # --- Suivi de la trajectoire vers l'objectif : valeur réelle du portefeuille vs valeur attendue sur une
+            # trajectoire linéaire (valeur au 31/12 de l'an dernier -> cible au 31/12), jour / semaine / mois. ---
+            if new_target > 0 and not df_transactions.empty:
+                st.markdown("**📅 Suivi de la trajectoire vers l'objectif**")
+                _pas_suivi = st.radio("Pas du suivi", ["Jour", "Semaine", "Mois"], index=2, horizontal=True,
+                                      key="k_suivi_objectif_pas", label_visibility="collapsed")
+                _h_obj = get_portfolio_history(df_transactions)
+                _serie = _h_obj["Valeur du Portefeuille (€)"].dropna() if "Valeur du Portefeuille (€)" in _h_obj.columns else pd.Series(dtype=float)
+                _an = _today_paris().year
+                _fin_prec = pd.Timestamp(_an - 1, 12, 31)
+                _jours_an = (pd.Timestamp(_an, 12, 31) - _fin_prec).days
+                _avant = _serie[_serie.index <= _fin_prec]
+                _v0 = float(_avant.iloc[-1]) if len(_avant) else 0.0
+                _s_an = _serie[_serie.index > _fin_prec]
+                if len(_s_an):
+                    _dfo = _s_an.to_frame("v")
+                    if _pas_suivi == "Semaine":
+                        _dfo["k"] = _dfo.index.to_period("W")
+                        _dfo = _dfo.groupby("k").tail(1)
+                    elif _pas_suivi == "Mois":
+                        _dfo["k"] = _dfo.index.to_period("M")
+                        _dfo = _dfo.groupby("k").tail(1)
+                    _att = _v0 + (new_target - _v0) * ((_dfo.index - _fin_prec).days.to_numpy() / _jours_an)
+                    _dfo["att"] = _att
+                    _dfo["ec"] = _dfo["v"] - _dfo["att"]
+                    _dfo["ecp"] = np.where(_dfo["att"] > 0, _dfo["ec"] / _dfo["att"] * 100, np.nan)
+                    _dfo = _dfo.sort_index(ascending=False)
+                    _last = _dfo.iloc[0]
+                    _ok_last = _last["ec"] >= 0
+                    st.markdown(
+                        f"{'✅' if _ok_last else '❌'} **{'En avance' if _ok_last else 'En retard'}** de "
+                        f"**{fmt_eur(abs(_last['ec']))}** sur la trajectoire (valeur attendue aujourd'hui : {fmt_eur(_last['att'])})."
+                    )
+                    if _pas_suivi == "Jour":
+                        _lab = [d.strftime("%d/%m/%Y") for d in _dfo.index]
+                    elif _pas_suivi == "Semaine":
+                        _lab = [f"Sem. {d.isocalendar()[1]} (au {d.strftime('%d/%m')})" for d in _dfo.index]
+                    else:
+                        _lab = [f"{d.month:02d}/{d.year}" for d in _dfo.index]
+                    _tbl_obj = pd.DataFrame({
+                        "Période": _lab,
+                        "Valeur réelle": _dfo["v"].map(fmt_eur).to_numpy(),
+                        "Valeur attendue": _dfo["att"].map(fmt_eur).to_numpy(),
+                        "Écart (€)": _dfo["ec"].map(fmt_eur_arrow).to_numpy(),
+                        "Écart (%)": [fmt_perf_simple(x) for x in _dfo["ecp"]],
+                        "Statut": ["✅ En avance" if e >= 0 else "❌ En retard" for e in _dfo["ec"]],
+                    })
+                    _html_table(
+                        _tbl_obj,
+                        cell_style=lambda c, v: _style_perf_cell(v) if c in ("Écart (€)", "Écart (%)") else "",
+                        max_height=420,
+                    )
+                    st.caption("Trajectoire linéaire entre la valeur du portefeuille au 31/12 de l'an dernier et la valeur visée au 31/12. "
+                               "Les apports réels sont inclus dans la valeur du portefeuille.")
+                else:
+                    st.caption("Pas encore d'historique cette année pour suivre la trajectoire.")
 
 # ------------------------------------------
 # ONGLÊT 2 : POSITIONS & TRANSACTIONS
@@ -7399,8 +7551,11 @@ if _tab_open(tab_perf):
                                 textposition=text_positions.get(name, "middle right"),
                                 cliponaxis=False,
                                 line=dict(color=color, width=width, dash='solid'),
-                                customdata=[f"{_arrow_sym(v)} {v:+,.2f}".replace(",", " ").replace(".", ",") for v in extended_y],
-                                hovertemplate=f"<b>{name}</b><br>Performance : %{{customdata}} %<extra></extra>"
+                                customdata=[
+                                    (f"<span style='color:{'#4ade80' if v >= 0 else '#f87171'};'><b>{name}</b><br>Performance : "
+                                     f"{_arrow_sym(v)} {v:+,.2f} %</span>").replace(",", " ").replace(".", ",")
+                                    if not pd.isna(v) else "" for v in extended_y],
+                                hovertemplate="%{customdata}<extra></extra>"
                             ))
 
                         fig.add_hline(
@@ -8776,34 +8931,57 @@ def _stacked_growth_chart(n, base, verses, interets, base_name, height=260):
     return fig
 
 
-def _render_sim_projection():
-    """Projection de la valeur du portefeuille : croissance d'abord, apports mensuels versés en fin d'année
-    (hypothèse prudente), apports bornés par le plafond de versements du PEA (150 000 €)."""
-    st.markdown("### 📈 Projection de la Valeur du Portefeuille")
-    with st.expander("🔮 Simulation de croissance à long terme", expanded=True):
+@fragment_wrapper
+def _render_sim_epargne(valeur_depart):
+    """Simulateur unique « épargne & revenu passif » (regroupe l'ancienne projection de valeur et l'ancien
+    simulateur de revenu passif, qui partageaient la même mécanique) : croissance d'abord, versements en fin
+    d'année, versements bornés par le plafond du PEA (150 000 €). Résultats : valeur brute, valeur nette (impôt sur
+    l'ensemble des intérêts, en pouvoir d'achat d'aujourd'hui) et revenu passif mensuel."""
+    st.markdown("### 📈 Simulateur d'épargne & de revenu passif")
+    with st.expander("🔮 Valeur du portefeuille, valeur nette et revenu passif", expanded=True):
         annees_ecoulees, perf_annualisee = _anciennete_et_perf_annualisee()
         moy_mensuel = _apport_mensuel_moyen_hist()
-        _default_perf_proj_hist = round(perf_annualisee * 100, 2)
+        _default_perf_hist = round(perf_annualisee * 100, 2) if perf_annualisee > 0 else 7.0
 
-        # ---- Valeurs modifiables (en haut)
+        # ---- Valeurs modifiables (en haut) : un seul jeu de paramètres pour tous les résultats
         with st.container(border=True):
             with st.container(key="compact_cols_proj"):
-                col_h, col_a = st.columns(2)
-                horizon_annees = col_h.number_input(
-                    "Nombre d'années", min_value=1, max_value=50, step=1, format="%d",
-                    value=int(app_config.get("horizon_projection_annees", 10)), key="k_horizon_projection",
+                c1, c2 = st.columns(2)
+                pf0 = c1.number_input(
+                    "Portefeuille actuel (€)", min_value=0.0, step=1000.0, format="%.0f",
+                    value=float(max(round(valeur_depart), 0)), key="k_rp_depart",
                 )
-                apport_mensuel = col_a.number_input(
+                apport_mensuel = c2.number_input(
                     "Apport prévu par mois (€)", min_value=0, step=10, format="%d",
                     value=_apport_mensuel_defaut(), key="k_apport_mensuel_projection",
                     help="Ajouté chaque mois (cumulé et versé en fin d'année dans la simulation), en plus de la croissance du portefeuille.",
                 )
-                col_p, col_i = st.columns(2)
-                perf_annuelle_proj_pct = col_p.number_input(
-                    "Performance annuelle retenue (%)", step=0.01, format="%.2f",
-                    value=float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)),
+                c3, c4 = st.columns(2)
+                horizon_annees = c3.number_input(
+                    "Nombre d'années", min_value=1, max_value=50, step=1, format="%d",
+                    value=int(app_config.get("horizon_projection_annees", 10)), key="k_horizon_projection",
+                )
+                perf_annuelle_proj_pct = c4.number_input(
+                    "Performance annuelle retenue (%)", min_value=-50.0, max_value=100.0, step=0.5, format="%.2f",
+                    value=float(app_config.get("perf_annuelle_projection", _default_perf_hist)),
                     key="k_perf_annuelle_projection",
                     help="Utilisée pour faire croître le portefeuille d'une année sur l'autre.",
+                )
+                c5, c6 = st.columns(2)
+                impot = c5.number_input(
+                    "Imposition des gains (%)", min_value=0.0, max_value=100.0, step=0.1,
+                    value=float(app_config.get("taux_prelevements_sociaux", 18.6)), key="k_rp_impot",
+                    help="Par défaut : le taux de prélèvements sociaux réglé dans l'application. Appliqué à l'ensemble des "
+                         "intérêts (gains déjà acquis inclus) pour la valeur nette.",
+                )
+                infl = c6.number_input(
+                    "Inflation (%)", min_value=0.0, max_value=20.0, step=0.1, value=2.0, key="k_rp_infl",
+                    help="La valeur nette et le revenu passif sont corrigés de l'inflation (pouvoir d'achat d'aujourd'hui).",
+                )
+                c7, _c8 = st.columns(2)
+                taux_ret = c7.number_input(
+                    "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25, value=3.0, key="k_rp_retrait",
+                    help="Part du capital net retirée chaque année pour le revenu passif.",
                 )
             _fiable = "" if annees_ecoulees >= 1 else " ⚠️ historique court, peu fiable"
             st.caption(
@@ -8822,56 +9000,73 @@ def _render_sim_projection():
             _ok2, _err2 = save_config(app_config)
             if not _ok2:
                 st.warning(_err2)
-        if round(perf_annuelle_proj_pct, 2) != round(float(app_config.get("perf_annuelle_projection", _default_perf_proj_hist)), 2):
+        if round(perf_annuelle_proj_pct, 2) != round(float(app_config.get("perf_annuelle_projection", _default_perf_hist)), 2):
             app_config["perf_annuelle_projection"] = float(perf_annuelle_proj_pct)
             _ok3, _err3 = save_config(app_config)
             if not _ok3:
                 st.warning(_err3)
 
-        apport_annuel_proj = apport_mensuel * 12.0
-        perf_annuelle_retenue = perf_annuelle_proj_pct / 100.0
-
-        # ---- Calcul année par année : croissance, puis apports de l'année ; le plafond de versements (150 000 €)
-        # porte sur le cumul des APPORTS nets : une fois atteint, seule la performance joue.
-        n_ans = int(horizon_annees)
-        valeurs_annuelles = [tot_value_globale]
-        verses = [apports_totaux]                       # versements cumulés : apports déjà réalisés inclus
-        interets = [tot_value_globale - apports_totaux]  # intérêts cumulés : gains déjà acquis inclus
-        v_courant, ap_courant = tot_value_globale, apports_totaux
-        for _an in range(1, n_ans + 1):
-            place_restante = max(PLAFOND_PEA_VERSEMENTS - ap_courant, 0.0)
-            apport_reel_annee = min(apport_annuel_proj, place_restante)
-            v_courant = v_courant * (1 + perf_annuelle_retenue) + apport_reel_annee
-            ap_courant += apport_reel_annee
-            valeurs_annuelles.append(v_courant)
-            verses.append(ap_courant)
-            interets.append(v_courant - ap_courant)
-
-        valeur_projetee_finale = valeurs_annuelles[-1]
-        apports_cumules_finaux = min(ap_courant, PLAFOND_PEA_VERSEMENTS)
-        interets_estimes = interets[-1]
+        # ---- Calcul année par année (croissance, puis versements de l'année, plafonnés à 150 000 € d'apports nets)
+        n = int(horizon_annees)
+        inv = apport_mensuel * 12.0
+        r = perf_annuelle_proj_pct / 100.0
+        f = 1.0 + infl / 100.0
+        verses0 = min(max(float(apports_totaux), 0.0), pf0)   # point de départ : versements actuels du portefeuille
+        vals, verses = [pf0], [verses0]
+        ap_cur = float(apports_totaux)
+        for _k in range(1, n + 1):
+            place_restante = max(PLAFOND_PEA_VERSEMENTS - ap_cur, 0.0)
+            ap_annee = min(inv, place_restante)
+            vals.append(vals[-1] * (1 + r) + ap_annee)
+            ap_cur += ap_annee
+            verses.append(verses[-1] + ap_annee)
+        interets = [v - vs for v, vs in zip(vals, verses)]
+        # Valeur nette année par année : impôt sur l'ensemble des intérêts, puis pouvoir d'achat d'aujourd'hui.
+        nettes_reelles = []
+        for k, (v, vs) in enumerate(zip(vals, verses)):
+            net_k = v - max(v - vs, 0.0) * impot / 100.0
+            nettes_reelles.append(net_k / f ** k)
+        valeur_brute = vals[-1]
+        impot_du = max(valeur_brute - verses[-1], 0.0) * impot / 100.0
+        valeur_nette_reelle = nettes_reelles[-1]
+        revenu_mensuel = valeur_nette_reelle * taux_ret / 100.0 / 12.0
+        apports_cumules_finaux = min(ap_cur, PLAFOND_PEA_VERSEMENTS)
 
         # Échéance d'atteinte du plafond au rythme de l'apport prévu (versement continu et régulier).
         montant_restant_plafond = PLAFOND_PEA_VERSEMENTS - apports_totaux
         annees_avant_plafond = None
         if montant_restant_plafond <= 0:
             date_plafond_str = "Déjà atteint"
-        elif apport_annuel_proj > 0:
-            annees_avant_plafond = montant_restant_plafond / apport_annuel_proj
+        elif inv > 0:
+            annees_avant_plafond = montant_restant_plafond / inv
             date_plafond_str = (_now_paris() + pd.Timedelta(days=annees_avant_plafond * 365.25)).strftime("%d/%m/%Y")
         else:
             date_plafond_str = "Jamais (aucun apport prévu)"
 
-        # ---- Résultats (en dessous) : même gabarit que le simulateur de revenu passif
-        _sim_headline(f"Valeur projetée dans {n_ans} {_plural(n_ans)}", fmt_eur(valeur_projetee_finale), color="#0284c7")
-        _sim_stats(
-            _sim_stat("Apports actuels", fmt_eur(apports_totaux), "#475569"),
-            _sim_stat("Apports prévus", fmt_eur(ap_courant - apports_totaux), "#0284c7"),
-            _sim_stat("Intérêts estimés", fmt_eur(interets_estimes), "#d97706"),
-            small=True,
+        # ---- Résultats (en dessous)
+        _sim_headline_duo([
+            (f"Valeur brute dans {n} {_plural(n)}", fmt_eur(valeur_brute), "", False, "#0284c7"),
+            ("Valeur nette (€ d'aujourd'hui)", fmt_eur(valeur_nette_reelle), "", False),
+        ])
+        _sim_headline_duo([
+            ("Revenu passif / mois", fmt_eur(revenu_mensuel), "", True),
+            ("Impôt estimé sur les gains", fmt_eur(impot_du), "", False, "#dc2626"),
+        ])
+        _sim_headline_duo([
+            ("Versements cumulés", fmt_eur(verses[-1]), "", False, "#0284c7"),
+            ("Intérêts bruts", fmt_eur(valeur_brute - verses[-1]), "", False, "#d97706"),
+            ("Dont versements prévus", fmt_eur(verses[-1] - verses0), "", False, "#475569"),
+        ])
+        mode_graph = st.radio(
+            "Affichage du graphique", ["Valeur brute", "Valeur nette (€ d'aujourd'hui)"], horizontal=True,
+            key="k_sim_graph_mode", label_visibility="collapsed",
         )
-        fig_proj = _stacked_growth_chart(n_ans, None, verses, interets, "")
-        _plotly_chart(fig_proj, use_container_width=True, theme=None, key="projection_valeur_chart")
+        if mode_graph == "Valeur brute":
+            interets_chart = interets
+        else:
+            interets_chart = [nr - vs for nr, vs in zip(nettes_reelles, verses)]
+        fig_sim = _stacked_growth_chart(n, None, verses, interets_chart, "")
+        _plotly_chart(fig_sim, use_container_width=True, theme=None, key="chart_sim_epargne")
 
         # Plafond de versements : la barre reflète les apports cumulés PROJETÉS en fin d'horizon.
         pct_plafond = min(max((apports_cumules_finaux / PLAFOND_PEA_VERSEMENTS) * 100, 0.0), 100.0)
@@ -8887,110 +9082,9 @@ def _render_sim_projection():
             f'📅 Atteinte estimée du plafond : <b style="color:#0f172a;">{date_plafond_str}</b></div></div>',
             unsafe_allow_html=True,
         )
-        if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n_ans and apport_annuel_proj > 0:
+        if annees_avant_plafond is not None and 0 <= annees_avant_plafond <= n and inv > 0:
             st.caption(f"⚠️ Au rythme prévu, le plafond de versements du PEA ({fmt_eur(PLAFOND_PEA_VERSEMENTS)}) serait atteint avant la fin de l'horizon : les apports sont plafonnés à partir de cette échéance.")
         st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
-
-
-@fragment_wrapper
-def _render_sim_revenu_passif(valeur_depart, apport_mensuel_defaut, rendement_defaut, taux_impot_defaut):
-    """Simulateur de revenu passif : projection année par année du portefeuille, nette d'impôt sur les gains ET
-    corrigée de l'inflation (tous les montants « nets » sont en pouvoir d'achat d'aujourd'hui), avec revenu passif
-    mensuel (taux de retrait). Croissance d'abord, versements en fin d'année."""
-    st.markdown("### 🧭 Simulateur de revenu passif")
-    with st.expander("🌱 Valeur nette et revenu passif", expanded=True):
-        with st.container(border=True):
-            with st.container(key="compact_cols_rp"):
-                c1, c2 = st.columns(2)
-                pf0 = c1.number_input(
-                    "Portefeuille actuel (€)", min_value=0.0, step=1000.0, format="%.0f",
-                    value=float(max(round(valeur_depart), 0)), key="k_rp_depart",
-                )
-                inv_mois = c2.number_input(
-                    "Investissements mensuels (€)", min_value=0.0, step=10.0, format="%.0f",
-                    value=float(max(apport_mensuel_defaut, 0)), key="k_rp_invest_mensuel",
-                )
-                c3, c4 = st.columns(2)
-                ans = c3.number_input(
-                    "Années d'épargne", min_value=1, max_value=50, step=1, format="%d", value=15, key="k_rp_annees",
-                )
-                rend = c4.number_input(
-                    "Rendement (%)", min_value=-50.0, max_value=100.0, step=0.5,
-                    value=float(rendement_defaut), key="k_rp_rend",
-                )
-                c5, c6 = st.columns(2)
-                impot = c5.number_input(
-                    "Imposition des gains (%)", min_value=0.0, max_value=100.0, step=0.1,
-                    value=float(taux_impot_defaut), key="k_rp_impot",
-                    help="Par défaut : le taux de prélèvements sociaux réglé dans l'application.",
-                )
-                infl = c6.number_input(
-                    "Inflation (%)", min_value=0.0, max_value=20.0, step=0.1, value=2.0, key="k_rp_infl",
-                    help="Tous les montants nets affichés sont corrigés de l'inflation (pouvoir d'achat d'aujourd'hui).",
-                )
-                c7, _c8 = st.columns(2)
-                taux_ret = c7.number_input(
-                    "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25, value=3.0, key="k_rp_retrait",
-                    help="Part du capital net retirée chaque année pour le revenu passif.",
-                )
-
-        # ---- Calcul année par année (croissance, puis versement en fin d'année), en € constants
-        n = int(ans)
-        inv = inv_mois * 12.0
-        r = rend / 100.0
-        f = 1.0 + infl / 100.0
-        vals = [pf0]
-        for k in range(1, n + 1):
-            vals.append(vals[-1] * (1 + r) + inv)
-        # versements et valeurs exprimés en pouvoir d'achat d'aujourd'hui (un euro versé l'année k vaut 1/f^k)
-        verses_reels = [0.0]
-        for k in range(1, n + 1):
-            verses_reels.append(verses_reels[-1] + inv / f ** k)
-        vals_reelles = [v / f ** k for k, v in enumerate(vals)]
-        interets_reels = [vr - pf0 - vs for vr, vs in zip(vals_reelles, verses_reels)]
-
-        valeur_future = vals[-1]
-        plus_value = valeur_future - pf0 - inv * n                # gain nominal : base de l'impôt
-        impot_du = max(plus_value, 0.0) * impot / 100.0
-        valeur_nette = valeur_future - impot_du
-        defl = f ** n
-        valeur_nette_reelle = valeur_nette / defl
-        revenu_mensuel = valeur_nette_reelle * taux_ret / 100.0 / 12.0
-        # Versements AFFICHÉS = ce que l'utilisateur verse réellement (montant mensuel × 12 × années), sans correction
-        # d'inflation : plus de décimales parasites. Les intérêts nets sont le complément, en pouvoir d'achat actuel.
-        verses_nominaux = [inv * k for k in range(n + 1)]
-        # Valeur nette année par année (impôt sur les gains prélevé à chaque horizon, en € constants) : la courbe
-        # finit exactement sur la « valeur nette » affichée en haut.
-        nettes_reelles = []
-        for k, v in enumerate(vals):
-            gain_k = v - pf0 - inv * k
-            net_k = v - max(gain_k, 0.0) * impot / 100.0
-            nettes_reelles.append(net_k / f ** k)
-        interets_chart = [nr - pf0 - vn for nr, vn in zip(nettes_reelles, verses_nominaux)]
-        interets_nets = valeur_nette_reelle - pf0 - verses_nominaux[-1]
-
-        # ---- Résultats (en dessous)
-        _sim_headline_duo([
-            (f"Valeur nette dans {n} {_plural(n)}", fmt_eur(valeur_nette_reelle), "", False),
-            ("Revenu passif / mois", fmt_eur(revenu_mensuel), "", True),
-        ])
-        _sim_headline_duo([
-            ("Portefeuille initial", fmt_eur(pf0), "", False, "#475569"),
-            ("Versements", fmt_eur(verses_nominaux[-1]), "", False, "#0284c7"),
-            ("Intérêts nets", fmt_eur(interets_nets), "", False, "#d97706"),
-        ])
-        # Point de départ du graphique (aujourd'hui) : versements et intérêts ACTUELS du portefeuille.
-        verses0 = min(max(float(apports_totaux), 0.0), pf0)
-        verses_chart = [verses0 + inv * k for k in range(n + 1)]
-        interets_chart = [nr - vc for nr, vc in zip(nettes_reelles, verses_chart)]
-        fig_rp = _stacked_growth_chart(n, None, verses_chart, interets_chart, "")
-        _plotly_chart(fig_rp, use_container_width=True, theme=None, key="chart_sim_revenu_passif")
-
-        _sim_stats(
-            _sim_stat("Valeur future brute", fmt_eur(valeur_future / defl)),
-            _sim_stat("Dont intérêts", fmt_eur_arrow(plus_value / defl), "#16a34a" if plus_value >= 0 else "#dc2626"),
-            small=True,
-        )
 
 
 def _render_sim_retrait():
@@ -9074,13 +9168,5 @@ def _render_sim_retrait():
 
 if _tab_open(tab_simulateur):
     with tab_simulateur:
-        _render_sim_projection()
-        _perf_hist = _anciennete_et_perf_annualisee()[1]
-        _perf_defaut_rp = round(float(_perf_hist) * 100, 2) if _perf_hist > 0 else 7.0
-        _render_sim_revenu_passif(
-            float(tot_value_globale),
-            _apport_mensuel_defaut(),
-            _perf_defaut_rp,
-            float(app_config.get("taux_prelevements_sociaux", 18.6)),
-        )
+        _render_sim_epargne(float(tot_value_globale))
         _render_sim_retrait()
