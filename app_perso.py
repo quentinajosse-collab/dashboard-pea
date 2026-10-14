@@ -907,6 +907,12 @@ st.markdown(
         div[class*="st-key-compact_cols"] [data-baseweb="select"] > div { font-size: 0.82rem !important; }
         div[class*="st-key-compact_cols"] label p { font-size: 0.74rem !important; }
         div[data-testid="stMetricValue"], div[data-testid="stMetricValue"] div { font-size: 1.2rem !important; }
+        /* Vue d'ensemble : cartes 2 par ligne, et la dernière (si impaire) occupe toute la largeur
+           au lieu de rester seule à moitié vide. */
+        .st-key-row_perf_wrap [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child:nth-child(odd),
+        .st-key-row_gains_wrap [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child:nth-child(odd) {
+            flex: 1 1 100% !important; min-width: 100% !important;
+        }
         .stTabs [data-baseweb="tab"] { padding: 0 10px; font-size: 0.85rem; }
         /* À droite : ~15 % de la largeur laissés libres pour le bouton rouge « Manage app » et la
            pastille de profil que Streamlit Community Cloud affiche par-dessus l'app (ils sont dans la
@@ -1884,9 +1890,6 @@ html, body { margin: 0; height: 100%; background: transparent; font-family: Manr
 .pea-tbl th { position: sticky; top: 0; z-index: 2; background: #f8fafc; color: #475569; text-transform: uppercase;
               font-size: 0.68rem; font-weight: 700; letter-spacing: 0.03em; padding: 8px 8px; text-align: center;
               white-space: nowrap; border-bottom: 1px solid #e2e8f0; cursor: pointer; user-select: none; }
-.pea-tbl th.f { top: 33px; z-index: 2; padding: 3px 4px; cursor: default; text-transform: none; }
-.pea-tbl th.f input { width: 100%; min-width: 56px; box-sizing: border-box; font-size: 0.72rem; text-align: center; padding: 3px 4px;
-                      border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #0f172a; }
 .pea-tbl th.s-asc::after { content: " ▲"; font-size: 0.6rem; } .pea-tbl th.s-desc::after { content: " ▼"; font-size: 0.6rem; }
 .pea-tbl td, .pea-tbl th.ix { text-align: center; padding: 6px 8px; white-space: nowrap; border-bottom: 1px solid #f1f5f9; }
 .pea-tbl th.ix { position: static; background: transparent; color: inherit; text-transform: none; font-size: inherit; font-weight: 600; cursor: default; }
@@ -1900,8 +1903,7 @@ html, body { margin: 0; height: 100%; background: transparent; font-family: Manr
 _TBL_IFRAME_JS = r"""
 (function () {
   var t = document.getElementById('t'); if (!t) return;
-  var tb = t.tBodies[0], hr = t.tHead.rows[0], fr = t.tHead.rows[1];
-  var off = hr.cells.length - fr.cells.length;
+  var tb = t.tBodies[0], hr = t.tHead.rows[0];
   function key(s) {
     s = (s || '').trim();
     var m = s.match(/^(\d{2})[-\/](\d{2})[-\/](\d{4})$/); if (m) return +(m[3] + m[2] + m[1]);
@@ -1931,24 +1933,6 @@ _TBL_IFRAME_JS = r"""
       tb.appendChild(frag);
     });
   });
-  function apply() {
-    var fs = Array.prototype.map.call(fr.querySelectorAll('input'), function (e) { return e.value.trim().toLowerCase(); });
-    Array.prototype.forEach.call(tb.rows, function (r) {
-      var ok = true;
-      for (var j = 0; j < fs.length && ok; j++) {
-        var f = fs[j]; if (!f) continue;
-        var txt = r.cells[j + off].textContent.toLowerCase();
-        var m = f.match(/^(>=|<=|>|<)\s*(-?[\d.,]+)$/);
-        if (m) {
-          var v = key(r.cells[j + off].textContent), n = parseFloat(m[2].replace(',', '.'));
-          if (typeof v !== 'number') { ok = false; break; }
-          ok = m[1] === '>' ? v > n : m[1] === '<' ? v < n : m[1] === '>=' ? v >= n : v <= n;
-        } else { ok = txt.indexOf(f) !== -1; }
-      }
-      r.style.display = ok ? '' : 'none';
-    });
-  }
-  fr.addEventListener('input', apply);
 })();
 """
 
@@ -2000,11 +1984,9 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
         rows.append(f'<tr style="{rs}">' + "".join(tds) + "</tr>" if rs else "<tr>" + "".join(tds) + "</tr>")
     cap = int(max_height) if max_height else 640
     n_rows = len(rows)
-    height = int(min(cap, 34 + 36 + 30 * n_rows + 12))
-    filt = ("<th class=\"f\"></th>" if show_index else "") + "".join(
-        '<th class="f"><input type="text" placeholder="Filtrer" aria-label="Filtrer"></th>' for _ in cols)
+    height = int(min(cap, 34 + 30 * n_rows + 14))
     doc = (f"<style>{_TBL_IFRAME_CSS}</style>"
-           f'<div class="pea-tbl-wrap"><table class="pea-tbl" id="t"><thead><tr>{head}</tr><tr>{filt}</tr></thead>'
+           f'<div class="pea-tbl-wrap"><table class="pea-tbl" id="t"><thead><tr>{head}</tr></thead>'
            f'<tbody>{"".join(rows)}</tbody></table></div><script>{_TBL_IFRAME_JS}</script>')
     try:
         import streamlit.components.v1 as _components
@@ -2312,46 +2294,80 @@ def _alloc_color(i):
         return _ALLOC_COLORS[i]
     return f"hsl({(i * 47) % 360}, 45%, 72%)"
 
+_SECTEURS_FR = {
+    "Technology": "Technologie", "Healthcare": "Santé", "Financial Services": "Services financiers",
+    "Consumer Cyclical": "Conso. cyclique", "Consumer Defensive": "Conso. défensive",
+    "Industrials": "Industrie", "Energy": "Énergie", "Utilities": "Services publics",
+    "Real Estate": "Immobilier", "Basic Materials": "Matériaux de base",
+    "Communication Services": "Communication",
+}
+
+def _secteur_fr(sect):
+    """Nom de secteur en français ('Autre' si inconnu, ex. ETF sans secteur)."""
+    if sect is None or (isinstance(sect, float) and np.isnan(sect)):
+        return "Autre"
+    t = str(sect).strip()
+    if not t or t.lower() in ("nan", "none"):
+        return "Autre"
+    return _SECTEURS_FR.get(t, t)
+
 _ALLOC_HTML = r"""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
   html, body { margin: 0; padding: 0; background: transparent; height: 100%; }
-  #root { min-height: 100%; box-sizing: border-box; display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: center;
-          font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); padding: 4px 2px; }
-  #wrap { position: relative; width: 250px; flex: 0 0 250px; margin-top: 0; }
-  svg { width: 250px; height: 250px; display: block; -webkit-tap-highlight-color: transparent; }
+  #root { box-sizing: border-box; display: grid; gap: 8px 14px; justify-content: center; align-items: start; padding: 4px 2px;
+          grid-template-columns: 210px minmax(150px, 200px) 210px minmax(150px, 200px);
+          grid-template-areas: "pa la pb lb";
+          font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); }
+  #wa { grid-area: pa; } #wb { grid-area: pb; } #legA { grid-area: la; } #legS { grid-area: lb; }
+  .wrap { position: relative; width: 100%; }
+  .ttl { text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .6; margin-bottom: 2px; }
+  svg { width: 100%; max-width: 210px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
   .slice.dim { opacity: .28; }
-  #legend { flex: 0 1 auto; min-width: 200px; max-width: 420px; }
-  .row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer;
+  .row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; cursor: pointer;
          transition: opacity .18s ease, background .18s ease; -webkit-tap-highlight-color: transparent; }
   .row.sel { background: rgba(127,127,127,.14); }
   .row.dim { opacity: .4; }
-  .dot { width: 11px; height: 11px; border-radius: 3px; flex: 0 0 11px; }
-  .nm { flex: 1; min-width: 110px; padding-right: 28px; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pc { font-family: Manrope, Inter, system-ui, sans-serif; font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12.5px; opacity: .85; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 10px; }
+  .nm { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pc { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12px; opacity: .85; }
   text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
   html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  .mono { font-family: Manrope, Inter, system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+  .mono { font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+  /* Écran étroit : les deux camemberts restent côte à côte, légendes dessous (on voit toujours les deux). */
+  @media (max-width: 880px) {
+    #root { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "pa pb" "la lb"; gap: 6px 10px; }
+    svg { max-width: 200px; }
+    .nm { font-size: 12px; } .pc { font-size: 11px; } .row { padding: 4px 4px; gap: 6px; }
+  }
 </style>
 <div id="root">
-  <div id="wrap"><svg id="svg" viewBox="0 0 250 250"></svg></div>
-  <div id="legend"></div>
+  <div class="wrap" id="wa"><div class="ttl">Par action</div><svg id="svgA" viewBox="0 0 240 240"></svg></div>
+  <div class="wrap" id="wb"><div class="ttl">Par secteur</div><svg id="svgS" viewBox="0 0 240 240"></svg></div>
+  <div id="legA"></div>
+  <div id="legS"></div>
 </div>
 <script>
 (function () {
-  var D = __DATA__, TOTAL = __TOTAL__;
+  var D = __DATA__, S = __SECT__, TOTAL = __TOTAL__;
   var fg = '#334155';
   try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
   document.documentElement.style.setProperty('--fg', fg);
 
-  var NS = 'http://www.w3.org/2000/svg', C = 125, R = 108, r = 78, sel = -1, mute = 0;
-  var svg = document.getElementById('svg'), legend = document.getElementById('legend');
+  var NS = 'http://www.w3.org/2000/svg', C = 120, R = 104, r = 76, mute = 0;
+  var st = { t: null, i: -1 };
+  var svgA = document.getElementById('svgA'), svgS = document.getElementById('svgS');
+  var legA = document.getElementById('legA'), legS = document.getElementById('legS');
 
-  // Angle minimal visible pour que même les toutes petites positions restent présentes et cliquables.
-  var MIN = 2.2, raw = D.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
-  var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
-  raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
+  // Angle minimal visible pour que même les toutes petites parts restent présentes et cliquables.
+  function layout(items) {
+    var MIN = 2.2, raw = items.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
+    var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
+    raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
+    return ang;
+  }
+  var angA = layout(D), angS = layout(S);
 
   function pt(rad, a) { var t = (a - 90) * Math.PI / 180; return [C + rad * Math.cos(t), C + rad * Math.sin(t)]; }
   function arc(s, e) {
@@ -2363,76 +2379,112 @@ _ALLOC_HTML = r"""
   function el(n, at, parent) {
     var e = document.createElementNS(NS, n);
     for (var key in at) e.setAttribute(key, at[key]);
-    (parent || svg).appendChild(e); return e;
+    parent.appendChild(e); return e;
   }
   function cut(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+  function plural(n, a, b) { return n + ' ' + (n > 1 ? b : a); }
 
-  var slices = D.map(function (d, i) {
-    var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice', 'data-i': i });
-    p.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; select(sel === i ? -1 : i); });
-    return p;
-  });
-  var t1 = el('text', { x: C, y: C - 20, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 });
-  var t2 = el('text', { x: C, y: C + 6, 'text-anchor': 'middle', 'font-size': 19, 'font-weight': 700, 'class': 'mono' });
-  var t3 = el('text', { x: C, y: C + 28, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 });
+  function toggle(t, i) {
+    if (st.t === t && st.i === i) st = { t: null, i: -1 }; else st = { t: t, i: i };
+    render();
+  }
+  function build(svg, items, ang, t) {
+    return items.map(function (d, i) {
+      var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice', 'data-t': t, 'data-i': i }, svg);
+      p.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
+      return p;
+    });
+  }
+  function center(svg) {
+    return [
+      el('text', { x: C, y: C - 26, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
+      el('text', { x: C, y: C - 2, 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 700, 'class': 'mono' }, svg),
+      el('text', { x: C, y: C + 16, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
+      el('text', { x: C, y: C + 32, 'text-anchor': 'middle', 'font-size': 10.5, opacity: .7 }, svg)
+    ];
+  }
+  function buildRows(leg, items, t) {
+    return items.map(function (d, i) {
+      var row = document.createElement('div'); row.className = 'row'; row.setAttribute('data-t', t); row.setAttribute('data-i', i);
+      row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
+      row.querySelector('.nm').textContent = d.n; row.title = d.n;
+      row.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
+      leg.appendChild(row); return row;
+    });
+  }
+  var slA = build(svgA, D, angA, 'a'), slS = build(svgS, S, angS, 's');
+  var cA = center(svgA), cS = center(svgS);
+  var rowsA = buildRows(legA, D, 'a'), rowsS = buildRows(legS, S, 's');
 
-  var rows = D.map(function (d, i) {
-    var row = document.createElement('div'); row.className = 'row'; row.setAttribute('data-i', i);
-    row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
-    row.querySelector('.nm').textContent = d.n; row.title = d.n;
-    row.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; select(sel === i ? -1 : i); });
-    legend.appendChild(row); return row;
-  });
-
-  function select(i) {
-    sel = i;
-    slices.forEach(function (s, j) {
-      s.setAttribute('class', 'slice' + (i >= 0 && j !== i ? ' dim' : ''));
-      if (j === i) {
+  function paint(sl, ang, rows, isAct, on) {
+    sl.forEach(function (s, j) {
+      var a = on && isAct(j);
+      s.setAttribute('class', 'slice' + (on && !a ? ' dim' : ''));
+      if (a) {
         var m = (ang[j][0] + ang[j][1]) / 2 * Math.PI / 180;
         s.style.transform = 'translate(' + (Math.sin(m) * 5) + 'px,' + (-Math.cos(m) * 5) + 'px)';
       } else { s.style.transform = ''; }
     });
-    rows.forEach(function (rw, j) { rw.className = 'row' + (j === i ? ' sel' : '') + (i >= 0 && j !== i ? ' dim' : ''); });
-    if (i < 0) {
-      t1.textContent = 'Total portefeuille'; t2.textContent = TOTAL; t3.textContent = D.length + ' position' + (D.length > 1 ? 's' : '');
+    rows.forEach(function (rw, j) {
+      var a = on && isAct(j);
+      rw.className = 'row' + (a ? ' sel' : '') + (on && !a ? ' dim' : '');
+    });
+  }
+  function txt(c, a, b, d, e) { c[0].textContent = a; c[1].textContent = b; c[2].textContent = d; c[3].textContent = e; }
+
+  function render() {
+    var on = st.t !== null, actA = {}, actS = -1;
+    if (st.t === 'a') { actA[st.i] = 1; actS = D[st.i].s; }
+    else if (st.t === 's') { S[st.i].m.forEach(function (j) { actA[j] = 1; }); actS = st.i; }
+    // Une action sélectionnée surligne son secteur ; un secteur sélectionné surligne toutes ses actions.
+    paint(slA, angA, rowsA, function (j) { return !!actA[j]; }, on);
+    paint(slS, angS, rowsS, function (j) { return j === actS; }, on);
+    if (!on) {
+      txt(cA, 'Total portefeuille', TOTAL, plural(D.length, 'position', 'positions'), '');
+      txt(cS, 'Total portefeuille', TOTAL, plural(S.length, 'secteur', 'secteurs'), '');
       return;
     }
-    var d = D[i];
-    t1.textContent = cut(d.n, 22); t2.textContent = d.v; t3.textContent = d.pt + ' %';
+    var sc = S[actS];
+    if (st.t === 'a') {
+      var d = D[st.i];
+      txt(cA, cut(d.n, 20), d.v, d.pt + ' %', cut(sc.n, 22));
+    } else {
+      txt(cA, cut(sc.n, 20), sc.v, sc.pt + ' %', plural(sc.m.length, 'action', 'actions'));
+    }
+    txt(cS, cut(sc.n, 20), sc.v, sc.pt + ' %', plural(sc.m.length, 'action', 'actions'));
   }
-  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (sel >= 0) select(-1); });
+  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t !== null) { st = { t: null, i: -1 }; render(); } });
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
   // Doigt maintenu (~0,25 s) sur une part ou une ligne de légende, puis glissé : la sélection suit le doigt.
   var timer = null, scrub = false, sx = 0, sy = 0;
-  function idxAt(x, y) {
+  function hitAt(x, y) {
     var e = document.elementFromPoint(x, y);
     while (e && e !== document.body) {
       var v = e.getAttribute && e.getAttribute('data-i');
-      if (v !== null && v !== undefined) return +v;
+      if (v !== null && v !== undefined) return { t: e.getAttribute('data-t'), i: +v };
       e = e.parentNode;
     }
-    return -1;
+    return null;
   }
   function stopHold() { if (timer) { clearTimeout(timer); timer = null; } if (scrub) { scrub = false; mute = Date.now() + 450; } }
   document.addEventListener('touchstart', function (e) {
     stopHold();
     if (e.touches.length !== 1) return;
     sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-    if (idxAt(sx, sy) < 0) return;
+    if (!hitAt(sx, sy)) return;
     timer = setTimeout(function () {
       timer = null; scrub = true;
       if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
-      var i = idxAt(sx, sy); if (i >= 0) select(i);
+      var h = hitAt(sx, sy); if (h) { st = h; render(); }
     }, 250);
   }, { passive: true });
   document.addEventListener('touchmove', function (e) {
     var t = e.touches[0];
     if (scrub) {
       e.preventDefault();
-      var i = idxAt(t.clientX, t.clientY);
-      if (i >= 0 && i !== sel) select(i);
+      var h = hitAt(t.clientX, t.clientY);
+      if (h && (h.t !== st.t || h.i !== st.i)) { st = h; render(); }
     } else if (timer && (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10)) {
       clearTimeout(timer); timer = null;
     }
@@ -2443,37 +2495,36 @@ _ALLOC_HTML = r"""
   function fit() {
     try {
       var rt = document.getElementById('root');
-      rt.style.minHeight = '0';
       var h = Math.ceil(rt.getBoundingClientRect().height) + 10;
-      rt.style.minHeight = '';
       try { window.frameElement.style.height = h + 'px'; }
       catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
     } catch (e) {}
   }
-  select(-1); fit();
+  render(); fit();
   window.addEventListener('resize', fit); setTimeout(fit, 150);
 })();
 </script>
 """
 
 def _render_allocation(df_active, cash):
-    """Camembert (anneau) de la répartition du portefeuille : TOUTES les positions actives (même les
-    très petites), sans les liquidités. Composant 100 % côté navigateur (aucun rechargement de la
-    page au clic) : au repos le centre affiche le total du portefeuille ; au clic sur une part (ou
-    sur sa ligne de légende) le centre et l'infobulle affichent sa valeur et les autres parts sont
-    atténuées. Un second clic (ou un clic à côté) revient à l'état de départ."""
+    """Deux camemberts (anneaux) côte à côte : répartition par ACTION (toutes les positions actives, même
+    très petites, sans les liquidités) et répartition par SECTEUR. Composant 100 % côté navigateur (aucun
+    rechargement au clic). Au repos le centre affiche le total du portefeuille ; au clic sur une part (ou sa
+    ligne de légende) le centre affiche sa valeur et les autres parts sont atténuées. Les deux camemberts sont
+    liés : choisir une action surligne son secteur à droite (et le centre de l'action indique ce secteur) ;
+    choisir un secteur surligne toutes ses actions à gauche. Un second clic (ou un clic à côté) désélectionne."""
     import streamlit.components.v1 as components
     rows = []
     if df_active is not None and not df_active.empty:
         for _, r in df_active.iterrows():
             v = float(r["Valeur Actuelle (€)"])
             if v > 0:
-                rows.append((str(r["Nom"]), v))
+                rows.append((str(r["Nom"]), v, _secteur_fr(r.get("Secteur"))))
     if not rows:
         st.info("Aucune position à répartir pour le moment.")
         return
     rows.sort(key=lambda x: -x[1])
-    total = sum(v for _, v in rows)
+    total = sum(v for _, v, _ in rows)
     total_centre = total
     if _ALLOC_CENTER_INCLUDE_CASH and cash is not None and cash > 0.005:
         total_centre += float(cash)
@@ -2481,17 +2532,31 @@ def _render_allocation(df_active, cash):
     def _pct_txt(p):
         return f"{p:.2f}".replace(".", ",")
 
+    # Secteurs : valeur cumulée de leurs actions, triés par valeur décroissante.
+    sect_val = {}
+    for _, v, sc in rows:
+        sect_val[sc] = sect_val.get(sc, 0.0) + v
+    sect_order = sorted(sect_val, key=lambda k: -sect_val[k])
+    sect_idx = {k: i for i, k in enumerate(sect_order)}
+
     data = [
-        {"n": n, "v": fmt_eur(v), "pct": v / total * 100, "pt": _pct_txt(v / total * 100), "c": _alloc_color(i)}
-        for i, (n, v) in enumerate(rows)
+        {"n": n, "v": fmt_eur(v), "pct": v / total * 100, "pt": _pct_txt(v / total * 100),
+         "c": _alloc_color(i), "s": sect_idx[sc]}
+        for i, (n, v, sc) in enumerate(rows)
+    ]
+    sectors = [
+        {"n": k, "v": fmt_eur(sect_val[k]), "pct": sect_val[k] / total * 100, "pt": _pct_txt(sect_val[k] / total * 100),
+         "c": _alloc_color(i), "m": [j for j, (_, _, sc) in enumerate(rows) if sc == k]}
+        for i, k in enumerate(sect_order)
     ]
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    payload_s = json.dumps(sectors, ensure_ascii=False).replace("</", "<\\/")
     page = (_ALLOC_HTML
             .replace("__DATA__", payload)
+            .replace("__SECT__", payload_s)
             .replace("__TOTAL__", json.dumps(fmt_eur(total_centre), ensure_ascii=False)))
-    # Hauteur « pire cas » (anneau au-dessus de la légende, écran étroit) ; le script la réduit
-    # automatiquement à la hauteur réelle dès que le composant est affiché.
-    components.html(page, height=250 + 34 * len(rows))
+    # Hauteur « pire cas » ; le script la réduit automatiquement à la hauteur réelle une fois affiché.
+    components.html(page, height=260 + 32 * max(len(rows), len(sectors)))
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
@@ -5607,20 +5672,21 @@ if _tab_open(tab_overview):
                     _ans_pea = max((_now_paris() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
                     if _ans_pea >= 0.25 and (1 + perf_globale / 100) > 0:
                         _perf_an_moy = ((1 + perf_globale / 100) ** (1 / _ans_pea) - 1) * 100
-                        _perf_an_txt, _perf_an_sub = fmt_perf_text_only(_perf_an_moy), f"sur {_ans_pea:.1f} an".replace(".", ",") + ("s" if _ans_pea >= 2 else "")
+                        _perf_an_txt = fmt_perf_text_only(_perf_an_moy)
                     else:
-                        _perf_an_txt, _perf_an_sub = "N/A", "historique < 3 mois"
-                    r2_c1, r2_c2, r2_c3 = st.columns(3)
+                        _perf_an_txt = "N/A"
+                    # Une seule rangée de 5 colonnes : sur ordinateur tout tient sur une ligne ; sur téléphone
+                    # elles passent 2 par ligne (Globale|Annuelle, YTD|Mois) et la dernière occupe toute la largeur.
+                    r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
                     r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules))
-                    r2_c2.metric("Performance Annuelle Moyenne", _perf_an_txt, delta=_perf_an_sub, delta_color="off")
+                    r2_c2.metric("Performance Annuelle Moyenne", _perf_an_txt)
                     r2_c3.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr))
-                    r2b_c1, r2b_c2, r2b_c3 = st.columns(3)
-                    r2b_c1.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo))
-                    r2b_c2.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
+                    r2_c4.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo))
+                    r2_c5.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>🏷️ Plus-values, Dividendes & Frais</p>", unsafe_allow_html=True)
                 with st.container(key="row_gains_wrap"):
-                    r3_c1, r3_c2, r3_c3, r3_c4 = st.columns(4)
+                    r3_c1, r3_c2, r3_c3, r3_c4, r3_c5 = st.columns(5)
                     # Plus-Value Latente : gain latent rapporté au capital actuellement investi dans les
                     # actions détenues (tot_invested = PRU × quantités en portefeuille aujourd'hui).
                     pct_latente = (global_pnl / tot_invested * 100) if tot_invested > 0 else 0.0
@@ -5637,16 +5703,11 @@ if _tab_open(tab_overview):
                     _ans_div = max((_now_paris() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
                     if tot_invested > 0:
                         _rend_cumule = net_divs_total / tot_invested * 100
-                        if _ans_div >= 0.25:
-                            _rend_moy_txt = f"{_rend_cumule / _ans_div:.2f} %".replace(".", ",")
-                            _rend_moy_sub = f"{_rend_cumule:.2f} % cumulé".replace(".", ",")
-                        else:
-                            _rend_moy_txt, _rend_moy_sub = f"{_rend_cumule:.2f} %".replace(".", ","), "cumulé (historique < 3 mois)"
+                        _rend_moy = _rend_cumule / _ans_div if _ans_div >= 0.25 else _rend_cumule
+                        _rend_moy_txt = f"{_rend_moy:.2f} %".replace(".", ",")
                     else:
-                        _rend_moy_txt, _rend_moy_sub = "N/A", "aucun capital investi"
-                    r4_c1, _r4_c2, _r4_c3, _r4_c4 = st.columns(4)
-                    r4_c1.metric("Rendement Moyen des Dividendes", _rend_moy_txt, delta=_rend_moy_sub, delta_color="off",
-                                 help="Dividendes nets perçus, ramenés à une année, rapportés au capital actuellement investi dans les actions.")
+                        _rend_moy_txt = "N/A"
+                    r3_c5.metric("Rendement Moyen des Dividendes", _rend_moy_txt)
 
         # --- Alerte watchlist : valeurs suivies proches de leur zone d'achat (voir l'onglet
         # "👁️ Watchlist"). Déplacée au-dessus de "Vue d'ensemble du Portefeuille", au même endroit
@@ -5671,16 +5732,21 @@ if _tab_open(tab_overview):
                         min_value=0, step=1, value=current_apport_prev_val, format="%d",
                         key="apport_prevision_input",
                     )
-                if new_target != current_target_val:
+                # Le suivi de trajectoire démarre le jour où l'opérateur renseigne (ou modifie) ces valeurs,
+                # avec la valeur du portefeuille de ce jour-là comme point de départ. Si aucune date n'est
+                # enregistrée (ou si elle date d'une année précédente), le suivi repart d'aujourd'hui.
+                _auj_iso = _today_paris().strftime("%Y-%m-%d")
+                _date_obj_cfg = str(app_config.get("objectif_date", "") or "")
+                _valeurs_modifiees = (new_target != current_target_val) or (apport_prevision != current_apport_prev_val)
+                _date_obsolete = (not _date_obj_cfg) or (_date_obj_cfg[:4] != _auj_iso[:4])
+                if _valeurs_modifiees or _date_obsolete:
                     app_config["yearly_target"] = int(new_target)
+                    app_config["apport_previsionnel"] = int(apport_prevision)
+                    app_config["objectif_date"] = _auj_iso
+                    app_config["objectif_v0"] = float(tot_value_globale)
                     _ok_cfg, _err_cfg = save_config(app_config)
                     if not _ok_cfg:
                         st.warning(_err_cfg)
-                if apport_prevision != current_apport_prev_val:
-                    app_config["apport_previsionnel"] = int(apport_prevision)
-                    _ok_cfg2, _err_cfg2 = save_config(app_config)
-                    if not _ok_cfg2:
-                        st.warning(_err_cfg2)
 
             # Résultats sous les champs, sur toute la largeur.
             # La barre de progression et "Restant à atteindre" intègrent l'épargne prévue :
@@ -5775,17 +5841,23 @@ if _tab_open(tab_overview):
             # --- Suivi de la trajectoire vers l'objectif : valeur réelle du portefeuille vs valeur attendue sur une
             # trajectoire linéaire (valeur au 31/12 de l'an dernier -> cible au 31/12), jour / semaine / mois. ---
             if new_target > 0 and not df_transactions.empty:
+                # Ligne vide avant le suivi ; titre et sélecteur Jour/Semaine/Mois rapprochés.
+                st.markdown(
+                    "<div style='height:18px'></div>"
+                    "<style>.st-key-k_suivi_objectif_pas { margin-top: -0.75rem; }</style>",
+                    unsafe_allow_html=True,
+                )
                 st.markdown("**📅 Suivi de la trajectoire vers l'objectif**")
                 _pas_suivi = st.radio("Pas du suivi", ["Jour", "Semaine", "Mois"], index=2, horizontal=True,
                                       key="k_suivi_objectif_pas", label_visibility="collapsed")
                 _h_obj = get_portfolio_history(df_transactions)
                 _serie = _h_obj["Valeur du Portefeuille (€)"].dropna() if "Valeur du Portefeuille (€)" in _h_obj.columns else pd.Series(dtype=float)
                 _an = _today_paris().year
-                _fin_prec = pd.Timestamp(_an - 1, 12, 31)
-                _jours_an = (pd.Timestamp(_an, 12, 31) - _fin_prec).days
-                _avant = _serie[_serie.index <= _fin_prec]
-                _v0 = float(_avant.iloc[-1]) if len(_avant) else 0.0
-                _s_an = _serie[_serie.index > _fin_prec]
+                _debut_obj = pd.Timestamp(str(app_config.get("objectif_date") or _today_paris().strftime("%Y-%m-%d")))
+                _fin_obj = pd.Timestamp(_an, 12, 31)
+                _jours_obj = max((_fin_obj - _debut_obj).days, 1)
+                _v0 = float(app_config.get("objectif_v0", tot_value_globale))
+                _s_an = _serie[_serie.index >= _debut_obj]
                 if len(_s_an):
                     _dfo = _s_an.to_frame("v")
                     if _pas_suivi == "Semaine":
@@ -5794,7 +5866,8 @@ if _tab_open(tab_overview):
                     elif _pas_suivi == "Mois":
                         _dfo["k"] = _dfo.index.to_period("M")
                         _dfo = _dfo.groupby("k").tail(1)
-                    _att = _v0 + (new_target - _v0) * ((_dfo.index - _fin_prec).days.to_numpy() / _jours_an)
+                    _frac = np.clip((_dfo.index - _debut_obj).days.to_numpy() / _jours_obj, 0.0, 1.0)
+                    _att = _v0 + (new_target - _v0) * _frac
                     _dfo["att"] = _att
                     _dfo["ec"] = _dfo["v"] - _dfo["att"]
                     _dfo["ecp"] = np.where(_dfo["att"] > 0, _dfo["ec"] / _dfo["att"] * 100, np.nan)
@@ -5824,10 +5897,8 @@ if _tab_open(tab_overview):
                         cell_style=lambda c, v: _style_perf_cell(v) if c in ("Écart (€)", "Écart (%)") else "",
                         max_height=420,
                     )
-                    st.caption("Trajectoire linéaire entre la valeur du portefeuille au 31/12 de l'an dernier et la valeur visée au 31/12. "
-                               "Les apports réels sont inclus dans la valeur du portefeuille.")
                 else:
-                    st.caption("Pas encore d'historique cette année pour suivre la trajectoire.")
+                    st.caption("Pas encore d'historique depuis la saisie de l'objectif pour suivre la trajectoire.")
 
 # ------------------------------------------
 # ONGLÊT 2 : POSITIONS & TRANSACTIONS
