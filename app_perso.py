@@ -469,6 +469,22 @@ st.markdown(
         justify-content: center; text-align: center; margin-left: auto; margin-right: auto;
     }
 
+    /* Tous les indicateurs des sections Performances / Plus-values : texte, chiffre et flèche centrés dans leur colonne */
+    .st-key-row_perf_wrap [data-testid="stMetric"], .st-key-row_gains_wrap [data-testid="stMetric"],
+    .st-key-row_perf_wrap [data-testid="metric-container"], .st-key-row_gains_wrap [data-testid="metric-container"],
+    .st-key-row_perf_wrap [data-testid="stMetric"] > div, .st-key-row_gains_wrap [data-testid="stMetric"] > div {
+        text-align: center !important; align-items: center !important; justify-content: center !important;
+    }
+    .st-key-row_perf_wrap [data-testid="stMetricLabel"], .st-key-row_gains_wrap [data-testid="stMetricLabel"],
+    .st-key-row_perf_wrap [data-testid="stMetricLabel"] > div, .st-key-row_gains_wrap [data-testid="stMetricLabel"] > div,
+    .st-key-row_perf_wrap [data-testid="stMetricValue"], .st-key-row_gains_wrap [data-testid="stMetricValue"],
+    .st-key-row_perf_wrap [data-testid="stMetricValue"] > div, .st-key-row_gains_wrap [data-testid="stMetricValue"] > div,
+    .st-key-row_perf_wrap [data-testid="stMetricDelta"], .st-key-row_gains_wrap [data-testid="stMetricDelta"] {
+        display: flex !important; justify-content: center !important; text-align: center !important; width: 100% !important;
+    }
+    .st-key-row_perf_wrap [data-testid="stMetricLabel"] p, .st-key-row_gains_wrap [data-testid="stMetricLabel"] p {
+        text-align: center !important; width: 100%;
+    }
     .st-key-center_metric_perf_an [data-testid="stMetricLabel"], .st-key-center_metric_rend_div [data-testid="stMetricLabel"],
     .st-key-center_metric_perf_an [data-testid="stMetricLabel"] > div, .st-key-center_metric_rend_div [data-testid="stMetricLabel"] > div {
         display: flex !important; justify-content: center !important; width: 100% !important;
@@ -1894,12 +1910,13 @@ def _perf_annualisee(perf_pct, jours):
         return np.nan
 
 def _fmt_duree_detention(jours, secondes):
-    """« 12 (264 h 12 min 05 s) » : nombre de jours détenus, puis le temps de détention exact entre parenthèses."""
+    """Nombre de jours détenus ; si le temps de détention réel est < 24 h, on ajoute « (3h 12m) » entre parenthèses."""
     if jours is None or pd.isna(jours):
         return "N/A"
     sec = 0 if (secondes is None or pd.isna(secondes)) else int(secondes)
-    h, m, sc = sec // 3600, (sec % 3600) // 60, sec % 60
-    return f"{int(jours)} ({h:,} h {m:02d} min {sc:02d} s)".replace(",", " ")
+    if sec < 86400:
+        return f"{int(jours)} ({sec // 3600}h {(sec % 3600) // 60:02d}m)"
+    return f"{int(jours)}"
 
 # Palette dégradée à 3 paliers (vert / rouge), partagée par TOUS les tableaux du dashboard qui
 # affichent un dégradé de performance (historiques mensuel/annuel ET classement des actions par
