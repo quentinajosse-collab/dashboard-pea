@@ -1999,6 +1999,11 @@ html, body { margin: 0; height: 100%; background: transparent; font-family: Manr
 .pea-tbl tbody tr:nth-child(even) { background: rgba(148,163,184,0.10); }
 .pea-tbl tfoot td, .pea-tbl tfoot th { position: sticky; bottom: 0; z-index: 2; background: #f1f5f9; font-weight: 800;
                                        border-top: 2px solid #cbd5e1; border-bottom: none; }
+.pea-tbl th.stk, .pea-tbl td.stk { position: sticky; left: 0; z-index: 3; background: #ffffff; text-align: left; font-weight: 700;
+                                  box-shadow: 2px 0 4px -2px rgba(15,23,42,0.25); }
+.pea-tbl tbody tr:nth-child(even) td.stk { background: #f4f6f9; }
+.pea-tbl th.stk { background: #f8fafc; z-index: 4; }
+.pea-tbl tfoot td.stk { background: #f1f5f9; z-index: 4; }
 .pea-tbl .ca { display: inline-flex; align-items: baseline; gap: 0.12em; }
 .pea-tbl .ar { display: inline-block; width: 0.85em; text-align: center; }
 .pea-tbl .rv { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }
@@ -2067,14 +2072,16 @@ def _paren_cell(v, pw=0, nw=0):
 
 _CELL_RE = re.compile(r"^(?:([▲▼▬=])\s)?(.*\d.*?)\s?(€|%)?$")
 
-def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None, focus_row=None, total_row=None):
+def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None, focus_row=None, total_row=None, sticky_col=None):
     """Tableau HTML avec toutes les valeurs centrées. row_styles : une chaîne CSS par ligne ;
     cell_style(colonne, valeur) -> chaîne CSS d'une cellule. Défilement interne au-delà de 25 lignes.
     Dans les colonnes qui contiennent une flèche (▲ ▼ ▬ =) ou une unité (€ %), la flèche, le nombre et l'unité
     occupent chacun une position fixe : flèches et unités sont alignées verticalement d'une ligne à l'autre.
-    total_row : dict {colonne: texte déjà formaté} -> ligne « Total » figée en bas du tableau (hors tri)."""
+    total_row : dict {colonne: texte déjà formaté} -> ligne « Total » figée en bas du tableau (hors tri).
+    sticky_col : nom d'une colonne qui reste figée à gauche quand on fait défiler le tableau horizontalement."""
     cols = list(df.columns)
-    head = ("<th>" + _esc(str(index_label)) + "</th>" if show_index else "") + "".join(f"<th>{_esc(str(c))}</th>" for c in cols)
+    head = ("<th>" + _esc(str(index_label)) + "</th>" if show_index else "") + "".join(
+        (f'<th class="stk">{_esc(str(c))}</th>' if c == sticky_col else f"<th>{_esc(str(c))}</th>") for c in cols)
     idx = list(df.index)
     # Analyse (une seule fois) de chaque colonne : (flèche, nombre, unité) par cellule, largeur max du nombre.
     parsed, num_w, has_arrow = {}, {}, {}
@@ -2119,7 +2126,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
                 inner += "</span>"
             else:
                 inner = (_paren_cell(v, *paren_w[c]) if c in paren_w else None) or _esc(str(v))
-            tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
+            _k = ' class="stk"' if c == sticky_col else ""
+            tds.append(f'<td{_k} style="{cs}">{inner}</td>' if cs else f"<td{_k}>{inner}</td>")
         _rid = ' id="cur"' if (focus_row is not None and i == focus_row) else ""
         rows.append(f'<tr{_rid} style="{rs}">' + "".join(tds) + "</tr>" if rs else f"<tr{_rid}>" + "".join(tds) + "</tr>")
     foot = ""
@@ -2141,7 +2149,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
                 inner += "</span>"
             else:
                 inner = (_paren_cell(v, *paren_w[c]) if c in paren_w else None) or _esc(str(v))
-            tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
+            _k = ' class="stk"' if c == sticky_col else ""
+            tds.append(f'<td{_k} style="{cs}">{inner}</td>' if cs else f"<td{_k}>{inner}</td>")
         foot = "<tfoot><tr>" + "".join(tds) + "</tr></tfoot>"
     cap = int(max_height) if max_height else 640
     n_rows = len(rows)
@@ -6491,6 +6500,7 @@ if _tab_open(tab_positions):
                                              else ""),
                     max_height=min(max(total_height, 100), 1000),
                     total_row=_tot_act,
+                    sticky_col="Nom",
                 )
             else:
                 st.info("Aucune position active pour le moment.")
@@ -6938,6 +6948,7 @@ if _tab_open(tab_positions):
                     _dash_if_empty(df_gain_rank_fmt),
                     cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_rank else "",
                     total_row=_tot_rank,
+                    sticky_col="Nom",
                 )
             else:
                 st.info("Aucune donnée disponible pour le classement des gains.")
