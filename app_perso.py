@@ -457,6 +457,18 @@ st.markdown(
         100% { background-position: 0% 50%; }
     }
 
+    /* Indicateurs centrés sur toute la largeur (Performance annuelle moyenne, Rendement des dividendes) */
+    .st-key-center_metric_perf_an [data-testid="stMetric"], .st-key-center_metric_rend_div [data-testid="stMetric"],
+    .st-key-center_metric_perf_an [data-testid="metric-container"], .st-key-center_metric_rend_div [data-testid="metric-container"] {
+        text-align: center; align-items: center; width: 100%;
+    }
+    .st-key-center_metric_perf_an [data-testid="stMetric"] > div, .st-key-center_metric_rend_div [data-testid="stMetric"] > div,
+    .st-key-center_metric_perf_an [data-testid="stMetricLabel"], .st-key-center_metric_rend_div [data-testid="stMetricLabel"],
+    .st-key-center_metric_perf_an [data-testid="stMetricValue"], .st-key-center_metric_rend_div [data-testid="stMetricValue"],
+    .st-key-center_metric_perf_an [data-testid="stMetricDelta"], .st-key-center_metric_rend_div [data-testid="stMetricDelta"] {
+        justify-content: center; text-align: center; margin-left: auto; margin-right: auto;
+    }
+
     /* Accents de couleur par section de métriques (Vue d'ensemble) */
     .row-capital [data-testid="metric-container"],
     .st-key-row_capital_wrap [data-testid="metric-container"] { border-left-color: #0284c7; }
@@ -464,6 +476,8 @@ st.markdown(
     .st-key-row_perf_wrap [data-testid="metric-container"] { border-left-color: #7c3aed; }
     .row-gains [data-testid="metric-container"],
     .st-key-row_gains_wrap [data-testid="metric-container"] { border-left-color: #0d9488; }
+    .st-key-center_metric_perf_an [data-testid="metric-container"] { border-left-color: #7c3aed; }
+    .st-key-center_metric_rend_div [data-testid="metric-container"] { border-left-color: #0d9488; }
     /* La première rangée ("Capital & Investissement") avait un fond dégradé bleuté dédié
        (bandeau + cartes métriques blanches en relief) pour la distinguer des 2 autres rangées
        (Performances / Plus-values), qui n'avaient elles qu'un simple liseret de couleur à
@@ -3275,6 +3289,8 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
         pnl_round_trips = []
         first_buy_date = None
         sold_out_date = None
+        cycle_start = None          # début du cycle de détention en cours (achat sur ligne à 0 titre)
+        jours_detenus = set()        # jours calendaires où au moins un titre était détenu (comptés une seule fois)
         total_commissions_ticker = 0
         total_ttf_ticker = 0
         nb_mouvements_ticker = 0
@@ -3294,6 +3310,8 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
             if t == "ACHAT":
                 if first_buy_date is None:
                     first_buy_date = row["Date_Heure"]
+                if cycle_start is None:
+                    cycle_start = row["Date_Heure"]
                 sold_out_date = None
                 total_shares += qty
                 total_invested += (qty * p) + f
@@ -3316,6 +3334,11 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
                     total_invested = total_shares * current_pru
                     if total_shares <= 0.0001:
                         sold_out_date = row["Date_Heure"]
+                        if cycle_start is not None:
+                            # Cycle terminé : tous ses jours (début et fin inclus) sont détenus. Un aller-retour
+                            # dans la même journée = 1 jour ; un second aller-retour un autre jour = 2 au total.
+                            jours_detenus.update(pd.date_range(pd.Timestamp(cycle_start).normalize(), pd.Timestamp(row["Date_Heure"]).normalize()))
+                            cycle_start = None
             elif t == "SPLIT":
                 _rompu_deja_compte = False
                 # Un rompu dont la date de versement (Date_Rompus) est encore dans le futur n'a
@@ -3421,10 +3444,13 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
                 "Gain Total Global (€)": total_gain_with_div,
                 "Performance (%)": perf_pct,
                 "Performance Active (%)": active_perf_pct,
-                "Jours Détention": (
-                    max((((sold_out_date if (total_shares <= 0.0001 and sold_out_date is not None)
-                           else (target_datetime if is_historical_check else _now_paris())) - first_buy_date).days), 0)
-                    if first_buy_date is not None else 0
+                "Jours Détention": len(
+                    jours_detenus.union(
+                        pd.date_range(pd.Timestamp(cycle_start).normalize(),
+                                      max(pd.Timestamp(target_datetime if is_historical_check else _now_paris()).normalize(),
+                                          pd.Timestamp(cycle_start).normalize()))
+                        if (cycle_start is not None and total_shares > 0.0001) else []
+                    )
                 ),
                 "Commission Pct": comm_pct_val,
                 "TTF Pct": total_ttf_ticker,
@@ -5891,18 +5917,23 @@ if _tab_open(tab_overview):
                         _perf_an_txt = fmt_perf_text_only(_perf_an_moy)
                     else:
                         _perf_an_txt = "N/A"
-                    # Une seule rangée de 5 colonnes : sur ordinateur tout tient sur une ligne ; sur téléphone
-                    # elles passent 2 par ligne (Globale|Annuelle, YTD|Mois) et la dernière occupe toute la largeur.
-                    r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
+                    # Rangée 1 : Globale | YTD ; rangée 2 : Mois | Jour ; puis la performance annuelle moyenne
+                    # centrée sur toute la largeur.
+                    r2_c1, r2_c2 = st.columns(2)
                     r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules))
-                    r2_c2.metric("Performance Annuelle Moyenne", _perf_an_txt)
-                    r2_c3.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr))
-                    r2_c4.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo))
-                    r2_c5.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
+                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr))
+                    r2b_c1, r2b_c2 = st.columns(2)
+                    r2b_c1.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo))
+                    r2b_c2.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
+                    # Gain moyen par an en € (gain total cumulé ramené à une année), affiché sur la flèche.
+                    _gain_an_moy = (total_gains_cumules / _ans_pea) if _ans_pea >= 0.25 else None
+                    with st.container(key="center_metric_perf_an"):
+                        st.metric("Performance Annuelle Moyenne", _perf_an_txt,
+                                  delta=(_delta(_gain_an_moy) if _gain_an_moy is not None else None))
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>🏷️ Plus-values, Dividendes & Frais</p>", unsafe_allow_html=True)
                 with st.container(key="row_gains_wrap"):
-                    r3_c1, r3_c2, r3_c3, r3_c4, r3_c5 = st.columns(5)
+                    r3_c1, r3_c2 = st.columns(2)
                     # Plus-Value Latente : gain latent rapporté au capital actuellement investi dans les
                     # actions détenues (tot_invested = PRU × quantités en portefeuille aujourd'hui).
                     pct_latente = (global_pnl / tot_invested * 100) if tot_invested > 0 else 0.0
@@ -5911,8 +5942,9 @@ if _tab_open(tab_overview):
                     pct_actee = (tot_realized_pnl / tot_value_globale * 100) if tot_value_globale > 0 else 0.0
                     r3_c1.metric("Plus-Value Latente", fmt_eur(global_pnl), delta=(f"{pct_latente:+,.2f}%".replace(",", " ").replace(".", ",")))
                     r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")))
-                    r3_c3.metric("Dividendes Reçus", fmt_eur(net_divs_total))
-                    r3_c4.metric("Frais Totaux", fmt_eur(tot_fees))
+                    r3b_c1, r3b_c2 = st.columns(2)
+                    r3b_c1.metric("Dividendes Reçus", fmt_eur(net_divs_total))
+                    r3b_c2.metric("Frais Totaux", fmt_eur(tot_fees))
 
                     # Rendement moyen des dividendes sur le capital investi : dividendes nets perçus, ramenés à
                     # une année (si le PEA a plus de 3 mois), rapportés au capital actuellement investi.
@@ -5923,7 +5955,11 @@ if _tab_open(tab_overview):
                         _rend_moy_txt = f"{_rend_moy:.2f} %".replace(".", ",")
                     else:
                         _rend_moy_txt = "N/A"
-                    r3_c5.metric("Rendement Moyen des Dividendes", _rend_moy_txt)
+                    # Dividendes moyens perçus par an en € (sur la flèche), comme les autres montants.
+                    _div_an_moy = (net_divs_total / _ans_div) if _ans_div >= 0.25 else None
+                    with st.container(key="center_metric_rend_div"):
+                        st.metric("Rendement Moyen des Dividendes", _rend_moy_txt,
+                                  delta=(_delta(_div_an_moy) if _div_an_moy is not None else None))
 
         # --- Alerte watchlist : valeurs suivies proches de leur zone d'achat (voir l'onglet
         # "👁️ Watchlist"). Déplacée au-dessus de "Vue d'ensemble du Portefeuille", au même endroit
@@ -6270,12 +6306,22 @@ if _tab_open(tab_positions):
                 ]
                 df_active["Var Jour (%)"] = [(_vj[t][1]) if _vj.get(t) else np.nan for t in df_active["Ticker"]]
                 df_active["Ancienneté (jours)"] = df_active["Jours Détention"] if "Jours Détention" in df_active.columns else np.nan
+                # PRU ajusté : capital encore investi, diminué des dividendes perçus et des plus-values déjà
+                # actées sur la ligne (ventes), rapporté à la quantité détenue. La « part gratuite » indique
+                # quelle fraction du capital investi a déjà été récupérée par ces gains.
+                _gains_recup = df_active["Dividendes Reçus (€)"].fillna(0) + df_active["Gain Réalisé (€)"].fillna(0)
+                _pru_aj = (df_active["Capital Investi (€)"] - _gains_recup) / df_active["Quantité"].replace(0, np.nan)
+                _part_gr = (_gains_recup / df_active["Capital Investi (€)"].replace(0, np.nan) * 100).clip(lower=0, upper=100)
+                df_active["PRU ajusté"] = [
+                    "N/A" if pd.isna(pa) else (fmt_price_dynamic(max(pa, 0.0)) + ("" if pd.isna(pg) else f" ({pg:,.0f} % gratuit)".replace(",", " ")))
+                    for pa, pg in zip(_pru_aj, _part_gr)
+                ]
 
                 cols_to_keep = [
                     'Nom', 'Quantité', 'PRU Net (€)', 'Prix Actuel (€)',
                     'Var Jour (%)',
                     'Valeur Actuelle (€)', 'Gain Latent (€)', 'Gain Réalisé (€)',
-                    'Dividendes Reçus (€)', 'Performance Active (%)', 'Ancienneté (jours)'
+                    'Dividendes Reçus (€)', 'PRU ajusté', 'Performance Active (%)', 'Ancienneté (jours)'
                 ]
 
                 existing_cols = [c for c in cols_to_keep if c in df_active.columns]
