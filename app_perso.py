@@ -470,20 +470,25 @@ st.markdown(
     }
 
     /* Tous les indicateurs des sections Performances / Plus-values : texte, chiffre et flèche centrés dans leur colonne */
-    .st-key-row_perf_wrap [data-testid="stMetric"], .st-key-row_gains_wrap [data-testid="stMetric"],
-    .st-key-row_perf_wrap [data-testid="metric-container"], .st-key-row_gains_wrap [data-testid="metric-container"],
-    .st-key-row_perf_wrap [data-testid="stMetric"] > div, .st-key-row_gains_wrap [data-testid="stMetric"] > div {
+    .st-key-row_perf_wrap [data-testid="stMetric"], .st-key-row_gains_wrap [data-testid="stMetric"], .st-key-row_capital_wrap [data-testid="stMetric"],
+    .st-key-row_perf_wrap [data-testid="metric-container"], .st-key-row_gains_wrap [data-testid="metric-container"], .st-key-row_capital_wrap [data-testid="metric-container"],
+    .st-key-row_perf_wrap [data-testid="stMetric"] > div, .st-key-row_gains_wrap [data-testid="stMetric"] > div, .st-key-row_capital_wrap [data-testid="stMetric"] > div {
         text-align: center !important; align-items: center !important; justify-content: center !important;
     }
-    .st-key-row_perf_wrap [data-testid="stMetricLabel"], .st-key-row_gains_wrap [data-testid="stMetricLabel"],
-    .st-key-row_perf_wrap [data-testid="stMetricLabel"] > div, .st-key-row_gains_wrap [data-testid="stMetricLabel"] > div,
-    .st-key-row_perf_wrap [data-testid="stMetricValue"], .st-key-row_gains_wrap [data-testid="stMetricValue"],
-    .st-key-row_perf_wrap [data-testid="stMetricValue"] > div, .st-key-row_gains_wrap [data-testid="stMetricValue"] > div,
-    .st-key-row_perf_wrap [data-testid="stMetricDelta"], .st-key-row_gains_wrap [data-testid="stMetricDelta"] {
+    .st-key-row_perf_wrap [data-testid="stMetricLabel"], .st-key-row_gains_wrap [data-testid="stMetricLabel"], .st-key-row_capital_wrap [data-testid="stMetricLabel"],
+    .st-key-row_perf_wrap [data-testid="stMetricLabel"] > div, .st-key-row_gains_wrap [data-testid="stMetricLabel"] > div, .st-key-row_capital_wrap [data-testid="stMetricLabel"] > div,
+    .st-key-row_perf_wrap [data-testid="stMetricValue"], .st-key-row_gains_wrap [data-testid="stMetricValue"], .st-key-row_capital_wrap [data-testid="stMetricValue"],
+    .st-key-row_perf_wrap [data-testid="stMetricValue"] > div, .st-key-row_gains_wrap [data-testid="stMetricValue"] > div, .st-key-row_capital_wrap [data-testid="stMetricValue"] > div {
         display: flex !important; justify-content: center !important; text-align: center !important; width: 100% !important;
     }
-    .st-key-row_perf_wrap [data-testid="stMetricLabel"] p, .st-key-row_gains_wrap [data-testid="stMetricLabel"] p {
+    .st-key-row_perf_wrap [data-testid="stMetricLabel"] p, .st-key-row_gains_wrap [data-testid="stMetricLabel"] p, .st-key-row_capital_wrap [data-testid="stMetricLabel"] p {
         text-align: center !important; width: 100%;
+    }
+    /* Pastille € / % : largeur ajustée à son contenu (et non toute la largeur), centrée */
+    .st-key-row_perf_wrap [data-testid="stMetricDelta"], .st-key-row_gains_wrap [data-testid="stMetricDelta"], .st-key-row_capital_wrap [data-testid="stMetricDelta"],
+    .st-key-center_metric_perf_an [data-testid="stMetricDelta"], .st-key-center_metric_rend_div [data-testid="stMetricDelta"] {
+        display: flex !important; width: fit-content !important; max-width: 100% !important; margin-left: auto !important; margin-right: auto !important;
+        justify-content: center !important;
     }
     .st-key-center_metric_perf_an [data-testid="stMetricLabel"], .st-key-center_metric_rend_div [data-testid="stMetricLabel"],
     .st-key-center_metric_perf_an [data-testid="stMetricLabel"] > div, .st-key-center_metric_rend_div [data-testid="stMetricLabel"] > div {
@@ -1896,11 +1901,13 @@ def fmt_perf_text_only(val):
     return f"{prefix}{val:,.2f}%".replace(".", ",")
 
 
+_PERF_AN_MIN_JOURS = 30  # en dessous, pas de performance annualisée (extrapolation non significative)
+
 def _perf_annualisee(perf_pct, jours):
     """Performance annuelle moyenne (composée) d'une ligne : la performance totale ramenée à 365 jours,
-    d'après le nombre de jours réellement détenus. Aucun seuil minimum (NaN seulement si aucun jour détenu)."""
+    d'après le nombre de jours réellement détenus. NaN si la ligne est détenue depuis moins de _PERF_AN_MIN_JOURS jours."""
     try:
-        if pd.isna(perf_pct) or pd.isna(jours) or float(jours) <= 0:
+        if pd.isna(perf_pct) or pd.isna(jours) or float(jours) < _PERF_AN_MIN_JOURS:
             return np.nan
         g = 1 + float(perf_pct) / 100.0
         if g <= 0:
@@ -1910,12 +1917,13 @@ def _perf_annualisee(perf_pct, jours):
         return np.nan
 
 def _fmt_duree_detention(jours, secondes):
-    """Nombre de jours détenus ; si le temps de détention réel est < 24 h, on ajoute « (3h 12m) » entre parenthèses."""
+    """Nombre de jours détenus ; si le temps réel de détention est < 24 h : « 1 (24 min) » ou « 1 (3h 12min) »."""
     if jours is None or pd.isna(jours):
         return "N/A"
     sec = 0 if (secondes is None or pd.isna(secondes)) else int(secondes)
     if sec < 86400:
-        return f"{int(jours)} ({sec // 3600}h {(sec % 3600) // 60:02d}m)"
+        h, m = sec // 3600, (sec % 3600) // 60
+        return f"{int(jours)} ({m} min)" if h == 0 else f"{int(jours)} ({h}h {m:02d}min)"
     return f"{int(jours)}"
 
 # Palette dégradée à 3 paliers (vert / rouge), partagée par TOUS les tableaux du dashboard qui
@@ -6375,7 +6383,7 @@ if _tab_open(tab_positions):
                 df_active["Perf. annuelle moy. (%)"] = [
                     _perf_annualisee(pf, j) for pf, j in zip(df_active["Performance Active (%)"], df_active["Jours Détention"])
                 ]
-                df_active["Ancienneté (jours)"] = [
+                df_active["Détention (jour)"] = [
                     _fmt_duree_detention(j, sec) for j, sec in zip(df_active["Jours Détention"], df_active["Secondes Détention"])
                 ]
 
@@ -6384,7 +6392,7 @@ if _tab_open(tab_positions):
                     'Var Jour (%)',
                     'Valeur Actuelle (€)', 'Gain Latent (€)', 'Performance Active (%)',
                     'Gain Réalisé (€)', 'Dividendes Reçus (€)',
-                    'PRU ajusté', 'Perf. PRU ajusté (%)', 'Ancienneté (jours)', 'Perf. annuelle moy. (%)'
+                    'PRU ajusté', 'Perf. PRU ajusté (%)', 'Détention (jour)', 'Perf. annuelle moy. (%)'
                 ]
 
                 existing_cols = [c for c in cols_to_keep if c in df_active.columns]
@@ -6467,6 +6475,12 @@ if _tab_open(tab_positions):
                 _tot_act["Gain Réalisé (€)"] = fmt_eur_arrow(_t_gr)
                 _tot_act["Dividende Reçu (€)"] = fmt_eur(_t_div)
                 _tot_act["Performance (%)"] = fmt_perf(_t_gl / _t_cap * 100) if _t_cap > 0 else "N/A"
+                # Perf. sur PRU ajusté (ensemble) : valeur actuelle vs capital net des dividendes et gains actés.
+                _t_cout_aj = _t_cap - _t_div - _t_gr
+                if _t_cap > 0:
+                    _tot_act["Perf. PRU ajusté (%)"] = fmt_perf((_t_val - _t_cout_aj) / _t_cout_aj * 100) if _t_cout_aj > 0 else "Gratuite"
+                    _jw = float((df_active["Jours Détention"].fillna(0) * df_active["Capital Investi (€)"].fillna(0)).sum()) / _t_cap
+                    _tot_act["Perf. annuelle moy. (%)"] = fmt_perf(_perf_annualisee(_t_gl / _t_cap * 100, _jw))
                 _t_vj = _som_act("Var Jour (€)")
                 _t_val_veille = _t_val - _t_vj
                 _tot_act["Prix actuel (€)"] = f"({fmt_perf(_t_vj / _t_val_veille * 100)})" if _t_val_veille > 0 else ""
@@ -6875,12 +6889,12 @@ if _tab_open(tab_positions):
                 # visualiser d'un coup d'œil l'activité de chaque ligne du classement.
                 df_gain_rank = df_port[['Nom', 'Capital Investi (€)', 'Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)', 'Performance (%)', 'Nb Mouvements', 'Jours Détention', 'Secondes Détention']].copy()
                 df_gain_rank = df_gain_rank.rename(columns={'Nb Mouvements': 'Nombre de mouvements',
-                                                            'Jours Détention': 'Durée de détention (jours)'})
+                                                            'Jours Détention': 'Détention (jour)'})
 
                 df_gain_rank = df_gain_rank.sort_values(by='Gain Total Global (€)', ascending=False).reset_index(drop=True)
                 df_gain_rank.insert(
                     df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Perf. annuelle moy. (%)',
-                    [_perf_annualisee(pf, j) for pf, j in zip(df_gain_rank['Performance (%)'], df_gain_rank['Durée de détention (jours)'])]
+                    [_perf_annualisee(pf, j) for pf, j in zip(df_gain_rank['Performance (%)'], df_gain_rank['Détention (jour)'])]
                 )
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
@@ -6893,9 +6907,9 @@ if _tab_open(tab_positions):
                 df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
                 df_gain_rank_fmt['Perf. annuelle moy. (%)'] = df_gain_rank_fmt['Perf. annuelle moy. (%)'].apply(fmt_perf_simple)
-                df_gain_rank_fmt['Durée de détention (jours)'] = [
+                df_gain_rank_fmt['Détention (jour)'] = [
                     _fmt_duree_detention(j, sec)
-                    for j, sec in zip(df_gain_rank['Durée de détention (jours)'], df_gain_rank['Secondes Détention'])
+                    for j, sec in zip(df_gain_rank['Détention (jour)'], df_gain_rank['Secondes Détention'])
                 ]
 
                 _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)', 'Perf. annuelle moy. (%)']
@@ -6907,6 +6921,16 @@ if _tab_open(tab_positions):
                 _tot_rank['Gain Latent (€)'] = fmt_eur_arrow(df_gain_rank['Gain Latent (€)'].sum())
                 _tot_rank['Dividendes Reçus (€)'] = fmt_eur(df_gain_rank['Dividendes Reçus (€)'].sum())
                 _tot_rank['Gain Total Global (€)'] = fmt_eur_arrow(df_gain_rank['Gain Total Global (€)'].sum())
+                # Performance globale : gain total / base implicite de chaque ligne (gain ÷ performance).
+                _pf = pd.to_numeric(df_gain_rank['Performance (%)'], errors="coerce")
+                _gt = pd.to_numeric(df_gain_rank['Gain Total Global (€)'], errors="coerce")
+                _ok = _pf.notna() & (_pf.abs() > 1e-9) & _gt.notna()
+                _bases = (_gt[_ok] / _pf[_ok] * 100).where(lambda b: b > 0).dropna()
+                if len(_bases) > 0 and _bases.sum() > 0:
+                    _perf_tot = float(_gt[_bases.index].sum() / _bases.sum() * 100)
+                    _jtot = float((pd.to_numeric(df_gain_rank['Détention (jour)'], errors="coerce").fillna(0)[_bases.index] * _bases).sum() / _bases.sum())
+                    _tot_rank['Performance (%)'] = fmt_perf_simple(_perf_tot)
+                    _tot_rank['Perf. annuelle moy. (%)'] = fmt_perf_simple(_perf_annualisee(_perf_tot, _jtot))
                 _tot_rank['Nombre de mouvements'] = str(int(pd.to_numeric(df_gain_rank['Nombre de mouvements'], errors="coerce").fillna(0).sum()))
                 _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank])).iloc[0].to_dict()
                 _tot_rank["N°"] = ""
