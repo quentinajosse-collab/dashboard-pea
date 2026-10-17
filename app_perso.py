@@ -469,6 +469,14 @@ st.markdown(
         justify-content: center; text-align: center; margin-left: auto; margin-right: auto;
     }
 
+    .st-key-center_metric_perf_an [data-testid="stMetricLabel"], .st-key-center_metric_rend_div [data-testid="stMetricLabel"],
+    .st-key-center_metric_perf_an [data-testid="stMetricLabel"] > div, .st-key-center_metric_rend_div [data-testid="stMetricLabel"] > div {
+        display: flex !important; justify-content: center !important; width: 100% !important;
+    }
+    .st-key-center_metric_perf_an [data-testid="stMetricLabel"] p, .st-key-center_metric_rend_div [data-testid="stMetricLabel"] p {
+        text-align: center !important; width: 100%;
+    }
+
     /* Accents de couleur par section de métriques (Vue d'ensemble) */
     .row-capital [data-testid="metric-container"],
     .st-key-row_capital_wrap [data-testid="metric-container"] { border-left-color: #0284c7; }
@@ -1871,6 +1879,28 @@ def fmt_perf_text_only(val):
     prefix = "+" if val > 0 else ("" if val < 0 else "")
     return f"{prefix}{val:,.2f}%".replace(".", ",")
 
+
+def _perf_annualisee(perf_pct, jours):
+    """Performance annuelle moyenne (composée) d'une ligne : la performance totale ramenée à 365 jours,
+    d'après le nombre de jours réellement détenus. Aucun seuil minimum (NaN seulement si aucun jour détenu)."""
+    try:
+        if pd.isna(perf_pct) or pd.isna(jours) or float(jours) <= 0:
+            return np.nan
+        g = 1 + float(perf_pct) / 100.0
+        if g <= 0:
+            return -100.0
+        return (g ** (365.0 / float(jours)) - 1) * 100.0
+    except Exception:
+        return np.nan
+
+def _fmt_duree_detention(jours, secondes):
+    """« 12 (264 h 12 min 05 s) » : nombre de jours détenus, puis le temps de détention exact entre parenthèses."""
+    if jours is None or pd.isna(jours):
+        return "N/A"
+    sec = 0 if (secondes is None or pd.isna(secondes)) else int(secondes)
+    h, m, sc = sec // 3600, (sec % 3600) // 60, sec % 60
+    return f"{int(jours)} ({h:,} h {m:02d} min {sc:02d} s)".replace(",", " ")
+
 # Palette dégradée à 3 paliers (vert / rouge), partagée par TOUS les tableaux du dashboard qui
 # affichent un dégradé de performance (historiques mensuel/annuel ET classement des actions par
 # gain), afin d'avoir exactement le même code couleur et le même nombre de teintes partout.
@@ -1960,6 +1990,7 @@ _TBL_IFRAME_JS = r"""
     m = s.match(/^(\d{2})\/(\d{4})$/); if (m) return +(m[2] + m[1]);
     var c = s.replace(/[\u00a0\u202f\s€%▲▼▬=]/g, '').replace('\u2212', '-').replace(',', '.');
     if (/^[+\-]?\d+(\.\d+)?$/.test(c)) return parseFloat(c);
+    var lead = s.match(/^(\d+)\s*\(/); if (lead) return parseFloat(lead[1]);
     return s === '-' || s === '' ? null : s.toLowerCase();
   }
   var cur = document.getElementById('cur'), wrap = document.querySelector('.pea-tbl-wrap');
@@ -3290,6 +3321,7 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
         first_buy_date = None
         sold_out_date = None
         cycle_start = None          # début du cycle de détention en cours (achat sur ligne à 0 titre)
+        secondes_detention = 0.0     # temps de détention exact cumulé (en secondes)
         jours_detenus = set()        # jours calendaires où au moins un titre était détenu (comptés une seule fois)
         total_commissions_ticker = 0
         total_ttf_ticker = 0
@@ -3338,6 +3370,7 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
                             # Cycle terminé : tous ses jours (début et fin inclus) sont détenus. Un aller-retour
                             # dans la même journée = 1 jour ; un second aller-retour un autre jour = 2 au total.
                             jours_detenus.update(pd.date_range(pd.Timestamp(cycle_start).normalize(), pd.Timestamp(row["Date_Heure"]).normalize()))
+                            secondes_detention += max((pd.Timestamp(row["Date_Heure"]) - pd.Timestamp(cycle_start)).total_seconds(), 0.0)
                             cycle_start = None
             elif t == "SPLIT":
                 _rompu_deja_compte = False
@@ -3451,6 +3484,10 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
                                           pd.Timestamp(cycle_start).normalize()))
                         if (cycle_start is not None and total_shares > 0.0001) else []
                     )
+                ),
+                "Secondes Détention": secondes_detention + (
+                    max((pd.Timestamp(target_datetime if is_historical_check else _now_paris()) - pd.Timestamp(cycle_start)).total_seconds(), 0.0)
+                    if (cycle_start is not None and total_shares > 0.0001) else 0.0
                 ),
                 "Commission Pct": comm_pct_val,
                 "TTF Pct": total_ttf_ticker,
@@ -6307,21 +6344,30 @@ if _tab_open(tab_positions):
                 df_active["Var Jour (%)"] = [(_vj[t][1]) if _vj.get(t) else np.nan for t in df_active["Ticker"]]
                 df_active["Ancienneté (jours)"] = df_active["Jours Détention"] if "Jours Détention" in df_active.columns else np.nan
                 # PRU ajusté : capital encore investi, diminué des dividendes perçus et des plus-values déjà
-                # actées sur la ligne (ventes), rapporté à la quantité détenue. La « part gratuite » indique
-                # quelle fraction du capital investi a déjà été récupérée par ces gains.
+                # actées sur la ligne (ventes), rapporté à la quantité détenue.
                 _gains_recup = df_active["Dividendes Reçus (€)"].fillna(0) + df_active["Gain Réalisé (€)"].fillna(0)
                 _pru_aj = (df_active["Capital Investi (€)"] - _gains_recup) / df_active["Quantité"].replace(0, np.nan)
-                _part_gr = (_gains_recup / df_active["Capital Investi (€)"].replace(0, np.nan) * 100).clip(lower=0, upper=100)
                 df_active["PRU ajusté"] = [
-                    "N/A" if pd.isna(pa) else (fmt_price_dynamic(max(pa, 0.0)) + ("" if pd.isna(pg) else f" ({pg:,.0f} % gratuit)".replace(",", " ")))
-                    for pa, pg in zip(_pru_aj, _part_gr)
+                    "N/A" if pd.isna(pa) else fmt_price_dynamic(max(pa, 0.0)) for pa in _pru_aj
+                ]
+                # Performance par rapport au PRU ajusté (np.inf = ligne entièrement « gratuite »).
+                df_active["Perf. PRU ajusté (%)"] = [
+                    np.nan if (pd.isna(pa) or pd.isna(px)) else (np.inf if pa <= 0 else (px - pa) / pa * 100)
+                    for pa, px in zip(_pru_aj, df_active["Prix Actuel (€)"])
+                ]
+                df_active["Perf. annuelle moy. (%)"] = [
+                    _perf_annualisee(pf, j) for pf, j in zip(df_active["Performance Active (%)"], df_active["Jours Détention"])
+                ]
+                df_active["Ancienneté (jours)"] = [
+                    _fmt_duree_detention(j, sec) for j, sec in zip(df_active["Jours Détention"], df_active["Secondes Détention"])
                 ]
 
                 cols_to_keep = [
                     'Nom', 'Quantité', 'PRU Net (€)', 'Prix Actuel (€)',
                     'Var Jour (%)',
-                    'Valeur Actuelle (€)', 'Gain Latent (€)', 'Gain Réalisé (€)',
-                    'Dividendes Reçus (€)', 'PRU ajusté', 'Performance Active (%)', 'Ancienneté (jours)'
+                    'Valeur Actuelle (€)', 'Gain Latent (€)', 'Performance Active (%)',
+                    'Gain Réalisé (€)', 'Dividendes Reçus (€)',
+                    'PRU ajusté', 'Perf. PRU ajusté (%)', 'Ancienneté (jours)', 'Perf. annuelle moy. (%)'
                 ]
 
                 existing_cols = [c for c in cols_to_keep if c in df_active.columns]
@@ -6369,15 +6415,17 @@ if _tab_open(tab_positions):
                 if "Performance (%)" in df_active_fmt.columns:
                     df_active_fmt["Performance (%)"] = df_active_fmt["Performance (%)"].apply(lambda x: fmt_perf(x))
 
-                if "Ancienneté (jours)" in df_active_fmt.columns:
-                    df_active_fmt["Ancienneté (jours)"] = df_active_fmt["Ancienneté (jours)"].apply(
-                        lambda x: "N/A" if pd.isna(x) else f"{int(x)}")
+                if "Perf. PRU ajusté (%)" in df_active_fmt.columns:
+                    df_active_fmt["Perf. PRU ajusté (%)"] = df_active_fmt["Perf. PRU ajusté (%)"].apply(
+                        lambda x: "Gratuite" if (not pd.isna(x) and np.isinf(x)) else fmt_perf(x))
+                if "Perf. annuelle moy. (%)" in df_active_fmt.columns:
+                    df_active_fmt["Perf. annuelle moy. (%)"] = df_active_fmt["Perf. annuelle moy. (%)"].apply(fmt_perf)
 
                 # Affichage de toutes les lignes sans barre de scroll (height dynamique selon le nombre de lignes)
                 row_height = 35
                 header_height = 40
                 total_height = header_height + (len(df_active_fmt) + 1) * row_height + 20  # +1 ligne : le Total
-                _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
+                _cols_fleche_active = [c for c in ["Performance (%)", "Perf. PRU ajusté (%)", "Perf. annuelle moy. (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
                                        if c in df_active_fmt.columns]
                 def _style_prix_actif(v):
                     sv = str(v)
@@ -6808,14 +6856,18 @@ if _tab_open(tab_positions):
                 # Retour à la "Performance (%)" (à la demande) à la place du YoC, et ajout d'une
                 # colonne "Nombre de mouvements" (nombre d'ACHATs + VENTEs sur la valeur) pour
                 # visualiser d'un coup d'œil l'activité de chaque ligne du classement.
-                df_gain_rank = df_port[['Nom', 'Capital Investi (€)', 'Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)', 'Performance (%)', 'Nb Mouvements', 'Jours Détention']].copy()
+                df_gain_rank = df_port[['Nom', 'Capital Investi (€)', 'Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)', 'Performance (%)', 'Nb Mouvements', 'Jours Détention', 'Secondes Détention']].copy()
                 df_gain_rank = df_gain_rank.rename(columns={'Nb Mouvements': 'Nombre de mouvements',
                                                             'Jours Détention': 'Durée de détention (jours)'})
 
                 df_gain_rank = df_gain_rank.sort_values(by='Gain Total Global (€)', ascending=False).reset_index(drop=True)
+                df_gain_rank.insert(
+                    df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Perf. annuelle moy. (%)',
+                    [_perf_annualisee(pf, j) for pf, j in zip(df_gain_rank['Performance (%)'], df_gain_rank['Durée de détention (jours)'])]
+                )
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
-                df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)']).copy()
+                df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)', 'Secondes Détention']).copy()
                 # Même présentation que « Détail des Positions Actives » : chiffres colorés (▲ vert / ▼ rouge) sur
                 # les gains et la performance, dividendes en simple montant, une ligne grise sur deux (CSS du
                 # tableau) ; plus aucun dégradé de couleur sur le nom de l'action (gris uniquement).
@@ -6823,10 +6875,13 @@ if _tab_open(tab_positions):
                     df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur_arrow)
                 df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
-                df_gain_rank_fmt['Durée de détention (jours)'] = df_gain_rank_fmt['Durée de détention (jours)'].apply(
-                    lambda x: "N/A" if pd.isna(x) else f"{int(x)}")
+                df_gain_rank_fmt['Perf. annuelle moy. (%)'] = df_gain_rank_fmt['Perf. annuelle moy. (%)'].apply(fmt_perf_simple)
+                df_gain_rank_fmt['Durée de détention (jours)'] = [
+                    _fmt_duree_detention(j, sec)
+                    for j, sec in zip(df_gain_rank['Durée de détention (jours)'], df_gain_rank['Secondes Détention'])
+                ]
 
-                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)']
+                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)', 'Perf. annuelle moy. (%)']
                 # Ligne Total : somme de chaque colonne sur toutes les actions du classement. La performance n'est pas
                 # totalisée ici (la base de calcul diffère selon que la position est ouverte ou soldée).
                 _tot_rank = {c: "" for c in df_gain_rank_fmt.columns}
