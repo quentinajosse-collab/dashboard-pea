@@ -2611,6 +2611,43 @@ def _cap_bucket(mc, qt):
             return label
     return "Capitalisation inconnue"
 
+# Yahoo Finance ne fournit PAS la ventilation géographique du chiffre d'affaires : pour les valeurs ci-dessous on
+# utilise des ORDRES DE GRANDEUR issus des rapports annuels (arrondis, à ajuster ici). Pour toute autre valeur,
+# repli sur le continent du siège social (100 %). Clé = fragment du nom, sans accent ni majuscule.
+_REVENUS_CONTINENT_REF = {
+    "air liquide": {"Europe": 34, "Amérique du Nord": 30, "Asie": 27, "Amérique du Sud": 4, "Afrique": 5},
+    "asml": {"Asie": 80, "Amérique du Nord": 12, "Europe": 8},
+    "schneider": {"Europe": 28, "Amérique du Nord": 32, "Asie": 28, "Amérique du Sud": 4, "Afrique": 8},
+    "credit agricole": {"Europe": 92, "Amérique du Nord": 4, "Asie": 4},
+    "vusion": {"Amérique du Nord": 55, "Europe": 35, "Asie": 10},
+    "msci world": {"Amérique du Nord": 75, "Europe": 16, "Asie": 6, "Océanie": 3},
+}
+_CONTINENT_PAYS_FR = {}
+for _cont, _pays in {
+    "Europe": ["France", "Allemagne", "Pays-Bas", "Belgique", "Italie", "Espagne", "Portugal", "Irlande", "Luxembourg",
+               "Suisse", "Royaume-Uni", "Suède", "Norvège", "Danemark", "Finlande", "Autriche", "Pologne", "Grèce"],
+    "Amérique du Nord": ["États-Unis", "Canada", "Mexique"],
+    "Amérique du Sud": ["Brésil"],
+    "Asie": ["Chine", "Japon", "Corée du Sud", "Taïwan", "Hong Kong", "Inde", "Singapour", "Israël"],
+    "Afrique": ["Afrique du Sud"],
+    "Océanie": ["Australie"],
+}.items():
+    for _p in _pays:
+        _CONTINENT_PAYS_FR[_p] = _cont
+
+def _norm_nom(s):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(s).lower()) if unicodedata.category(c) != "Mn")
+
+def _continent_split(nom, pays_fr):
+    """({continent: %}, par_reference) : revenus d'une valeur par continent (référence si connue, sinon siège)."""
+    n = _norm_nom(nom)
+    for key, split in _REVENUS_CONTINENT_REF.items():
+        if key in n:
+            tot = float(sum(split.values())) or 1.0
+            return {k: v / tot * 100 for k, v in split.items()}, True
+    return {_CONTINENT_PAYS_FR.get(pays_fr, "Non déterminé"): 100.0}, False
+
 _ALLOC4_HTML = r"""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
@@ -2843,8 +2880,17 @@ def _render_allocation(df_active, cash):
           "c": _alloc_color(i), "m": [i], "x": sc} for i, (n, _t, v, sc, _p) in enumerate(rows)]
     # 2) Secteurs
     S = _groupe([x[3] for x in rows])
-    # 3) Pays du siège social (à défaut : place de cotation)
-    P = _groupe([_pays_siege(x[4], x[1]) for x in rows], offset=2)
+    # 3) Revenus par continent : répartition connue si possible, sinon continent du siège social (100 %)
+    cont_val, cont_mem, siege = {}, {}, []
+    for idx, (n, tk, v, _sc, p) in enumerate(rows):
+        split, is_ref = _continent_split(n, _pays_siege(p, tk))
+        if not is_ref:
+            siege.append(n)
+        for cont, pc in split.items():
+            cont_val[cont] = cont_val.get(cont, 0.0) + v * pc / 100.0
+            cont_mem.setdefault(cont, []).append(idx)
+    P = [{"n": k, "v": fmt_eur(cont_val[k]), "pct": cont_val[k] / total * 100, "pt": _pct(cont_val[k] / total * 100),
+          "c": _alloc_color(i + 2), "m": cont_mem[k]} for i, k in enumerate(sorted(cont_val, key=lambda k: -cont_val[k]))]
     # 4) Tranches de capitalisation
     caps, cap_total, n_cap = [], 0.0, 0
     for (_n, tick, _v, _s, _p) in rows:
@@ -2861,8 +2907,8 @@ def _render_allocation(df_active, cash):
          "rest": ["Total portefeuille", fmt_eur(total), plur(len(A), "position", "positions"), ""]},
         {"title": "Par secteur", "items": S, "nouns": ["secteur", "secteurs"],
          "rest": ["Total portefeuille", fmt_eur(total), plur(len(S), "secteur", "secteurs"), ""]},
-        {"title": "Par pays (siège)", "items": P, "nouns": ["pays", "pays"],
-         "rest": ["Total portefeuille", fmt_eur(total), plur(len(P), "pays", "pays"), ""]},
+        {"title": "Revenus / continent", "items": P, "nouns": ["continent", "continents"],
+         "rest": ["Total portefeuille", fmt_eur(total), plur(len(P), "continent", "continents"), ""]},
         {"title": "Par capitalisation", "items": K, "nouns": ["tranche", "tranches"],
          "rest": ["Capitalisation cumulée", _fmt_cap(cap_total) if n_cap else "N/A", plur(n_cap, "société", "sociétés"), "(hors ETF)"]},
     ]
@@ -2870,8 +2916,10 @@ def _render_allocation(df_active, cash):
     payload = json.dumps(don, ensure_ascii=False).replace("</", "<\\/")
     page = _ALLOC4_HTML.replace("__DON__", payload)
     components.html(page, height=470)
-    st.caption("Pays = siège social (à défaut, place de cotation). Capitalisation : tranches sur la capitalisation boursière "
-               "de chaque société (les ETF forment une tranche à part) ; le total au centre cumule les sociétés détenues.")
+    st.caption("Revenus par continent : répartition estimée (ordres de grandeur des rapports annuels, modifiable dans "
+               "`_REVENUS_CONTINENT_REF`) quand elle est connue ; sinon continent du siège social"
+               + (" (" + ", ".join(siege) + ")" if siege else "") + ". Les ETF et sociétés sans donnée utilisent la place de cotation. "
+               "Capitalisation : tranches sur la capitalisation boursière (ETF à part) ; le total au centre cumule les sociétés détenues.")
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
