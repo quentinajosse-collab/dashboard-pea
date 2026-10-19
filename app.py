@@ -457,6 +457,47 @@ st.markdown(
         100% { background-position: 0% 50%; }
     }
 
+    /* Indicateurs centrés sur toute la largeur (Performance annuelle moyenne, Rendement des dividendes) */
+    .st-key-center_metric_perf_an [data-testid="stMetric"], .st-key-center_metric_rend_div [data-testid="stMetric"],
+    .st-key-center_metric_perf_an [data-testid="metric-container"], .st-key-center_metric_rend_div [data-testid="metric-container"] {
+        text-align: center; align-items: center; width: 100%;
+    }
+    .st-key-center_metric_perf_an [data-testid="stMetric"] > div, .st-key-center_metric_rend_div [data-testid="stMetric"] > div,
+    .st-key-center_metric_perf_an [data-testid="stMetricLabel"], .st-key-center_metric_rend_div [data-testid="stMetricLabel"],
+    .st-key-center_metric_perf_an [data-testid="stMetricValue"], .st-key-center_metric_rend_div [data-testid="stMetricValue"],
+    .st-key-center_metric_perf_an [data-testid="stMetricDelta"], .st-key-center_metric_rend_div [data-testid="stMetricDelta"] {
+        justify-content: center; text-align: center; margin-left: auto; margin-right: auto;
+    }
+
+    /* Tous les indicateurs des sections Performances / Plus-values : texte, chiffre et flèche centrés dans leur colonne */
+    .st-key-row_perf_wrap [data-testid="stMetric"], .st-key-row_gains_wrap [data-testid="stMetric"], .st-key-row_capital_wrap [data-testid="stMetric"],
+    .st-key-row_perf_wrap [data-testid="metric-container"], .st-key-row_gains_wrap [data-testid="metric-container"], .st-key-row_capital_wrap [data-testid="metric-container"],
+    .st-key-row_perf_wrap [data-testid="stMetric"] > div, .st-key-row_gains_wrap [data-testid="stMetric"] > div, .st-key-row_capital_wrap [data-testid="stMetric"] > div {
+        text-align: center !important; align-items: center !important; justify-content: center !important;
+    }
+    .st-key-row_perf_wrap [data-testid="stMetricLabel"], .st-key-row_gains_wrap [data-testid="stMetricLabel"], .st-key-row_capital_wrap [data-testid="stMetricLabel"],
+    .st-key-row_perf_wrap [data-testid="stMetricLabel"] > div, .st-key-row_gains_wrap [data-testid="stMetricLabel"] > div, .st-key-row_capital_wrap [data-testid="stMetricLabel"] > div,
+    .st-key-row_perf_wrap [data-testid="stMetricValue"], .st-key-row_gains_wrap [data-testid="stMetricValue"], .st-key-row_capital_wrap [data-testid="stMetricValue"],
+    .st-key-row_perf_wrap [data-testid="stMetricValue"] > div, .st-key-row_gains_wrap [data-testid="stMetricValue"] > div, .st-key-row_capital_wrap [data-testid="stMetricValue"] > div {
+        display: flex !important; justify-content: center !important; text-align: center !important; width: 100% !important;
+    }
+    .st-key-row_perf_wrap [data-testid="stMetricLabel"] p, .st-key-row_gains_wrap [data-testid="stMetricLabel"] p, .st-key-row_capital_wrap [data-testid="stMetricLabel"] p {
+        text-align: center !important; width: 100%;
+    }
+    /* Pastille € / % : largeur ajustée à son contenu (et non toute la largeur), centrée */
+    .st-key-row_perf_wrap [data-testid="stMetricDelta"], .st-key-row_gains_wrap [data-testid="stMetricDelta"], .st-key-row_capital_wrap [data-testid="stMetricDelta"],
+    .st-key-center_metric_perf_an [data-testid="stMetricDelta"], .st-key-center_metric_rend_div [data-testid="stMetricDelta"] {
+        display: flex !important; width: fit-content !important; max-width: 100% !important; margin-left: auto !important; margin-right: auto !important;
+        justify-content: center !important;
+    }
+    .st-key-center_metric_perf_an [data-testid="stMetricLabel"], .st-key-center_metric_rend_div [data-testid="stMetricLabel"],
+    .st-key-center_metric_perf_an [data-testid="stMetricLabel"] > div, .st-key-center_metric_rend_div [data-testid="stMetricLabel"] > div {
+        display: flex !important; justify-content: center !important; width: 100% !important;
+    }
+    .st-key-center_metric_perf_an [data-testid="stMetricLabel"] p, .st-key-center_metric_rend_div [data-testid="stMetricLabel"] p {
+        text-align: center !important; width: 100%;
+    }
+
     /* Accents de couleur par section de métriques (Vue d'ensemble) */
     .row-capital [data-testid="metric-container"],
     .st-key-row_capital_wrap [data-testid="metric-container"] { border-left-color: #0284c7; }
@@ -464,6 +505,8 @@ st.markdown(
     .st-key-row_perf_wrap [data-testid="metric-container"] { border-left-color: #7c3aed; }
     .row-gains [data-testid="metric-container"],
     .st-key-row_gains_wrap [data-testid="metric-container"] { border-left-color: #0d9488; }
+    .st-key-center_metric_perf_an [data-testid="metric-container"] { border-left-color: #7c3aed; }
+    .st-key-center_metric_rend_div [data-testid="metric-container"] { border-left-color: #0d9488; }
     /* La première rangée ("Capital & Investissement") avait un fond dégradé bleuté dédié
        (bandeau + cartes métriques blanches en relief) pour la distinguer des 2 autres rangées
        (Performances / Plus-values), qui n'avaient elles qu'un simple liseret de couleur à
@@ -1857,6 +1900,32 @@ def fmt_perf_text_only(val):
     prefix = "+" if val > 0 else ("" if val < 0 else "")
     return f"{prefix}{val:,.2f}%".replace(".", ",")
 
+
+_PERF_AN_MIN_JOURS = 30  # en dessous, pas de performance annualisée (extrapolation non significative)
+
+def _perf_annualisee(perf_pct, jours):
+    """Performance annuelle moyenne (composée) d'une ligne : la performance totale ramenée à 365 jours,
+    d'après le nombre de jours réellement détenus. NaN si la ligne est détenue depuis moins de _PERF_AN_MIN_JOURS jours."""
+    try:
+        if pd.isna(perf_pct) or pd.isna(jours) or float(jours) < _PERF_AN_MIN_JOURS:
+            return np.nan
+        g = 1 + float(perf_pct) / 100.0
+        if g <= 0:
+            return -100.0
+        return (g ** (365.0 / float(jours)) - 1) * 100.0
+    except Exception:
+        return np.nan
+
+def _fmt_duree_detention(jours, secondes):
+    """Nombre de jours détenus ; si le temps réel de détention est < 24 h : « 1 (24 min) » ou « 1 (3h 12min) »."""
+    if jours is None or pd.isna(jours):
+        return "N/A"
+    sec = 0 if (secondes is None or pd.isna(secondes)) else int(secondes)
+    if sec < 86400:
+        h, m = sec // 3600, (sec % 3600) // 60
+        return f"{int(jours)} ({m} min)" if h == 0 else f"{int(jours)} ({h}h {m:02d}min)"
+    return f"{int(jours)}"
+
 # Palette dégradée à 3 paliers (vert / rouge), partagée par TOUS les tableaux du dashboard qui
 # affichent un dégradé de performance (historiques mensuel/annuel ET classement des actions par
 # gain), afin d'avoir exactement le même code couleur et le même nombre de teintes partout.
@@ -1930,6 +1999,11 @@ html, body { margin: 0; height: 100%; background: transparent; font-family: Manr
 .pea-tbl tbody tr:nth-child(even) { background: rgba(148,163,184,0.10); }
 .pea-tbl tfoot td, .pea-tbl tfoot th { position: sticky; bottom: 0; z-index: 2; background: #f1f5f9; font-weight: 800;
                                        border-top: 2px solid #cbd5e1; border-bottom: none; }
+.pea-tbl th.stk, .pea-tbl td.stk { position: sticky; left: 0; z-index: 3; background: #ffffff; text-align: left; font-weight: 700;
+                                  box-shadow: 2px 0 4px -2px rgba(15,23,42,0.25); }
+.pea-tbl tbody tr:nth-child(even) td.stk { background: #f4f6f9; }
+.pea-tbl th.stk { background: #f8fafc; z-index: 4; }
+.pea-tbl tfoot td.stk { background: #f1f5f9; z-index: 4; }
 .pea-tbl .ca { display: inline-flex; align-items: baseline; gap: 0.12em; }
 .pea-tbl .ar { display: inline-block; width: 0.85em; text-align: center; }
 .pea-tbl .rv { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }
@@ -1946,6 +2020,7 @@ _TBL_IFRAME_JS = r"""
     m = s.match(/^(\d{2})\/(\d{4})$/); if (m) return +(m[2] + m[1]);
     var c = s.replace(/[\u00a0\u202f\s€%▲▼▬=]/g, '').replace('\u2212', '-').replace(',', '.');
     if (/^[+\-]?\d+(\.\d+)?$/.test(c)) return parseFloat(c);
+    var lead = s.match(/^(\d+)\s*\(/); if (lead) return parseFloat(lead[1]);
     return s === '-' || s === '' ? null : s.toLowerCase();
   }
   var cur = document.getElementById('cur'), wrap = document.querySelector('.pea-tbl-wrap');
@@ -1997,14 +2072,16 @@ def _paren_cell(v, pw=0, nw=0):
 
 _CELL_RE = re.compile(r"^(?:([▲▼▬=])\s)?(.*\d.*?)\s?(€|%)?$")
 
-def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None, focus_row=None, total_row=None):
+def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_label="N°", max_height=None, focus_row=None, total_row=None, sticky_col=None):
     """Tableau HTML avec toutes les valeurs centrées. row_styles : une chaîne CSS par ligne ;
     cell_style(colonne, valeur) -> chaîne CSS d'une cellule. Défilement interne au-delà de 25 lignes.
     Dans les colonnes qui contiennent une flèche (▲ ▼ ▬ =) ou une unité (€ %), la flèche, le nombre et l'unité
     occupent chacun une position fixe : flèches et unités sont alignées verticalement d'une ligne à l'autre.
-    total_row : dict {colonne: texte déjà formaté} -> ligne « Total » figée en bas du tableau (hors tri)."""
+    total_row : dict {colonne: texte déjà formaté} -> ligne « Total » figée en bas du tableau (hors tri).
+    sticky_col : nom d'une colonne qui reste figée à gauche quand on fait défiler le tableau horizontalement."""
     cols = list(df.columns)
-    head = ("<th>" + _esc(str(index_label)) + "</th>" if show_index else "") + "".join(f"<th>{_esc(str(c))}</th>" for c in cols)
+    head = ("<th>" + _esc(str(index_label)) + "</th>" if show_index else "") + "".join(
+        (f'<th class="stk">{_esc(str(c))}</th>' if c == sticky_col else f"<th>{_esc(str(c))}</th>") for c in cols)
     idx = list(df.index)
     # Analyse (une seule fois) de chaque colonne : (flèche, nombre, unité) par cellule, largeur max du nombre.
     parsed, num_w, has_arrow = {}, {}, {}
@@ -2049,7 +2126,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
                 inner += "</span>"
             else:
                 inner = (_paren_cell(v, *paren_w[c]) if c in paren_w else None) or _esc(str(v))
-            tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
+            _k = ' class="stk"' if c == sticky_col else ""
+            tds.append(f'<td{_k} style="{cs}">{inner}</td>' if cs else f"<td{_k}>{inner}</td>")
         _rid = ' id="cur"' if (focus_row is not None and i == focus_row) else ""
         rows.append(f'<tr{_rid} style="{rs}">' + "".join(tds) + "</tr>" if rs else f"<tr{_rid}>" + "".join(tds) + "</tr>")
     foot = ""
@@ -2071,7 +2149,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
                 inner += "</span>"
             else:
                 inner = (_paren_cell(v, *paren_w[c]) if c in paren_w else None) or _esc(str(v))
-            tds.append(f'<td style="{cs}">{inner}</td>' if cs else f"<td>{inner}</td>")
+            _k = ' class="stk"' if c == sticky_col else ""
+            tds.append(f'<td{_k} style="{cs}">{inner}</td>' if cs else f"<td{_k}>{inner}</td>")
         foot = "<tfoot><tr>" + "".join(tds) + "</tr></tfoot>"
     cap = int(max_height) if max_height else 640
     n_rows = len(rows)
@@ -2655,6 +2734,326 @@ def _render_allocation(df_active, cash):
     components.html(page, height=260 + 32 * max(len(rows), len(sectors)))
 
 
+# ------------------------------------------------------------------
+# Camemberts liés n°2 : revenus par continent (gauche) et tranche de capitalisation (droite)
+# ------------------------------------------------------------------
+# Yahoo Finance ne fournit PAS la ventilation géographique du chiffre d'affaires. Pour les valeurs ci-dessous,
+# on utilise donc des ORDRES DE GRANDEUR issus des derniers rapports annuels (arrondis, à ajuster ici si besoin).
+# Pour toute autre valeur, repli sur le continent du siège social (100 %). Clé = fragment du nom, sans accent.
+_REVENUS_CONTINENT_REF = {
+    "air liquide": {"Europe": 34, "Amérique du Nord": 30, "Asie": 27, "Amérique du Sud": 4, "Afrique": 5},
+    "asml": {"Asie": 80, "Amérique du Nord": 12, "Europe": 8},
+    "schneider": {"Europe": 28, "Amérique du Nord": 32, "Asie": 28, "Amérique du Sud": 4, "Afrique": 8},
+    "credit agricole": {"Europe": 92, "Amérique du Nord": 4, "Asie": 4},
+    "vusion": {"Amérique du Nord": 55, "Europe": 35, "Asie": 10},
+    "msci world": {"Amérique du Nord": 75, "Europe": 16, "Asie": 6, "Océanie": 3},
+}
+_COUNTRY_CONTINENT = {}
+for _cont, _pays in {
+    "Europe": ["France", "Germany", "Netherlands", "Belgium", "Italy", "Spain", "Portugal", "Ireland", "Luxembourg",
+               "Switzerland", "United Kingdom", "Sweden", "Norway", "Denmark", "Finland", "Austria", "Poland", "Greece"],
+    "Amérique du Nord": ["United States", "Canada", "Mexico"],
+    "Amérique du Sud": ["Brazil", "Argentina", "Chile", "Colombia", "Peru"],
+    "Asie": ["China", "Japan", "South Korea", "Taiwan", "Hong Kong", "India", "Singapore", "Israel", "Saudi Arabia"],
+    "Afrique": ["South Africa", "Morocco", "Egypt", "Nigeria"],
+    "Océanie": ["Australia", "New Zealand"],
+}.items():
+    for _p in _pays:
+        _COUNTRY_CONTINENT[_p] = _cont
+
+def _norm_nom(s):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(s).lower()) if unicodedata.category(c) != "Mn")
+
+def _continent_split(nom, country):
+    """({continent: %}, estimé_par_ref) : ventilation des revenus d'une valeur par continent."""
+    n = _norm_nom(nom)
+    for key, split in _REVENUS_CONTINENT_REF.items():
+        if key in n:
+            tot = float(sum(split.values())) or 1.0
+            return {k: v / tot * 100 for k, v in split.items()}, True
+    cont = _COUNTRY_CONTINENT.get(country)
+    return ({cont: 100.0} if cont else {"Non déterminé": 100.0}), False
+
+def _fmt_cap(v):
+    if v is None or v <= 0:
+        return "N/A"
+    if v >= 1e12:
+        return f"{v / 1e12:,.2f} Bn€".replace(",", " ").replace(".", ",")
+    if v >= 1e9:
+        return f"{v / 1e9:,.1f} Md€".replace(",", " ").replace(".", ",")
+    return f"{v / 1e6:,.0f} M€".replace(",", " ")
+
+_CAP_BUCKETS = [
+    ("Grandes (> 10 Md€)", 10e9, None),
+    ("Moyennes (2–10 Md€)", 2e9, 10e9),
+    ("Petites (300 M€–2 Md€)", 300e6, 2e9),
+    ("Très petites (< 300 M€)", 0.0, 300e6),
+]
+
+def _cap_bucket(mc, qt):
+    if qt in _ETF_QUOTE_TYPES:
+        return "ETF / fonds"
+    if mc is None or mc <= 0:
+        return "Capitalisation inconnue"
+    for label, lo, hi in _CAP_BUCKETS:
+        if mc >= lo and (hi is None or mc < hi):
+            return label
+    return "Capitalisation inconnue"
+
+_ALLOC_PAIR_HTML = r"""
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
+  html, body { margin: 0; padding: 0; background: transparent; height: 100%; }
+  #root { box-sizing: border-box; display: grid; gap: 8px 14px; justify-content: center; align-items: start; padding: 4px 2px;
+          grid-template-columns: 210px minmax(150px, 200px) 210px minmax(150px, 200px);
+          grid-template-areas: "pa la pb lb";
+          font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); }
+  #wa { grid-area: pa; } #wb { grid-area: pb; } #legA { grid-area: la; } #legS { grid-area: lb; }
+  .wrap { position: relative; width: 100%; }
+  .ttl { text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .6; margin-bottom: 2px; }
+  svg { width: 100%; max-width: 210px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
+  .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
+  .slice.dim { opacity: .28; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; cursor: pointer;
+         transition: opacity .18s ease, background .18s ease; -webkit-tap-highlight-color: transparent; }
+  .row.sel { background: rgba(127,127,127,.14); }
+  .row.dim { opacity: .4; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 10px; }
+  .nm { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pc { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12px; opacity: .85; }
+  text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
+  html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .mono { font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+  @media (max-width: 880px) {
+    #root { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "pa pb" "la lb"; gap: 6px 10px; }
+    svg { max-width: 200px; }
+    .nm { font-size: 12px; } .pc { font-size: 11px; } .row { padding: 4px 4px; gap: 6px; }
+  }
+</style>
+<div id="root">
+  <div class="wrap" id="wa"><div class="ttl">__TTL_L__</div><svg id="svgA" viewBox="0 0 240 240"></svg></div>
+  <div class="wrap" id="wb"><div class="ttl">__TTL_R__</div><svg id="svgS" viewBox="0 0 240 240"></svg></div>
+  <div id="legA"></div>
+  <div id="legS"></div>
+</div>
+<script>
+(function () {
+  var L = __L__, R = __R__, CL = __CL__, CR = __CR__, NL = __NL__, NR = __NR__;
+  var fg = '#334155';
+  try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
+  document.documentElement.style.setProperty('--fg', fg);
+
+  var NS = 'http://www.w3.org/2000/svg', C = 120, RAD = 104, r = 76, mute = 0;
+  var st = { t: null, i: -1 };
+  var svgA = document.getElementById('svgA'), svgS = document.getElementById('svgS');
+  var legA = document.getElementById('legA'), legS = document.getElementById('legS');
+
+  function layout(items) {
+    var MIN = 2.2, raw = items.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
+    var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
+    raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
+    return ang;
+  }
+  var angL = layout(L), angR = layout(R);
+  function pt(rad, a) { var t = (a - 90) * Math.PI / 180; return [C + rad * Math.cos(t), C + rad * Math.sin(t)]; }
+  function arc(s, e) {
+    var gap = (e - s) > 4 ? 0.5 : 0.15; s += gap; e -= gap;
+    if (e - s >= 359.9) e = s + 359.9;
+    var big = (e - s) > 180 ? 1 : 0, p0 = pt(RAD, s), p1 = pt(RAD, e), p2 = pt(r, e), p3 = pt(r, s);
+    return 'M' + p0 + 'A' + RAD + ',' + RAD + ' 0 ' + big + ' 1 ' + p1 + 'L' + p2 + 'A' + r + ',' + r + ' 0 ' + big + ' 0 ' + p3 + 'Z';
+  }
+  function el(n, at, parent) {
+    var e = document.createElementNS(NS, n);
+    for (var key in at) e.setAttribute(key, at[key]);
+    parent.appendChild(e); return e;
+  }
+  function cut(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+  function plural(n, w) { return n + ' ' + (n > 1 ? w[1] : w[0]); }
+  var AC = ['action', 'actions'];
+  function inter(a, b) { for (var i = 0; i < a.length; i++) if (b.indexOf(a[i]) >= 0) return true; return false; }
+
+  function toggle(t, i) {
+    if (st.t === t && st.i === i) st = { t: null, i: -1 }; else st = { t: t, i: i };
+    render();
+  }
+  function build(svg, items, ang, t) {
+    return items.map(function (d, i) {
+      var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice', 'data-t': t, 'data-i': i }, svg);
+      p.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
+      return p;
+    });
+  }
+  function center(svg) {
+    return [
+      el('text', { x: C, y: C - 26, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
+      el('text', { x: C, y: C - 2, 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 700, 'class': 'mono' }, svg),
+      el('text', { x: C, y: C + 16, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
+      el('text', { x: C, y: C + 32, 'text-anchor': 'middle', 'font-size': 10.5, opacity: .7 }, svg)
+    ];
+  }
+  function buildRows(leg, items, t) {
+    return items.map(function (d, i) {
+      var row = document.createElement('div'); row.className = 'row'; row.setAttribute('data-t', t); row.setAttribute('data-i', i);
+      row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
+      row.querySelector('.nm').textContent = d.n; row.title = d.n + ' — ' + d.v;
+      row.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
+      leg.appendChild(row); return row;
+    });
+  }
+  var slL = build(svgA, L, angL, 'l'), slR = build(svgS, R, angR, 'r');
+  var cL = center(svgA), cR = center(svgS);
+  var rowsL = buildRows(legA, L, 'l'), rowsR = buildRows(legS, R, 'r');
+
+  function paint(sl, ang, rows, isAct, on) {
+    sl.forEach(function (s, j) {
+      var a = on && isAct(j);
+      s.setAttribute('class', 'slice' + (on && !a ? ' dim' : ''));
+      if (a) {
+        var m = (ang[j][0] + ang[j][1]) / 2 * Math.PI / 180;
+        s.style.transform = 'translate(' + (Math.sin(m) * 5) + 'px,' + (-Math.cos(m) * 5) + 'px)';
+      } else { s.style.transform = ''; }
+    });
+    rows.forEach(function (rw, j) {
+      var a = on && isAct(j);
+      rw.className = 'row' + (a ? ' sel' : '') + (on && !a ? ' dim' : '');
+    });
+  }
+  function txt(c, a, b, d, e) { c[0].textContent = a; c[1].textContent = b; c[2].textContent = d; c[3].textContent = e; }
+  function show(c, d) { txt(c, cut(d.n, 20), d.v, d.pt + ' %', plural(d.m.length, AC)); }
+
+  function render() {
+    var on = st.t !== null, actL = {}, actR = {};
+    if (st.t === 'l') {
+      actL[st.i] = 1;
+      R.forEach(function (it, j) { if (inter(it.m, L[st.i].m)) actR[j] = 1; });
+    } else if (st.t === 'r') {
+      actR[st.i] = 1;
+      L.forEach(function (it, j) { if (inter(it.m, R[st.i].m)) actL[j] = 1; });
+    }
+    paint(slL, angL, rowsL, function (j) { return !!actL[j]; }, on);
+    paint(slR, angR, rowsR, function (j) { return !!actR[j]; }, on);
+    if (!on) { txt(cL, CL[0], CL[1], CL[2], CL[3]); txt(cR, CR[0], CR[1], CR[2], CR[3]); return; }
+    var selL = st.t === 'l', sel = selL ? L[st.i] : R[st.i];
+    show(selL ? cL : cR, sel);
+    var oth = selL ? R : L, oact = selL ? actR : actL, ids = Object.keys(oact);
+    if (ids.length === 1) show(selL ? cR : cL, oth[+ids[0]]);
+    else txt(selL ? cR : cL, 'Lié à ' + cut(sel.n, 14), plural(ids.length, selL ? NR : NL), '', '');
+  }
+  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t !== null) { st = { t: null, i: -1 }; render(); } });
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  var timer = null, scrub = false, sx = 0, sy = 0;
+  function hitAt(x, y) {
+    var e = document.elementFromPoint(x, y);
+    while (e && e !== document.body) {
+      var v = e.getAttribute && e.getAttribute('data-i');
+      if (v !== null && v !== undefined) return { t: e.getAttribute('data-t'), i: +v };
+      e = e.parentNode;
+    }
+    return null;
+  }
+  function stopHold() { if (timer) { clearTimeout(timer); timer = null; } if (scrub) { scrub = false; mute = Date.now() + 450; } }
+  document.addEventListener('touchstart', function (e) {
+    stopHold();
+    if (e.touches.length !== 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    if (!hitAt(sx, sy)) return;
+    timer = setTimeout(function () {
+      timer = null; scrub = true;
+      if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
+      var h = hitAt(sx, sy); if (h) { st = h; render(); }
+    }, 250);
+  }, { passive: true });
+  document.addEventListener('touchmove', function (e) {
+    var t = e.touches[0];
+    if (scrub) {
+      e.preventDefault();
+      var h = hitAt(t.clientX, t.clientY);
+      if (h && (h.t !== st.t || h.i !== st.i)) { st = h; render(); }
+    } else if (timer && (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10)) {
+      clearTimeout(timer); timer = null;
+    }
+  }, { passive: false });
+  document.addEventListener('touchend', stopHold, { passive: true });
+  document.addEventListener('touchcancel', stopHold, { passive: true });
+
+  function fit() {
+    try {
+      var rt = document.getElementById('root');
+      var h = Math.ceil(rt.getBoundingClientRect().height) + 10;
+      try { window.frameElement.style.height = h + 'px'; }
+      catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
+    } catch (e) {}
+  }
+  render(); fit();
+  window.addEventListener('resize', fit); setTimeout(fit, 150);
+})();
+</script>
+"""
+
+def _render_allocation_geo(df_active):
+    """Deux camemberts liés : revenus par continent (gauche) et tranche de capitalisation (droite). Un clic sur un
+    continent surligne les tranches de capitalisation des sociétés qui y réalisent du chiffre d'affaires, et
+    inversement. Valeurs en € = part du portefeuille concernée."""
+    import streamlit.components.v1 as components
+    rows = []
+    if df_active is not None and not df_active.empty:
+        for _, r in df_active.iterrows():
+            v = float(r["Valeur Actuelle (€)"])
+            if v > 0:
+                rows.append((str(r["Nom"]), str(r["Ticker"]), v, r.get("Pays")))
+    if not rows:
+        st.info("Aucune position à répartir pour le moment.")
+        return
+    total = sum(x[2] for x in rows)
+    _pct_txt = lambda p: f"{p:.2f}".replace(".", ",")
+
+    # --- Continents (valeur du portefeuille ventilée selon la répartition des revenus de chaque société)
+    cont_val, cont_mem, n_est, fallback_noms = {}, {}, 0, []
+    for idx, (nom, tick, v, pays) in enumerate(rows):
+        split, is_ref = _continent_split(nom, pays)
+        if not is_ref:
+            fallback_noms.append(nom)
+        for cont, p in split.items():
+            cont_val[cont] = cont_val.get(cont, 0.0) + v * p / 100.0
+            cont_mem.setdefault(cont, []).append(idx)
+    cont_order = sorted(cont_val, key=lambda k: -cont_val[k])
+    L = [{"n": k, "v": fmt_eur(cont_val[k]), "pct": cont_val[k] / total * 100, "pt": _pct_txt(cont_val[k] / total * 100),
+          "c": _alloc_color(i), "m": cont_mem[k]} for i, k in enumerate(cont_order)]
+
+    # --- Capitalisation
+    bucket_val, bucket_mem, cap_total, n_cap = {}, {}, 0.0, 0
+    for idx, (nom, tick, v, pays) in enumerate(rows):
+        mc, qt, _cur = get_ticker_marketcap(tick)
+        b = _cap_bucket(mc, qt)
+        bucket_val[b] = bucket_val.get(b, 0.0) + v
+        bucket_mem.setdefault(b, []).append(idx)
+        if mc and qt not in _ETF_QUOTE_TYPES:
+            cap_total += float(mc)
+            n_cap += 1
+    order_cap = [b[0] for b in _CAP_BUCKETS] + ["ETF / fonds", "Capitalisation inconnue"]
+    cap_order = [b for b in order_cap if b in bucket_val]
+    R = [{"n": k, "v": fmt_eur(bucket_val[k]), "pct": bucket_val[k] / total * 100, "pt": _pct_txt(bucket_val[k] / total * 100),
+          "c": _alloc_color(i + 3), "m": bucket_mem[k]} for i, k in enumerate(cap_order)]
+
+    def _js(o):
+        return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
+    CL = ["Total portefeuille", fmt_eur(total), f"{len(L)} continent{'s' if len(L) > 1 else ''}", ""]
+    CR = ["Capitalisation cumulée", _fmt_cap(cap_total) if n_cap else "N/A", f"{n_cap} société{'s' if n_cap > 1 else ''}", "(hors ETF)"]
+    page = (_ALLOC_PAIR_HTML
+            .replace("__TTL_L__", "Revenus par continent").replace("__TTL_R__", "Par capitalisation")
+            .replace("__L__", _js(L)).replace("__R__", _js(R)).replace("__CL__", _js(CL)).replace("__CR__", _js(CR))
+            .replace("__NL__", _js(["continent", "continents"])).replace("__NR__", _js(["tranche", "tranches"])))
+    components.html(page, height=260 + 32 * max(len(L), len(R)))
+    note = ("ℹ️ Les revenus par continent sont des **estimations** (ordres de grandeur issus des rapports annuels) pour "
+            "les valeurs suivies dans `_REVENUS_CONTINENT_REF` ; pour les autres, c'est le continent du siège social "
+            "qui est utilisé (Yahoo Finance ne fournit pas la ventilation du chiffre d'affaires).")
+    if fallback_noms:
+        note += " Siège social retenu pour : " + ", ".join(fallback_noms) + "."
+    st.caption(note)
+
+
 def _progress_bar_html(pct, gradient, glow_color, texte):
     """Barre de progression pleine largeur (objectif, net conservé après retrait)."""
     pct_c = max(0.0, min(float(pct), 100.0))
@@ -2734,17 +3133,21 @@ class _TickerInfoStore:
             self.data = {}
 
     def lookup(self, ticker):
+        """Renvoie le dict mémorisé (sector, country, mc, qt, cur) s'il est frais ET complet, sinon None.
+        Les anciennes entrées (sans « qt » = type de produit) ou celles dont le secteur vaut « Autre » sans
+        être un ETF sont ignorées : elles proviennent d'une réponse Yahoo incomplète (limitation de débit)
+        et étaient la cause de l'affichage « tout en Autre » dans la répartition par secteur."""
         entry = self.data.get(ticker)
         try:
-            if entry and (time_module.time() - float(entry.get("ts", 0))) < _TICKER_INFO_MAX_AGE:
-                return entry["sector"], entry["country"]
+            if entry and (time_module.time() - float(entry.get("ts", 0))) < _TICKER_INFO_MAX_AGE and "qt" in entry:
+                return entry
         except Exception:
             pass
         return None
 
-    def save(self, ticker, sector, country):
+    def save(self, ticker, entry):
         with self.lock:
-            self.data[ticker] = {"sector": sector, "country": country, "ts": time_module.time()}
+            self.data[ticker] = dict(entry, ts=time_module.time())
             try:
                 tmp_path = self.path + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
@@ -2766,23 +3169,67 @@ class _TickerInfoStore:
 def _ticker_info_store():
     return _TickerInfoStore(_TICKER_INFO_FILE)
 
-@st.cache_data(ttl=86400)
+import threading as _threading_info
+# Au plus 4 requêtes « info » simultanées vers Yahoo : le préchargement lance ~20 threads en parallèle,
+# ce qui déclenchait la limitation de débit (réponse vide) -> secteur « Autre » pour toutes les valeurs.
+_INFO_SEMAPHORE = _threading_info.Semaphore(4)
+_ETF_QUOTE_TYPES = ("ETF", "MUTUALFUND", "INDEX")
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _fetch_info_full(ticker):
+    """Secteur, pays, capitalisation boursière et type de produit d'une valeur (une seule requête Yahoo).
+    LÈVE une exception si Yahoo ne répond pas correctement : st.cache_data ne mémorise jamais une
+    exception, donc un échec passager n'est plus figé pendant 24 h (c'était la cause du « tout en Autre »)."""
+    _known = _ticker_info_store().lookup(ticker)
+    if _known is not None:
+        return {k: _known.get(k) for k in ("sector", "country", "mc", "qt", "cur")}
+    info = None
+    last_exc = None
+    for attempt in range(3):
+        try:
+            with _INFO_SEMAPHORE:
+                info = yf.Ticker(ticker).info
+            if isinstance(info, dict) and len(info) >= 5:
+                break
+            info = None
+        except Exception as exc:
+            last_exc = exc
+            info = None
+        time_module.sleep(0.8 * (attempt + 1))
+    if info is None:
+        raise RuntimeError(f"info indisponible pour {ticker}: {last_exc}")
+    qt = str(info.get("quoteType") or "").upper()
+    sector = info.get("sector") or ("ETF / Fonds" if qt in _ETF_QUOTE_TYPES else "Autre")
+    out = {
+        "sector": sector,
+        "country": info.get("country") or "Inconnu",
+        "mc": info.get("marketCap"),
+        "qt": qt or "EQUITY",
+        "cur": info.get("currency"),
+    }
+    # On n'écrit sur disque que les réponses réellement complètes (secteur connu, ou ETF).
+    if info.get("sector") or qt in _ETF_QUOTE_TYPES:
+        _ticker_info_store().save(ticker, out)
+    return out
+
 def get_ticker_info(ticker):
     if not ticker or ticker in _FAILED_TICKERS:
         return "Autre", "Inconnu"
-    _known = _ticker_info_store().lookup(ticker)
-    if _known is not None:
-        return _known
     try:
-        t = yf.Ticker(ticker)
-        info = t.info
-        sector = info.get("sector", "Autre")
-        country = info.get("country", "Inconnu")
-        if isinstance(info, dict) and len(info) >= 5:
-            _ticker_info_store().save(ticker, sector, country)
-        return sector, country
+        d = _fetch_info_full(ticker)
+        return d["sector"], d["country"]
     except Exception:
         return "Autre", "Inconnu"
+
+def get_ticker_marketcap(ticker):
+    """(capitalisation en €, type de produit, devise) ; capitalisation None pour un ETF / si inconnue."""
+    if not ticker or ticker in _FAILED_TICKERS:
+        return None, "", None
+    try:
+        d = _fetch_info_full(ticker)
+        return d.get("mc"), d.get("qt") or "", d.get("cur")
+    except Exception:
+        return None, "", None
 
 @st.cache_data(ttl=3600)
 def get_historical_price_at(ticker, target_date):
@@ -3275,6 +3722,9 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
         pnl_round_trips = []
         first_buy_date = None
         sold_out_date = None
+        cycle_start = None          # début du cycle de détention en cours (achat sur ligne à 0 titre)
+        secondes_detention = 0.0     # temps de détention exact cumulé (en secondes)
+        jours_detenus = set()        # jours calendaires où au moins un titre était détenu (comptés une seule fois)
         total_commissions_ticker = 0
         total_ttf_ticker = 0
         nb_mouvements_ticker = 0
@@ -3294,6 +3744,8 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
             if t == "ACHAT":
                 if first_buy_date is None:
                     first_buy_date = row["Date_Heure"]
+                if cycle_start is None:
+                    cycle_start = row["Date_Heure"]
                 sold_out_date = None
                 total_shares += qty
                 total_invested += (qty * p) + f
@@ -3316,6 +3768,12 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
                     total_invested = total_shares * current_pru
                     if total_shares <= 0.0001:
                         sold_out_date = row["Date_Heure"]
+                        if cycle_start is not None:
+                            # Cycle terminé : tous ses jours (début et fin inclus) sont détenus. Un aller-retour
+                            # dans la même journée = 1 jour ; un second aller-retour un autre jour = 2 au total.
+                            jours_detenus.update(pd.date_range(pd.Timestamp(cycle_start).normalize(), pd.Timestamp(row["Date_Heure"]).normalize()))
+                            secondes_detention += max((pd.Timestamp(row["Date_Heure"]) - pd.Timestamp(cycle_start)).total_seconds(), 0.0)
+                            cycle_start = None
             elif t == "SPLIT":
                 _rompu_deja_compte = False
                 # Un rompu dont la date de versement (Date_Rompus) est encore dans le futur n'a
@@ -3421,10 +3879,17 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
                 "Gain Total Global (€)": total_gain_with_div,
                 "Performance (%)": perf_pct,
                 "Performance Active (%)": active_perf_pct,
-                "Jours Détention": (
-                    max((((sold_out_date if (total_shares <= 0.0001 and sold_out_date is not None)
-                           else (target_datetime if is_historical_check else _now_paris())) - first_buy_date).days), 0)
-                    if first_buy_date is not None else 0
+                "Jours Détention": len(
+                    jours_detenus.union(
+                        pd.date_range(pd.Timestamp(cycle_start).normalize(),
+                                      max(pd.Timestamp(target_datetime if is_historical_check else _now_paris()).normalize(),
+                                          pd.Timestamp(cycle_start).normalize()))
+                        if (cycle_start is not None and total_shares > 0.0001) else []
+                    )
+                ),
+                "Secondes Détention": secondes_detention + (
+                    max((pd.Timestamp(target_datetime if is_historical_check else _now_paris()) - pd.Timestamp(cycle_start)).total_seconds(), 0.0)
+                    if (cycle_start is not None and total_shares > 0.0001) else 0.0
                 ),
                 "Commission Pct": comm_pct_val,
                 "TTF Pct": total_ttf_ticker,
@@ -5875,10 +6340,14 @@ if _tab_open(tab_overview):
                 st.markdown("<p class='dashboard-section-title'>💰 Capital & Investissement</p>", unsafe_allow_html=True)
                 with st.container(key="row_capital_wrap"):
                     r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
-                    r1_c1.metric("Valeur Actuelle", fmt_eur(tot_value_globale))
-                    r1_c2.metric("Montant Investi", fmt_eur(tot_invested))
-                    r1_c3.metric("Cash Disponible", fmt_eur(poche_especes))
-                    r1_c4.metric("Total Apports", fmt_eur(apports_totaux))
+                    r1_c1.metric("Valeur Actuelle", fmt_eur(tot_value_globale),
+                                 help="Valeur totale du PEA aujourd'hui : actions et ETF valorisés au cours en direct, plus le cash disponible.")
+                    r1_c2.metric("Montant Investi", fmt_eur(tot_invested),
+                                 help="Capital actuellement investi dans les titres encore détenus (PRU net × quantité, frais inclus). Les positions soldées ne sont pas comptées.")
+                    r1_c3.metric("Cash Disponible", fmt_eur(poche_especes),
+                                 help="Liquidités du PEA non investies : apports, produits de ventes et dividendes, moins les achats, frais et retraits.")
+                    r1_c4.metric("Total Apports", fmt_eur(apports_totaux),
+                                 help="Total des versements nets depuis l'ouverture (apports moins retraits). Le plafond de versements du PEA est de 150 000 €.")
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>📈 Performances</p>", unsafe_allow_html=True)
                 with st.container(key="row_perf_wrap"):
@@ -5891,28 +6360,50 @@ if _tab_open(tab_overview):
                         _perf_an_txt = fmt_perf_text_only(_perf_an_moy)
                     else:
                         _perf_an_txt = "N/A"
-                    # Une seule rangée de 5 colonnes : sur ordinateur tout tient sur une ligne ; sur téléphone
-                    # elles passent 2 par ligne (Globale|Annuelle, YTD|Mois) et la dernière occupe toute la largeur.
-                    r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
-                    r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules))
-                    r2_c2.metric("Performance Annuelle Moyenne", _perf_an_txt)
-                    r2_c3.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr))
-                    r2_c4.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo))
-                    r2_c5.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
+                    # Rangée 1 : Globale | YTD ; rangée 2 : Mois | Jour ; puis la performance annuelle moyenne
+                    # centrée sur toute la largeur.
+                    r2_c1, r2_c2 = st.columns(2)
+                    r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules),
+                                 help="Le % = gains cumulés depuis l'ouverture (plus-values latentes + actées + dividendes) ÷ total des apports nets. Le montant sous le % est ce gain en €.")
+                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr),
+                                 help="Le % = gain depuis le 1er janvier (latent + actée + dividendes) ÷ valeur du portefeuille au 31 décembre précédent. Le montant est ce gain en €.")
+                    r2b_c1, r2b_c2 = st.columns(2)
+                    r2b_c1.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo),
+                                  help="Le % = gain depuis le 1er du mois ÷ valeur du portefeuille à la fin du mois précédent. Le montant est ce gain en €.")
+                    r2b_c2.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j),
+                                  help="Le % = gain du jour ÷ valeur du portefeuille à la clôture de la veille (hors apports et retraits). Le montant est ce gain en €.")
+                    # Gain moyen par an en € (gain total cumulé ramené à une année), affiché sur la flèche.
+                    _gain_an_moy = (total_gains_cumules / _ans_pea) if _ans_pea >= 0.25 else None
+                    with st.container(key="center_metric_perf_an"):
+                        st.metric("Performance Annuelle Moyenne", _perf_an_txt,
+                                  delta=(_delta(_gain_an_moy) if _gain_an_moy is not None else None),
+                                  help="Le % = performance globale ramenée à un taux annuel composé depuis l'ouverture du PEA (disponible après 3 mois). Le montant = gain moyen par an en €.")
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>🏷️ Plus-values, Dividendes & Frais</p>", unsafe_allow_html=True)
                 with st.container(key="row_gains_wrap"):
-                    r3_c1, r3_c2, r3_c3, r3_c4, r3_c5 = st.columns(5)
+                    r3_c1, r3_c2 = st.columns(2)
                     # Plus-Value Latente : gain latent rapporté au capital actuellement investi dans les
                     # actions détenues (tot_invested = PRU × quantités en portefeuille aujourd'hui).
                     pct_latente = (global_pnl / tot_invested * 100) if tot_invested > 0 else 0.0
                     # Plus-Value Actée : gain déjà réalisé rapporté à la valeur totale actuelle du
                     # portefeuille (actions + poche espèces).
                     pct_actee = (tot_realized_pnl / tot_value_globale * 100) if tot_value_globale > 0 else 0.0
-                    r3_c1.metric("Plus-Value Latente", fmt_eur(global_pnl), delta=(f"{pct_latente:+,.2f}%".replace(",", " ").replace(".", ",")))
-                    r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")))
-                    r3_c3.metric("Dividendes Reçus", fmt_eur(net_divs_total))
-                    r3_c4.metric("Frais Totaux", fmt_eur(tot_fees))
+                    r3_c1.metric("Plus-Value Latente", fmt_eur(global_pnl), delta=(f"{pct_latente:+,.2f}%".replace(",", " ").replace(".", ",")),
+                                 help="Gain non encore réalisé sur les titres détenus (valeur actuelle − capital investi). Le % est rapporté au capital investi dans ces titres.")
+                    r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")),
+                                 help="Gain déjà encaissé grâce aux ventes (net de frais, base PRU). Le % est rapporté à la valeur totale actuelle du portefeuille (actions + cash).")
+                    r3b_c1, r3b_c2 = st.columns(2)
+                    # % pertinent pour les dividendes et les frais : rapportés au total des apports nets (l'argent
+                    # réellement sorti de la poche), comme la performance globale -> directement comparables entre eux.
+                    pct_div_apports = (net_divs_total / apports_totaux * 100) if apports_totaux > 0 else None
+                    pct_frais_apports = (tot_fees / apports_totaux * 100) if apports_totaux > 0 else None
+                    r3b_c1.metric("Dividendes Reçus", fmt_eur(net_divs_total),
+                                  delta=(f"{pct_div_apports:+,.2f}%".replace(",", " ").replace(".", ",") if pct_div_apports is not None else None),
+                                  help="Dividendes et rompus nets perçus depuis l'ouverture (après retenue à la source). Le % = dividendes ÷ total des apports nets : la part de vos versements récupérée sous forme de dividendes.")
+                    r3b_c2.metric("Frais Totaux", fmt_eur(tot_fees),
+                                  delta=(f"{pct_frais_apports:.2f}% des apports".replace(".", ",") if pct_frais_apports is not None else None),
+                                  delta_color="off",
+                                  help="Courtage et TTF payés à l'achat et à la vente depuis l'ouverture. Le % = frais ÷ total des apports nets : ce que les frais ont coûté par rapport à l'argent versé.")
 
                     # Rendement moyen des dividendes sur le capital investi : dividendes nets perçus, ramenés à
                     # une année (si le PEA a plus de 3 mois), rapportés au capital actuellement investi.
@@ -5923,7 +6414,12 @@ if _tab_open(tab_overview):
                         _rend_moy_txt = f"{_rend_moy:.2f} %".replace(".", ",")
                     else:
                         _rend_moy_txt = "N/A"
-                    r3_c5.metric("Rendement Moyen des Dividendes", _rend_moy_txt)
+                    # Dividendes moyens perçus par an en € (sur la flèche), comme les autres montants.
+                    _div_an_moy = (net_divs_total / _ans_div) if _ans_div >= 0.25 else None
+                    with st.container(key="center_metric_rend_div"):
+                        st.metric("Rendement Moyen des Dividendes", _rend_moy_txt,
+                                  delta=(_delta(_div_an_moy) if _div_an_moy is not None else None),
+                                  help="Le % = dividendes nets perçus ramenés à une année (après 3 mois d'historique) ÷ capital actuellement investi. Le montant = dividendes moyens perçus par an en €.")
 
         # --- Alerte watchlist : valeurs suivies proches de leur zone d'achat (voir l'onglet
         # "👁️ Watchlist"). Déplacée au-dessus de "Vue d'ensemble du Portefeuille", au même endroit
@@ -6270,12 +6766,31 @@ if _tab_open(tab_positions):
                 ]
                 df_active["Var Jour (%)"] = [(_vj[t][1]) if _vj.get(t) else np.nan for t in df_active["Ticker"]]
                 df_active["Ancienneté (jours)"] = df_active["Jours Détention"] if "Jours Détention" in df_active.columns else np.nan
+                # PRU ajusté : capital encore investi, diminué des dividendes perçus et des plus-values déjà
+                # actées sur la ligne (ventes), rapporté à la quantité détenue.
+                _gains_recup = df_active["Dividendes Reçus (€)"].fillna(0) + df_active["Gain Réalisé (€)"].fillna(0)
+                _pru_aj = (df_active["Capital Investi (€)"] - _gains_recup) / df_active["Quantité"].replace(0, np.nan)
+                df_active["PRU ajusté"] = [
+                    "N/A" if pd.isna(pa) else fmt_price_dynamic(max(pa, 0.0)) for pa in _pru_aj
+                ]
+                # Performance par rapport au PRU ajusté (np.inf = ligne entièrement « gratuite »).
+                df_active["Perf. PRU ajusté (%)"] = [
+                    np.nan if (pd.isna(pa) or pd.isna(px)) else (np.inf if pa <= 0 else (px - pa) / pa * 100)
+                    for pa, px in zip(_pru_aj, df_active["Prix Actuel (€)"])
+                ]
+                df_active["Perf. annuelle moy. (%)"] = [
+                    _perf_annualisee(pf, j) for pf, j in zip(df_active["Performance Active (%)"], df_active["Jours Détention"])
+                ]
+                df_active["Détention (jour)"] = [
+                    _fmt_duree_detention(j, sec) for j, sec in zip(df_active["Jours Détention"], df_active["Secondes Détention"])
+                ]
 
                 cols_to_keep = [
                     'Nom', 'Quantité', 'PRU Net (€)', 'Prix Actuel (€)',
                     'Var Jour (%)',
-                    'Valeur Actuelle (€)', 'Gain Latent (€)', 'Gain Réalisé (€)',
-                    'Dividendes Reçus (€)', 'Performance Active (%)', 'Ancienneté (jours)'
+                    'Valeur Actuelle (€)', 'Gain Latent (€)', 'Performance Active (%)',
+                    'Gain Réalisé (€)', 'Dividendes Reçus (€)',
+                    'PRU ajusté', 'Perf. PRU ajusté (%)', 'Détention (jour)', 'Perf. annuelle moy. (%)'
                 ]
 
                 existing_cols = [c for c in cols_to_keep if c in df_active.columns]
@@ -6323,15 +6838,17 @@ if _tab_open(tab_positions):
                 if "Performance (%)" in df_active_fmt.columns:
                     df_active_fmt["Performance (%)"] = df_active_fmt["Performance (%)"].apply(lambda x: fmt_perf(x))
 
-                if "Ancienneté (jours)" in df_active_fmt.columns:
-                    df_active_fmt["Ancienneté (jours)"] = df_active_fmt["Ancienneté (jours)"].apply(
-                        lambda x: "N/A" if pd.isna(x) else f"{int(x)}")
+                if "Perf. PRU ajusté (%)" in df_active_fmt.columns:
+                    df_active_fmt["Perf. PRU ajusté (%)"] = df_active_fmt["Perf. PRU ajusté (%)"].apply(
+                        lambda x: "Gratuite" if (not pd.isna(x) and np.isinf(x)) else fmt_perf(x))
+                if "Perf. annuelle moy. (%)" in df_active_fmt.columns:
+                    df_active_fmt["Perf. annuelle moy. (%)"] = df_active_fmt["Perf. annuelle moy. (%)"].apply(fmt_perf)
 
                 # Affichage de toutes les lignes sans barre de scroll (height dynamique selon le nombre de lignes)
                 row_height = 35
                 header_height = 40
                 total_height = header_height + (len(df_active_fmt) + 1) * row_height + 20  # +1 ligne : le Total
-                _cols_fleche_active = [c for c in ["Performance (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
+                _cols_fleche_active = [c for c in ["Performance (%)", "Perf. PRU ajusté (%)", "Perf. annuelle moy. (%)", "Gain Latent (€)", "Gain Réalisé (€)"]
                                        if c in df_active_fmt.columns]
                 def _style_prix_actif(v):
                     sv = str(v)
@@ -6356,6 +6873,12 @@ if _tab_open(tab_positions):
                 _tot_act["Gain Réalisé (€)"] = fmt_eur_arrow(_t_gr)
                 _tot_act["Dividende Reçu (€)"] = fmt_eur(_t_div)
                 _tot_act["Performance (%)"] = fmt_perf(_t_gl / _t_cap * 100) if _t_cap > 0 else "N/A"
+                # Perf. sur PRU ajusté (ensemble) : valeur actuelle vs capital net des dividendes et gains actés.
+                _t_cout_aj = _t_cap - _t_div - _t_gr
+                if _t_cap > 0:
+                    _tot_act["Perf. PRU ajusté (%)"] = fmt_perf((_t_val - _t_cout_aj) / _t_cout_aj * 100) if _t_cout_aj > 0 else "Gratuite"
+                    _jw = float((df_active["Jours Détention"].fillna(0) * df_active["Capital Investi (€)"].fillna(0)).sum()) / _t_cap
+                    _tot_act["Perf. annuelle moy. (%)"] = fmt_perf(_perf_annualisee(_t_gl / _t_cap * 100, _jw))
                 _t_vj = _som_act("Var Jour (€)")
                 _t_val_veille = _t_val - _t_vj
                 _tot_act["Prix actuel (€)"] = f"({fmt_perf(_t_vj / _t_val_veille * 100)})" if _t_val_veille > 0 else ""
@@ -6366,12 +6889,15 @@ if _tab_open(tab_positions):
                                              else ""),
                     max_height=min(max(total_height, 100), 1000),
                     total_row=_tot_act,
+                    sticky_col="Nom",
                 )
             else:
                 st.info("Aucune position active pour le moment.")
 
         with st.expander("🥧 Répartition du portefeuille", expanded=True):
             _render_allocation(df_active, poche_especes)
+            st.markdown("<hr style='margin: 14px 0 8px 0;'>", unsafe_allow_html=True)
+            _render_allocation_geo(df_active)
 
         with st.expander("📜 Détail complet des transactions", expanded=True):
             if not df_transactions.empty:
@@ -6762,14 +7288,18 @@ if _tab_open(tab_positions):
                 # Retour à la "Performance (%)" (à la demande) à la place du YoC, et ajout d'une
                 # colonne "Nombre de mouvements" (nombre d'ACHATs + VENTEs sur la valeur) pour
                 # visualiser d'un coup d'œil l'activité de chaque ligne du classement.
-                df_gain_rank = df_port[['Nom', 'Capital Investi (€)', 'Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)', 'Performance (%)', 'Nb Mouvements', 'Jours Détention']].copy()
+                df_gain_rank = df_port[['Nom', 'Capital Investi (€)', 'Gain Réalisé (€)', 'Gain Latent (€)', 'Dividendes Reçus (€)', 'Gain Total Global (€)', 'Performance (%)', 'Nb Mouvements', 'Jours Détention', 'Secondes Détention']].copy()
                 df_gain_rank = df_gain_rank.rename(columns={'Nb Mouvements': 'Nombre de mouvements',
-                                                            'Jours Détention': 'Durée de détention (jours)'})
+                                                            'Jours Détention': 'Détention (jour)'})
 
                 df_gain_rank = df_gain_rank.sort_values(by='Gain Total Global (€)', ascending=False).reset_index(drop=True)
+                df_gain_rank.insert(
+                    df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Perf. annuelle moy. (%)',
+                    [_perf_annualisee(pf, j) for pf, j in zip(df_gain_rank['Performance (%)'], df_gain_rank['Détention (jour)'])]
+                )
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
-                df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)']).copy()
+                df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)', 'Secondes Détention']).copy()
                 # Même présentation que « Détail des Positions Actives » : chiffres colorés (▲ vert / ▼ rouge) sur
                 # les gains et la performance, dividendes en simple montant, une ligne grise sur deux (CSS du
                 # tableau) ; plus aucun dégradé de couleur sur le nom de l'action (gris uniquement).
@@ -6777,10 +7307,13 @@ if _tab_open(tab_positions):
                     df_gain_rank_fmt[col] = df_gain_rank_fmt[col].apply(fmt_eur_arrow)
                 df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
-                df_gain_rank_fmt['Durée de détention (jours)'] = df_gain_rank_fmt['Durée de détention (jours)'].apply(
-                    lambda x: "N/A" if pd.isna(x) else f"{int(x)}")
+                df_gain_rank_fmt['Perf. annuelle moy. (%)'] = df_gain_rank_fmt['Perf. annuelle moy. (%)'].apply(fmt_perf_simple)
+                df_gain_rank_fmt['Détention (jour)'] = [
+                    _fmt_duree_detention(j, sec)
+                    for j, sec in zip(df_gain_rank['Détention (jour)'], df_gain_rank['Secondes Détention'])
+                ]
 
-                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)']
+                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)', 'Perf. annuelle moy. (%)']
                 # Ligne Total : somme de chaque colonne sur toutes les actions du classement. La performance n'est pas
                 # totalisée ici (la base de calcul diffère selon que la position est ouverte ou soldée).
                 _tot_rank = {c: "" for c in df_gain_rank_fmt.columns}
@@ -6789,6 +7322,16 @@ if _tab_open(tab_positions):
                 _tot_rank['Gain Latent (€)'] = fmt_eur_arrow(df_gain_rank['Gain Latent (€)'].sum())
                 _tot_rank['Dividendes Reçus (€)'] = fmt_eur(df_gain_rank['Dividendes Reçus (€)'].sum())
                 _tot_rank['Gain Total Global (€)'] = fmt_eur_arrow(df_gain_rank['Gain Total Global (€)'].sum())
+                # Performance globale : gain total / base implicite de chaque ligne (gain ÷ performance).
+                _pf = pd.to_numeric(df_gain_rank['Performance (%)'], errors="coerce")
+                _gt = pd.to_numeric(df_gain_rank['Gain Total Global (€)'], errors="coerce")
+                _ok = _pf.notna() & (_pf.abs() > 1e-9) & _gt.notna()
+                _bases = (_gt[_ok] / _pf[_ok] * 100).where(lambda b: b > 0).dropna()
+                if len(_bases) > 0 and _bases.sum() > 0:
+                    _perf_tot = float(_gt[_bases.index].sum() / _bases.sum() * 100)
+                    _jtot = float((pd.to_numeric(df_gain_rank['Détention (jour)'], errors="coerce").fillna(0)[_bases.index] * _bases).sum() / _bases.sum())
+                    _tot_rank['Performance (%)'] = fmt_perf_simple(_perf_tot)
+                    _tot_rank['Perf. annuelle moy. (%)'] = fmt_perf_simple(_perf_annualisee(_perf_tot, _jtot))
                 _tot_rank['Nombre de mouvements'] = str(int(pd.to_numeric(df_gain_rank['Nombre de mouvements'], errors="coerce").fillna(0).sum()))
                 _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank])).iloc[0].to_dict()
                 _tot_rank["N°"] = ""
@@ -6796,6 +7339,7 @@ if _tab_open(tab_positions):
                     _dash_if_empty(df_gain_rank_fmt),
                     cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_rank else "",
                     total_row=_tot_rank,
+                    sticky_col="Nom",
                 )
             else:
                 st.info("Aucune donnée disponible pour le classement des gains.")
@@ -9540,7 +10084,7 @@ def _render_sim_epargne(valeur_depart):
                 )
                 c7, _c8 = st.columns(2)
                 taux_ret = c7.number_input(
-                    "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25, value=3.0, key="k_rp_retrait",
+                    "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25, value=4.0, key="k_rp_retrait",
                     help="Part du capital net retirée chaque année pour le revenu passif.",
                 )
             _fiable = "" if annees_ecoulees >= 1 else " ⚠️ historique court, peu fiable"
