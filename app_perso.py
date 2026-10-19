@@ -2863,7 +2863,7 @@ _ALLOC4_HTML = r"""
 
   function fit() {
     try {
-      var h = Math.ceil(Math.max(rootEl.getBoundingClientRect().height, rootEl.scrollHeight, document.documentElement.scrollHeight)) + 28;
+      var h = Math.ceil(rootEl.getBoundingClientRect().height) + 16;
       try { window.frameElement.style.height = h + 'px'; }
       catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
     } catch (e) {}
@@ -3060,7 +3060,7 @@ def _render_jauge_pea(total_verse, plafond):
 
 _FAILED_TICKERS = set()  # se remplit automatiquement avec les tickers dont le cours est introuvable
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def _get_live_price_real(ticker):
     if not ticker or ticker in _FAILED_TICKERS:
         return None
@@ -3086,7 +3086,7 @@ def _get_live_price_real(ticker):
         _FAILED_TICKERS.add(ticker)
         return None
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_previous_close(ticker):
     """Clôture de la séance précédente donnée par Yahoo (fast_info). Sert uniquement à combler la clôture de la
     veille quand la bougie journalière correspondante manque dans l'historique."""
@@ -3204,6 +3204,39 @@ def _fetch_info_full(ticker):
         _ticker_info_store().save(ticker, out)
     return out
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_info_fallback(ticker):
+    """Repli quand la page « info » de Yahoo ne répond pas (limitation de débit, blocage du serveur) : type de produit,
+    devise et capitalisation via d'autres points d'accès (fast_info / métadonnées de l'historique de cours)."""
+    mc = qt = cur = None
+    tk = yf.Ticker(ticker)
+    try:
+        fi = tk.fast_info
+        try:
+            v = float(fi["market_cap"])
+            mc = v if v > 0 else None
+        except Exception:
+            mc = None
+        try:
+            cur = fi["currency"]
+        except Exception:
+            cur = None
+    except Exception:
+        pass
+    try:
+        md = tk.history_metadata or {}
+        qt = str(md.get("instrumentType") or "").upper() or None
+        cur = cur or md.get("currency")
+    except Exception:
+        pass
+    return {"mc": mc, "qt": qt or "", "cur": cur}
+
+def _info_fallback_safe(ticker):
+    try:
+        return _fetch_info_fallback(ticker)
+    except Exception:
+        return {"mc": None, "qt": "", "cur": None}
+
 def get_ticker_info(ticker):
     if not ticker or ticker in _FAILED_TICKERS:
         return "Autre", "Inconnu"
@@ -3211,7 +3244,8 @@ def get_ticker_info(ticker):
         d = _fetch_info_full(ticker)
         return d["sector"], d["country"]
     except Exception:
-        return "Autre", "Inconnu"
+        fb = _info_fallback_safe(ticker)
+        return ("ETF / Fonds" if fb.get("qt") in _ETF_QUOTE_TYPES else "Autre"), "Inconnu"
 
 def get_ticker_marketcap(ticker):
     """(capitalisation en €, type de produit, devise) ; capitalisation None pour un ETF / si inconnue."""
@@ -3221,9 +3255,10 @@ def get_ticker_marketcap(ticker):
         d = _fetch_info_full(ticker)
         return d.get("mc"), d.get("qt") or "", d.get("cur")
     except Exception:
-        return None, "", None
+        fb = _info_fallback_safe(ticker)
+        return fb.get("mc"), fb.get("qt") or "", fb.get("cur")
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_historical_price_at(ticker, target_date):
     if not ticker or ticker in _FAILED_TICKERS:
         return None
@@ -3240,7 +3275,7 @@ def get_historical_price_at(ticker, target_date):
     except Exception:
         return None
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=1800, show_spinner=False)
 def _get_ticker_history_real(ticker, start_date_str):
     """Historique complet des clôtures d'un ticker depuis start_date_str, mis en cache 30 min
     (au lieu de 5 min : le passé ne change pas, et le dernier point est de toute façon remplacé
@@ -3430,7 +3465,7 @@ def get_ticker_history(ticker, start_date_str):
                 return _df
     return _get_ticker_history_real(ticker, start_date_str)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_watchlist_variations(ticker):
     """Variation du prix (delta en €, % ) sur plusieurs horizons — jour, 7 jours, 30 jours,
     6 mois, 12 mois — pour un ticker de la watchlist, à partir de son historique de clôtures
@@ -3482,7 +3517,7 @@ def get_watchlist_variations(ticker):
 
     return result
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_benchmark_history(ticker, start_str, end_str):
     """Historique de clôture d'un indice/benchmark, mis en cache 1h. Utilisé à la fois par le
     graphique de performance comparée et le tableau comparatif : sans ce cache, chaque
@@ -3642,7 +3677,7 @@ if (_tickers_a_precharger or _wl_tickers_alertes) and (_now_ts - _last_prefetch_
         # Caches encore chauds (dernière actualisation complète < _MARKET_FRESH_WINDOW) : relecture quasi instantanée,
         # donc sans barre de chargement (elle apparaissait à chaque changement d'onglet après quelques minutes).
         _caches_chauds = _swr is not None and (time_module.time() - _swr.last_fresh_ts) <= _MARKET_FRESH_WINDOW
-        _spin_ctx = contextlib.nullcontext() if _caches_chauds else st.spinner("📡 Récupération des cours en cours...")
+        _spin_ctx = contextlib.nullcontext()   # pas de barre dans la page : seul le « Running… » natif de Streamlit s'affiche
         with _spin_ctx:
             _prefetch_results = _prefetch_market_data(_tickers_a_precharger, _start_date_str_precharge, _wl_tickers_alertes)
         st.session_state["_last_market_prefetch_ts"] = _now_ts
@@ -3665,7 +3700,7 @@ if _swr is not None and _swr.serve_stale:
 # ==========================================
 # 2. MOTEUR DE CALCUL DES POSITIONS & PERF
 # ==========================================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def compute_portfolio_metrics_cached(df_in, target_datetime=None):
     df = df_in.copy()
     if df.empty:
@@ -3900,7 +3935,7 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
 def compute_portfolio_metrics(df, target_datetime=None):
     return compute_portfolio_metrics_cached(df, target_datetime)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def compute_cash_actuel_cached(df_in):
     """Calcule uniquement le solde ACTUEL de la poche espèces du PEA, en rejouant l'impact de
     chaque transaction sur le cash (même logique que get_portfolio_history_cached), mais SANS
@@ -3957,7 +3992,7 @@ def compute_cash_actuel_cached(df_in):
 def compute_cash_actuel(df):
     return compute_cash_actuel_cached(df)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def compute_realized_pnl_par_vente_cached(df_in):
     """Rejoue exactement le même calcul de plus-value réalisée (coût moyen pondéré, PRU
     recalculé à chaque ACHAT/VENTE/SPLIT) que compute_portfolio_metrics_cached, mais renvoie
@@ -4018,7 +4053,7 @@ def compute_realized_pnl_par_vente_cached(df_in):
 def compute_realized_pnl_par_vente(df):
     return compute_realized_pnl_par_vente_cached(df)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def detect_ttf_anomalies_cached(df_in):
     """Détecte automatiquement, sur TOUT l'historique des transactions, les journées où de la
     TTF a été réglée à l'achat sur des titres finalement revendus le même jour. La TTF française
@@ -4125,7 +4160,7 @@ elif st.session_state["_swr_seen_epoch_metrics"] != _epoch_now:
     get_watchlist_variations.clear()
     st.session_state["_swr_seen_epoch_metrics"] = _epoch_now
 
-with st.spinner("⏳ Calcul des indicateurs du portefeuille (cours en direct)..."):
+with contextlib.nullcontext():
     df_port, tot_invested, tot_value_actions, tot_fees, tot_dividends, tot_realized_pnl, tot_cost_basis_global = compute_portfolio_metrics(df_transactions)
 
 # Pré-calculs pour le formulaire "Nouvelle opération" : la liste des actions possédées/de tout
@@ -5588,7 +5623,7 @@ def _ticker_position_series_cached(ticker, df_ticker, start_date_str, end_date_s
     return daily_shares, daily_invested, daily_realized, daily_divs, current_shares, current_invested
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def _compute_ticker_daily_history_cached(ticker, df_ticker, start_date_str, end_date_str):
     """Calcule la série quotidienne (valeur, capital investi, gain réalisé cumulé, dividendes
     cumulés) d'UN SEUL ticker, sur toute la période 'all_dates' — logique RIGOUREUSEMENT
@@ -5670,7 +5705,7 @@ def _compute_ticker_daily_history_cached(ticker, df_ticker, start_date_str, end_
     }, index=all_dates)
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_portfolio_history_cached(df_in):
     df = df_in.copy()
     if df.empty:
@@ -6555,9 +6590,9 @@ if _tab_open(tab_overview):
             # ce repère de marché), pas le % du montant déjà atteint — un objectif rempli à 20 %
             # peut être trivial à finir si le reste vient d'un apport, et inversement.
             if objectif_deja_couvert:
-                grad_color = "linear-gradient(90deg, #16a34a, #4ade80)"
+                grad_color = "linear-gradient(90deg, #15803d, #22c55e)"
                 badge = "🎉 Objectif déjà couvert"
-                badge_color = "#16a34a"
+                badge_color = "#15803d"
                 badge_detail = "Votre épargne prévue suffit, sans performance boursière supplémentaire."
             elif perf_necessaire_pct is None:
                 grad_color = "linear-gradient(90deg, #94a3b8, #cbd5e1)"
@@ -6570,30 +6605,30 @@ if _tab_open(tab_overview):
                 badge_color = "#16a34a"
                 badge_detail = f"Nettement sous la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
             elif perf_necessaire_pct <= repere_marche_periode:
-                grad_color = "linear-gradient(90deg, #0284c7, #38bdf8)"
+                grad_color = "linear-gradient(90deg, #65a30d, #a3e635)"
                 badge = "🚀 Objectif réaliste"
-                badge_color = "#0284c7"
+                badge_color = "#4d7c0f"
                 badge_detail = f"En ligne avec la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
             elif perf_necessaire_pct <= repere_marche_periode * 2:
-                grad_color = "linear-gradient(90deg, #7c3aed, #a78bfa)"
+                grad_color = "linear-gradient(90deg, #f59e0b, #fbbf24)"
                 badge = "⚡ Objectif ambitieux"
-                badge_color = "#7c3aed"
+                badge_color = "#d97706"
                 badge_detail = "Nécessite une performance nettement supérieure à la moyenne du marché."
             else:
-                grad_color = "linear-gradient(90deg, #d97706, #fbbf24)"
+                grad_color = "linear-gradient(90deg, #dc2626, #f87171)"
                 badge = "🔥 Objectif très ambitieux"
-                badge_color = "#d97706"
+                badge_color = "#dc2626"
                 badge_detail = "Nécessite une performance très supérieure à la moyenne du marché — peu probable en l'état."
 
             pct_str = f"{prog_pct:,.1f}%".replace(".", ",")
             pct_suffix = " du montant visé (épargne prévue incluse)" if apport_prevision > 0 else " du montant visé"
 
-            def _obj_card(label, value, color):
+            def _obj_card(label, value, color, big=False):
                 return (f'<div style="background:{color}14; border:1px solid {color}55; border-radius:12px; padding:8px 4px; '
                         'text-align:center; min-width:0; display:flex; flex-direction:column; justify-content:center;">'
-                        '<div style="font-size:min(0.66rem,2.5vw); color:#64748b; text-transform:uppercase; font-weight:700; '
+                        f'<div style="font-size:min({"0.74rem" if big else "0.68rem"},{"2.9vw" if big else "2.6vw"}); color:#64748b; text-transform:uppercase; font-weight:700; '
                         f'letter-spacing:0.03em; line-height:1.25;">{label}</div>'
-                        f'<div style="font-size:min(1rem,3.7vw); font-weight:800; color:{color}; margin-top:3px; line-height:1.25;">{value}</div></div>')
+                        f'<div style="font-size:min({"1.3rem" if big else "1.1rem"},{"5vw" if big else "4vw"}); font-weight:800; color:{color}; margin-top:3px; line-height:1.25;">{value}</div></div>')
             _grid = "display:grid; gap:6px; margin-top:8px;"
             st.markdown(
                 _progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)
@@ -6603,8 +6638,8 @@ if _tab_open(tab_overview):
                 + _obj_card("Cible", fmt_eur(new_target), "#4f46e5")
                 + '</div>'
                 + f'<div style="{_grid} grid-template-columns:repeat(2,minmax(0,1fr));">'
-                + _obj_card("Niveau de l'objectif", badge, badge_color)
-                + _obj_card(f"Performance requise d'ici le {_cur_fin.strftime('%d/%m/%Y')}", perf_necessaire_str, badge_color)
+                + _obj_card("Niveau de l'objectif", badge, badge_color, big=True)
+                + _obj_card("Performance requise", perf_necessaire_str, badge_color, big=True)
                 + '</div>',
                 unsafe_allow_html=True
             )
