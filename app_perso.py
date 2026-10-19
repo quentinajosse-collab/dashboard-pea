@@ -1219,7 +1219,9 @@ _METRIC_TIPS = {
     "Plus-Value Actée": "% = plus-value actée ÷ valeur totale actuelle du portefeuille (actions + cash).",
     "Dividendes Reçus": "% = dividendes nets reçus ÷ total des apports nets.",
     "Frais Totaux": "% = frais totaux (courtage + TTF) ÷ gains totaux (plus-values latentes + actées + dividendes encaissés).",
-    "Rendement Moyen des Dividendes": "% = dividendes nets reçus ÷ nombre d'années depuis l'ouverture (après 3 mois) ÷ capital actuellement investi.",
+    "Rendement sur cours": "% = dividendes nets annuels (reçus ÷ nombre d'années depuis l'ouverture, après 3 mois) ÷ valeur actuelle des titres détenus (cours du jour). La flèche indique le dividende annuel moyen en €.",
+    "Rendement sur coût": "% = dividendes nets annuels (reçus ÷ nombre d'années depuis l'ouverture, après 3 mois) ÷ coût de revient des titres détenus (PRU × quantités). La flèche indique le dividende annuel moyen en €.",
+    "Drawdown Maximum": "% = plus forte baisse du portefeuille depuis un sommet, calculée sur la performance quotidienne (hors apports et retraits). La flèche indique l'écart actuel par rapport au dernier sommet.",
 }
 
 _METRIC_TIP_JS = r"""
@@ -1914,6 +1916,20 @@ def fmt_perf_simple(val):
         return "▬ 0,00%"
 
 
+def fmt_pts(val):
+    """Contribution en points de performance : ▲ +0,52 pt / ▼ -0,12 pt / ▬ 0,00 pt."""
+    try:
+        if pd.isna(val):
+            return "N/A"
+    except Exception:
+        return "N/A"
+    if val > 0.005:
+        return f"▲ +{val:,.2f} pt".replace(",", " ").replace(".", ",")
+    if val < -0.005:
+        return f"▼ {val:,.2f} pt".replace(",", " ").replace(".", ",")
+    return "▬ 0,00 pt"
+
+
 def _style_perf_cell(v):
     """Couleur du texte d'une cellule de performance déjà formatée (▲ vert, ▼ rouge, ▬ gris)."""
     s = str(v)
@@ -2430,7 +2446,7 @@ def _fmt_cell_heat(v, zero="-"):
         return f"{v:.0f}"
     return f"{v:.1f}".replace(".", ",")
 
-def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, date_ouverture=None, breakdown_kind=None):
+def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, date_ouverture=None, breakdown_kind=None, unit="eur"):
     """Cartographie mensuelle : une ligne par année (la plus récente en haut), un mois par colonne,
     montant compact écrit dans chaque case, dégradé blanc -> couleur d'accent, légende horizontale
     sous le graphique. Axes numériques (0..11 / 0..n-1) avec libellés personnalisés : cases carrées-ish,
@@ -2438,6 +2454,17 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
     if df_source.empty:
         st.info("Aucune donnée à afficher pour le moment.")
         return
+
+    if unit == "pct":
+        _fmt_v = lambda x: f"{x:.2f} %".replace(".", ",")
+        _cell = lambda x, zero="-": (zero if abs(x) < 0.005 else f"{x:.2f}".replace(".", ","))
+        _tick = lambda x: f"{x:.2f} %".replace(".", ",")
+        _lbl = "Rendement"
+    else:
+        _fmt_v = fmt_eur
+        _cell = _fmt_cell_heat
+        _tick = lambda x: _fmt_cell_heat(x, zero="0")
+        _lbl = "Total"
 
     mois_court = ["Jan", "Fév", "Mar", "Avr", "Mai", "Jui", "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"]
     mois_hover = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sep", "Oct", "Nov", "Déc"]
@@ -2465,7 +2492,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
         for month in range(min_month, max_month + 1):
             val = float(monthly_sum.get((year, month), 0.0))
             z[yi, month - 1] = val
-            cell_txt = f"<b>{mois_hover[month - 1]} {year}</b><br><span style='color:{_accent};'><b>Total : {fmt_eur(val)}</b></span>"
+            cell_txt = f"<b>{mois_hover[month - 1]} {year}</b><br><span style='color:{_accent};'><b>{_lbl} : {_fmt_v(val)}</b></span>"
             if breakdown_kind is not None and val != 0:
                 df_cell = df_source[(dates.dt.year == year) & (dates.dt.month == month)]
                 lines = _breakdown_lines_for_kind(df_cell, breakdown_kind, value_col)
@@ -2484,7 +2511,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
             if np.isnan(v):
                 continue
             annotations.append(dict(
-                x=mi, y=yi, xref="x", yref="y", showarrow=False, text=_fmt_cell_heat(v),
+                x=mi, y=yi, xref="x", yref="y", showarrow=False, text=_cell(v),
                 font=dict(size=10, color="#ffffff" if (v / zmax) > 0.55 else "#0f172a"),
             ))
 
@@ -2492,7 +2519,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
     plot_h = row_h * n
     top_m, bot_m = 28, 78
     tick_vals = [0.0, zmax / 2.0, zmax]
-    tick_text = [_fmt_cell_heat(v, zero="0") for v in tick_vals]
+    tick_text = [_tick(v) for v in tick_vals]
 
     fig = go.Figure(data=go.Heatmap(
         z=z, x=list(range(12)), y=list(range(n)),
@@ -2671,22 +2698,20 @@ _ALLOC4_HTML = r"""
   text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
   html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .mono { font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
-  #tg { display: none; margin: 4px auto 0; padding: 5px 14px; font: inherit; font-size: 12px; font-weight: 700; color: inherit;
-        background: rgba(127,127,127,.14); border: 0; border-radius: 999px; cursor: pointer; }
-  /* Téléphone : les 4 camemberts tiennent dans une seule fenêtre (2 x 2, serrés) ; la légende est repliée. */
+  /* Téléphone : 2 x 2 serrés, légende toujours visible sous chaque camembert, lignes compactes pour que
+     l'ensemble tienne si possible sur un seul écran ; une seule ligne d'écart entre les deux rangées. */
   @media (max-width: 760px) {
-    #grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 4px; }
+    #grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 6px; }
     .ttl { font-size: 10px; margin-bottom: 0; }
-    svg { max-width: 100%; }
-    .leg { display: none; }
-    #root.showleg .leg { display: block; }
-    #tg { display: block; }
-    .nm { font-size: 12px; } .pc { font-size: 11px; } .row { padding: 3px 4px; gap: 6px; }
+    svg { max-width: 150px; }
+    .leg { margin-top: 0; }
+    .nm { font-size: 11px; } .pc { font-size: 10.5px; }
+    .row { padding: 1px 3px; gap: 5px; }
+    .dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 2px; }
   }
 </style>
 <div id="root">
   <div id="grid"></div>
-  <div style="text-align:center"><button id="tg" type="button">Afficher la légende</button></div>
 </div>
 <script>
 (function () {
@@ -2789,13 +2814,6 @@ _ALLOC4_HTML = r"""
   }
   document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t >= 0) { st = { t: -1, i: -1 }; render(); } });
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-  var tg = document.getElementById('tg');
-  tg.addEventListener('click', function (ev) {
-    ev.stopPropagation();
-    var on = rootEl.classList.toggle('showleg');
-    tg.textContent = on ? 'Masquer la légende' : 'Afficher la légende';
-    fit();
-  });
 
   // Doigt maintenu (~0,25 s) sur une part ou une ligne de légende, puis glissé : la sélection suit le doigt.
   var timer = null, scrub = false, sx = 0, sy = 0;
@@ -2915,11 +2933,7 @@ def _render_allocation(df_active, cash):
     # Les noms au singulier/pluriel du « m » (nombre d'actions) viennent du 1er camembert.
     payload = json.dumps(don, ensure_ascii=False).replace("</", "<\\/")
     page = _ALLOC4_HTML.replace("__DON__", payload)
-    components.html(page, height=470)
-    st.caption("Revenus par continent : répartition estimée (ordres de grandeur des rapports annuels, modifiable dans "
-               "`_REVENUS_CONTINENT_REF`) quand elle est connue ; sinon continent du siège social"
-               + (" (" + ", ".join(siege) + ")" if siege else "") + ". Les ETF et sociétés sans donnée utilisent la place de cotation. "
-               "Capitalisation : tranches sur la capitalisation boursière (ETF à part) ; le total au centre cumule les sociétés détenues.")
+    components.html(page, height=680)
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
@@ -6225,8 +6239,7 @@ if _tab_open(tab_overview):
                         _perf_an_txt = fmt_perf_text_only(_perf_an_moy)
                     else:
                         _perf_an_txt = "N/A"
-                    # Rangée 1 : Globale | YTD ; rangée 2 : Mois | Jour ; puis la performance annuelle moyenne
-                    # centrée sur toute la largeur.
+                    # 3 rangées de 2 : Globale | YTD ; Mois | Jour ; Perf. annuelle moyenne | Drawdown maximum.
                     r2_c1, r2_c2 = st.columns(2)
                     r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules))
                     r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr))
@@ -6235,9 +6248,27 @@ if _tab_open(tab_overview):
                     r2b_c2.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
                     # Gain moyen par an en € (gain total cumulé ramené à une année), affiché sur la flèche.
                     _gain_an_moy = (total_gains_cumules / _ans_pea) if _ans_pea >= 0.25 else None
-                    with st.container(key="center_metric_perf_an"):
-                        st.metric("Performance Annuelle Moyenne", _perf_an_txt,
+                    # Drawdown : plus forte baisse depuis un sommet de la performance quotidienne (flux d'apports exclus).
+                    _dd_max, _dd_cur = None, None
+                    try:
+                        _hd = history_df_global
+                        if _hd is not None and len(_hd) >= 3:
+                            _v = _hd["Valeur du Portefeuille (€)"].astype(float)
+                            _a = _hd["Apports Cumulés (€)"].astype(float)
+                            _prev = _v.shift(1)
+                            _r = ((_v - _prev - _a.diff().fillna(0.0)) / _prev).where(_prev > 0).fillna(0.0)
+                            _idx = (1.0 + _r).cumprod()
+                            _peak = np.maximum(_idx.cummax(), 1.0)
+                            _dd = (_idx / _peak - 1.0) * 100.0
+                            _dd_max, _dd_cur = float(_dd.min()), float(_dd.iloc[-1])
+                    except Exception:
+                        _dd_max, _dd_cur = None, None
+                    r2c_c1, r2c_c2 = st.columns(2)
+                    r2c_c1.metric("Performance Annuelle Moyenne", _perf_an_txt,
                                   delta=(_delta(_gain_an_moy) if _gain_an_moy is not None else None))
+                    r2c_c2.metric("Drawdown Maximum",
+                                  (fmt_perf_text_only(min(_dd_max, 0.0)) if _dd_max is not None else "N/A"),
+                                  delta=(f"{_dd_cur:.2f}%".replace(".", ",") if _dd_cur is not None else None))
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>🏷️ Plus-values, Dividendes & Frais</p>", unsafe_allow_html=True)
                 with st.container(key="row_gains_wrap"):
@@ -6258,22 +6289,21 @@ if _tab_open(tab_overview):
                     r3b_c1.metric("Dividendes Reçus", fmt_eur(net_divs_total),
                                   delta=(f"{pct_div_apports:+,.2f}%".replace(",", " ").replace(".", ",") if pct_div_apports is not None else None))
                     r3b_c2.metric("Frais Totaux", fmt_eur(tot_fees),
-                                  delta=(f"{pct_frais_apports:.2f}% des gains".replace(".", ",") if pct_frais_apports is not None else None),
-                                  delta_color="off")
+                                  delta=(f"{pct_frais_apports:.2f}%".replace(".", ",") if pct_frais_apports is not None else None),
+                                  delta_color="inverse")
 
-                    # Rendement moyen des dividendes sur le capital investi : dividendes nets perçus, ramenés à
-                    # une année (si le PEA a plus de 3 mois), rapportés au capital actuellement investi.
+                    # Rendements des dividendes : dividendes nets annuels (reçus ÷ années depuis l'ouverture, après
+                    # 3 mois) rapportés soit à la valeur actuelle des titres (cours), soit à leur coût de revient (PRU).
                     _ans_div = max((_now_paris() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
-                    if tot_invested > 0:
-                        _rend_cumule = net_divs_total / tot_invested * 100
-                        _rend_moy = _rend_cumule / _ans_div if _ans_div >= 0.25 else _rend_cumule
-                        _rend_moy_txt = f"{_rend_moy:.2f} %".replace(".", ",")
-                    else:
-                        _rend_moy_txt = "N/A"
+                    _div_annuel = (net_divs_total / _ans_div) if _ans_div >= 0.25 else net_divs_total
+                    _rend_cours_txt = f"{_div_annuel / tot_value_actions * 100:.2f} %".replace(".", ",") if tot_value_actions > 0 else "N/A"
+                    _rend_cout_txt = f"{_div_annuel / tot_invested * 100:.2f} %".replace(".", ",") if tot_invested > 0 else "N/A"
                     # Dividendes moyens perçus par an en € (sur la flèche), comme les autres montants.
                     _div_an_moy = (net_divs_total / _ans_div) if _ans_div >= 0.25 else None
-                    with st.container(key="center_metric_rend_div"):
-                        st.metric("Rendement Moyen des Dividendes", _rend_moy_txt,
+                    r3c_c1, r3c_c2 = st.columns(2)
+                    r3c_c1.metric("Rendement sur cours", _rend_cours_txt,
+                                  delta=(_delta(_div_an_moy) if _div_an_moy is not None else None))
+                    r3c_c2.metric("Rendement sur coût", _rend_cout_txt,
                                   delta=(_delta(_div_an_moy) if _div_an_moy is not None else None))
 
         # --- Alerte watchlist : valeurs suivies proches de leur zone d'achat (voir l'onglet
@@ -7150,6 +7180,14 @@ if _tab_open(tab_positions):
                     df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Perf. annuelle moy. (%)',
                     [_perf_annualisee(pf, j) for pf, j in zip(df_gain_rank['Performance (%)'], df_gain_rank['Détention (jour)'])]
                 )
+                # Contribution à la performance globale du portefeuille (en points) : gain total de la ligne ÷ total des
+                # apports nets. La somme des lignes redonne la performance globale. Placée entre « Performance » et
+                # « Perf. annuelle moy. ».
+                df_gain_rank.insert(
+                    df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Contribution perf. (pts)',
+                    (pd.to_numeric(df_gain_rank['Gain Total Global (€)'], errors="coerce") / base_perf_globale * 100.0)
+                    if base_perf_globale > 0 else np.nan
+                )
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
                 df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)', 'Secondes Détention']).copy()
@@ -7161,12 +7199,13 @@ if _tab_open(tab_positions):
                 df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
                 df_gain_rank_fmt['Perf. annuelle moy. (%)'] = df_gain_rank_fmt['Perf. annuelle moy. (%)'].apply(fmt_perf_simple)
+                df_gain_rank_fmt['Contribution perf. (pts)'] = df_gain_rank_fmt['Contribution perf. (pts)'].apply(fmt_pts)
                 df_gain_rank_fmt['Détention (jour)'] = [
                     _fmt_duree_detention(j, sec)
                     for j, sec in zip(df_gain_rank['Détention (jour)'], df_gain_rank['Secondes Détention'])
                 ]
 
-                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)', 'Perf. annuelle moy. (%)']
+                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)', 'Contribution perf. (pts)', 'Perf. annuelle moy. (%)']
                 # Ligne Total : somme de chaque colonne sur toutes les actions du classement. La performance n'est pas
                 # totalisée ici (la base de calcul diffère selon que la position est ouverte ou soldée).
                 _tot_rank = {c: "" for c in df_gain_rank_fmt.columns}
@@ -7185,6 +7224,8 @@ if _tab_open(tab_positions):
                     _jtot = float((pd.to_numeric(df_gain_rank['Détention (jour)'], errors="coerce").fillna(0)[_bases.index] * _bases).sum() / _bases.sum())
                     _tot_rank['Performance (%)'] = fmt_perf_simple(_perf_tot)
                     _tot_rank['Perf. annuelle moy. (%)'] = fmt_perf_simple(_perf_annualisee(_perf_tot, _jtot))
+                if base_perf_globale > 0:
+                    _tot_rank['Contribution perf. (pts)'] = fmt_pts(pd.to_numeric(df_gain_rank['Contribution perf. (pts)'], errors="coerce").sum())
                 _tot_rank['Nombre de mouvements'] = str(int(pd.to_numeric(df_gain_rank['Nombre de mouvements'], errors="coerce").fillna(0).sum()))
                 _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank])).iloc[0].to_dict()
                 _tot_rank["N°"] = ""
@@ -7230,6 +7271,35 @@ if _tab_open(tab_apports):
             _net_jour = _df_mv.groupby(_df_mv["Date_Heure"].dt.normalize())["Net"].sum().cumsum()
             _fin_serie = max(_today_paris(), _net_jour.index.max())
             _cumul = _net_jour.reindex(pd.date_range(_net_jour.index.min(), _fin_serie), method="ffill")
+
+            with st.expander("🎯 Jauge de versements du PEA", expanded=True):
+                # Le plafond de 150 000 € porte sur les versements cumulés : un retrait ne libère pas de place.
+                _pct_pl = _total_verse / PLAFOND_APPORTS * 100.0
+                _reste_pl = max(PLAFOND_APPORTS - _total_verse, 0.0)
+                _col_g = "#d97706" if _pct_pl >= 90 else "#06b6d4"
+                fig_gauge = go.Figure(go.Indicator(
+                    mode="gauge", value=min(_total_verse, PLAFOND_APPORTS),
+                    gauge=dict(
+                        shape="angular",
+                        axis=dict(range=[0, PLAFOND_APPORTS], tickvals=[0, 50000, 100000, 150000],
+                                  ticktext=["0", "50 k€", "100 k€", "150 k€"], tickfont=dict(size=11)),
+                        bar=dict(color=_col_g, thickness=0.7),
+                        bgcolor="rgba(148,163,184,0.18)", borderwidth=0,
+                    ),
+                    domain=dict(x=[0, 1], y=[0, 1]),
+                ))
+                fig_gauge.add_annotation(
+                    x=0.5, y=0.12, xref="paper", yref="paper", showarrow=False,
+                    text=f"<b>{_pct_pl:.1f} %</b>".replace(".", ","), font=dict(size=26),
+                )
+                fig_gauge.update_layout(height=230, margin=dict(l=24, r=24, t=18, b=6))
+                apply_chart_theme(fig_gauge)
+                _plotly_chart(fig_gauge, use_container_width=True, theme=None, key="chart_jauge_plafond_pea")
+                st.markdown(
+                    f"<div style='text-align:center; font-size:0.9rem;'>{fmt_eur(_total_verse)} versés sur {fmt_eur(PLAFOND_APPORTS)} "
+                    f"· reste <b>{fmt_eur(_reste_pl)}</b></div>",
+                    unsafe_allow_html=True,
+                )
 
             with st.expander("📈 Évolution des apports cumulés", expanded=True):
                 fig_ap = go.Figure()
@@ -8552,6 +8622,38 @@ if _tab_open(tab_perf):
                     else:
                         st.warning("Aucune donnée disponible pour la période sélectionnée sur le graphique.")
 
+        with st.expander("🌊 Cascade : des apports à la valeur du portefeuille", expanded=True):
+            if apports_totaux > 0:
+                _wf_lbl = ["Apports nets", "Plus-values latentes", "Plus-values actées", "Dividendes", "Valeur totale"]
+                _wf_val = [float(apports_totaux), float(global_pnl), float(tot_realized_pnl), float(net_divs_total)]
+                _wf_tot = sum(_wf_val)
+                _wf_levels = [_wf_val[0], _wf_val[0] + _wf_val[1], _wf_val[0] + _wf_val[1] + _wf_val[2], _wf_tot]
+                _wf_sign = lambda v: ("+" if v > 0 else "") + fmt_eur(v)
+                _wf_txt = [fmt_eur(_wf_val[0])] + [_wf_sign(v) for v in _wf_val[1:]] + [fmt_eur(_wf_tot)]
+                fig_wf = go.Figure(go.Waterfall(
+                    x=_wf_lbl, y=_wf_val + [0.0],
+                    measure=["absolute", "relative", "relative", "relative", "total"],
+                    text=_wf_txt, textposition="outside", cliponaxis=False,
+                    customdata=_wf_txt, hovertemplate="<b>%{x}</b><br>%{customdata}<extra></extra>",
+                    connector=dict(line=dict(color="rgba(148,163,184,0.6)", width=1)),
+                    increasing=dict(marker=dict(color="#16a34a")),
+                    decreasing=dict(marker=dict(color="#dc2626")),
+                    totals=dict(marker=dict(color="#06b6d4")),
+                ))
+                # Axe resserré autour des niveaux atteints pour que les gains restent lisibles (la barre des apports
+                # est donc tronquée en bas).
+                _lo, _hi = min(_wf_levels), max(_wf_levels)
+                _span = max(_hi - _lo, 0.03 * max(_hi, 1.0))
+                fig_wf.update_layout(
+                    height=340, margin=dict(l=8, r=8, t=24, b=8), showlegend=False,
+                    yaxis=dict(range=[max(0.0, _lo - 2.5 * _span), _hi + 0.7 * _span], tickformat=",.0f", ticksuffix=" €", nticks=5, automargin=True),
+                    xaxis=dict(title="", automargin=True),
+                )
+                apply_chart_theme(fig_wf)
+                _plotly_chart(fig_wf, use_container_width=True, theme=None, key="chart_cascade_perf")
+            else:
+                st.info("Aucun apport enregistré pour le moment.")
+
         with st.expander("⚖️ Comparateur de performance du portefeuille par rapport aux indices", expanded=True):
             if not df_transactions.empty:
                 if history_df_global is not None and not history_df_global.empty:
@@ -8804,6 +8906,34 @@ if _tab_open(tab_dividends):
                         date_ouverture=(pea_opening_dt if not df_transactions.empty else None),
                         breakdown_kind="dividendes"
                     )
+
+                    # Rendement mensuel = dividendes nets du mois ÷ capital investi moyen du mois (coût d'achat).
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("**Cartographie des rendements mensuels :**")
+                    _rows_rend = []
+                    try:
+                        _h_rend = get_portfolio_history(df_transactions)
+                        if _h_rend is not None and not _h_rend.empty:
+                            _inv_m = _h_rend["Capital Investi Total (€)"].astype(float).groupby([_h_rend.index.year, _h_rend.index.month]).mean()
+                            _div_m = df_divs.groupby(["Année", "Mois_Num"])["Montant_Net"].sum()
+                            for (_an_r, _mo_r), _val_r in _div_m.items():
+                                _inv_r = float(_inv_m.get((int(_an_r), int(_mo_r)), 0.0))
+                                if _inv_r > 0:
+                                    _rows_rend.append({
+                                        "Date_Heure": pd.Timestamp(year=int(_an_r), month=int(_mo_r), day=1),
+                                        "Rendement": float(_val_r) / _inv_r * 100.0,
+                                    })
+                    except Exception:
+                        _rows_rend = []
+                    if _rows_rend:
+                        build_calendar_heatmap(
+                            pd.DataFrame(_rows_rend), "Date_Heure", "Rendement",
+                            ["#f0fdfa", "#0f766e"], "rend",
+                            date_ouverture=(pea_opening_dt if not df_transactions.empty else None),
+                            unit="pct"
+                        )
+                    else:
+                        st.info("Pas encore de rendement mensuel à afficher.")
 
                 else:
                     st.info("Aucun dividende ni rompu perçu pour le moment.")
