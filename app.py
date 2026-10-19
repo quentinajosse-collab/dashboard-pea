@@ -2946,7 +2946,7 @@ def _render_allocation(df_active, cash):
     payload = json.dumps(don, ensure_ascii=False).replace("</", "<\\/")
     page = _ALLOC4_HTML.replace("__DON__", payload)
     _r1, _r2 = max(len(A), len(S)), max(len(P), len(K))
-    components.html(page, height=int(2 * (16 + 215 + 8 + 20) + (_r1 + _r2) * 20 + 60))
+    components.html(page, height=int(2 * (16 + 172) + (_r1 + _r2) * 14 + 14 + 36))
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
@@ -3167,6 +3167,10 @@ import threading as _threading_info
 _INFO_SEMAPHORE = _threading_info.Semaphore(4)
 _ETF_QUOTE_TYPES = ("ETF", "MUTUALFUND", "INDEX")
 
+@st.cache_resource(show_spinner=False)
+def _info_fail_registry():
+    return {}
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def _fetch_info_full(ticker):
     """Secteur, pays, capitalisation boursière et type de produit d'une valeur (une seule requête Yahoo).
@@ -3175,6 +3179,9 @@ def _fetch_info_full(ticker):
     _known = _ticker_info_store().lookup(ticker)
     if _known is not None:
         return {k: _known.get(k) for k in ("sector", "country", "mc", "qt", "cur")}
+    _reg = _info_fail_registry()
+    if time_module.time() - _reg.get(ticker, 0.0) < 600:
+        raise RuntimeError(f"info indisponible pour {ticker} (nouvel essai dans quelques minutes)")
     info = None
     last_exc = None
     for attempt in range(3):
@@ -3189,7 +3196,9 @@ def _fetch_info_full(ticker):
             info = None
         time_module.sleep(0.8 * (attempt + 1))
     if info is None:
+        _reg[ticker] = time_module.time()
         raise RuntimeError(f"info indisponible pour {ticker}: {last_exc}")
+    _reg.pop(ticker, None)
     qt = str(info.get("quoteType") or "").upper()
     sector = info.get("sector") or ("ETF / Fonds" if qt in _ETF_QUOTE_TYPES else "Autre")
     out = {
@@ -3208,8 +3217,27 @@ def _fetch_info_full(ticker):
 def _fetch_info_fallback(ticker):
     """Repli quand la page « info » de Yahoo ne répond pas (limitation de débit, blocage du serveur) : type de produit,
     devise et capitalisation via d'autres points d'accès (fast_info / métadonnées de l'historique de cours)."""
-    mc = qt = cur = None
+    mc = qt = cur = sector = None
     tk = yf.Ticker(ticker)
+    # Secteur : la recherche Yahoo renvoie « sector » / « industry » pour les actions, sans la fiche « info ».
+    try:
+        _quotes = None
+        try:
+            _quotes = yf.Search(ticker, max_results=6, news_count=0).quotes
+        except Exception:
+            _quotes = None
+        if not _quotes:
+            import requests as _rq
+            _r = _rq.get("https://query2.finance.yahoo.com/v1/finance/search",
+                         params={"q": ticker, "quotesCount": 6, "newsCount": 0},
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+            _quotes = (_r.json() or {}).get("quotes") or []
+        for _q in _quotes:
+            if str(_q.get("symbol", "")).upper() == str(ticker).upper():
+                sector = _q.get("sector") or _q.get("sectorDisp") or None
+                break
+    except Exception:
+        sector = None
     try:
         fi = tk.fast_info
         try:
@@ -3229,13 +3257,13 @@ def _fetch_info_fallback(ticker):
         cur = cur or md.get("currency")
     except Exception:
         pass
-    return {"mc": mc, "qt": qt or "", "cur": cur}
+    return {"mc": mc, "qt": qt or "", "cur": cur, "sector": sector}
 
 def _info_fallback_safe(ticker):
     try:
         return _fetch_info_fallback(ticker)
     except Exception:
-        return {"mc": None, "qt": "", "cur": None}
+        return {"mc": None, "qt": "", "cur": None, "sector": None}
 
 def get_ticker_info(ticker):
     if not ticker or ticker in _FAILED_TICKERS:
@@ -3245,7 +3273,7 @@ def get_ticker_info(ticker):
         return d["sector"], d["country"]
     except Exception:
         fb = _info_fallback_safe(ticker)
-        return ("ETF / Fonds" if fb.get("qt") in _ETF_QUOTE_TYPES else "Autre"), "Inconnu"
+        return (fb.get("sector") or ("ETF / Fonds" if fb.get("qt") in _ETF_QUOTE_TYPES else "Autre")), "Inconnu"
 
 def get_ticker_marketcap(ticker):
     """(capitalisation en €, type de produit, devise) ; capitalisation None pour un ETF / si inconnue."""
