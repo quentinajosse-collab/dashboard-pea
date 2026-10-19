@@ -1970,6 +1970,8 @@ def _style_perf_bg_cell(v):
         return "background-color: rgba(34,197,94,0.16); color:#15803d; font-weight:700;"
     if s.startswith("▼"):
         return "background-color: rgba(239,68,68,0.14); color:#b91c1c; font-weight:700;"
+    if s.startswith("=") or s.startswith("▬"):
+        return "color:#64748b; font-weight:700;"
     return ""
 
 
@@ -2449,7 +2451,7 @@ def _fmt_cell_heat(v, zero="-"):
         return f"{v:.0f}"
     return f"{v:.1f}".replace(".", ",")
 
-def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, date_ouverture=None, breakdown_kind=None, unit="eur"):
+def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, date_ouverture=None, breakdown_kind=None, unit="eur", compact=False):
     """Cartographie mensuelle : une ligne par année (la plus récente en haut), un mois par colonne,
     montant compact écrit dans chaque case, dégradé blanc -> couleur d'accent, légende horizontale
     sous le graphique. Axes numériques (0..11 / 0..n-1) avec libellés personnalisés : cases carrées-ish,
@@ -2520,8 +2522,8 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
 
     row_h = 34
     plot_h = row_h * n
-    top_m, bot_m = (18, 44) if unit == "pct" else (28, 78)
-    _cb_off = 6.0 if unit == "pct" else 14.0   # écart carte -> légende (plus serré pour les rendements)
+    top_m, bot_m = (18, 44) if (unit == "pct" or compact) else (28, 78)
+    _cb_off = 6.0 if (unit == "pct" or compact) else 14.0   # écart carte -> légende (plus serré pour les rendements)
     tick_vals = [0.0, zmax / 2.0, zmax]
     tick_text = [_tick(v) for v in tick_vals]
 
@@ -2857,13 +2859,15 @@ _ALLOC4_HTML = r"""
 
   function fit() {
     try {
-      var h = Math.ceil(rootEl.getBoundingClientRect().height) + 10;
+      var h = Math.ceil(Math.max(rootEl.getBoundingClientRect().height, rootEl.scrollHeight, document.documentElement.scrollHeight)) + 28;
       try { window.frameElement.style.height = h + 'px'; }
       catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
     } catch (e) {}
   }
   render(); fit();
-  window.addEventListener('resize', fit); setTimeout(fit, 150);
+  window.addEventListener('resize', fit); setTimeout(fit, 150); setTimeout(fit, 600); setTimeout(fit, 1500);
+  try { new ResizeObserver(fit).observe(rootEl); } catch (e) {}
+  try { document.fonts.ready.then(fit); } catch (e) {}
 })();
 </script>
 """
@@ -2963,10 +2967,8 @@ _JAUGE_HTML = r"""
   #tip { position: absolute; display: none; padding: 7px 12px; border-radius: 10px; font-size: 13px; font-weight: 700; line-height: 1.35;
          text-align: center; white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,.25); transform: translate(-50%, -125%); pointer-events: none; }
   #tip small { display: block; font-weight: 600; opacity: .9; font-size: 11.5px; }
-  #sub { text-align: center; font-size: 13px; margin-top: 2px; }
 </style>
-<div id="w"><svg id="g" viewBox="0 0 300 190"></svg><div id="tip"></div>
-<div id="sub"></div></div>
+<div id="w"><svg id="g" viewBox="0 0 300 190"></svg><div id="tip"></div></div>
 <script>
 (function () {
   var D = __DATA__;
@@ -3007,7 +3009,6 @@ _JAUGE_HTML = r"""
   var c1 = el('text', { x: CX, y: CY - 6, 'text-anchor': 'middle', 'font-size': 30, 'font-weight': 800 }); c1.textContent = D.pct_txt;
   c1.style.fill = rgb(cur);
   var c2 = el('text', { x: CX, y: CY + 16, 'text-anchor': 'middle', 'font-size': 11.5, opacity: .7 }); c2.textContent = 'du plafond';
-  document.getElementById('sub').innerHTML = D.sub;
   var tip = document.getElementById('tip'), w = document.getElementById('w');
   var lum = (0.299 * cur[0] + 0.587 * cur[1] + 0.114 * cur[2]) / 255;
   tip.style.background = rgb(cur); tip.style.color = lum > 0.62 ? '#1f2937' : '#ffffff';
@@ -6715,7 +6716,7 @@ if _tab_open(tab_overview):
                     _tbl_obj,
                     row_styles=_styles_t,
                     cell_style=lambda c, v: _style_perf_cell(v) if c in ("Écart (€)", "Écart (%)") else "",
-                    max_height=420,
+                    max_height=350,   # 10 lignes visibles
                     focus_row=_focus,
                 )
 
@@ -6875,9 +6876,10 @@ if _tab_open(tab_positions):
                 _t_vj = _som_act("Var Jour (€)")
                 _t_val_veille = _t_val - _t_vj
                 _tot_act["Prix actuel (€)"] = f"({fmt_perf(_t_vj / _t_val_veille * 100)})" if _t_val_veille > 0 else ""
-                _tot_act = _dash_if_empty(pd.DataFrame([_tot_act])).iloc[0].to_dict()
+                _EQ_COLS_ACTIVE = tuple(c for c in ("Gain Latent (€)", "Performance (%)", "Perf. PRU ajusté (%)", "Perf. annuelle moy. (%)") if c in df_active_fmt.columns)
+                _tot_act = _dash_if_empty(pd.DataFrame([_tot_act]), eq_cols=_EQ_COLS_ACTIVE).iloc[0].to_dict()
                 _html_table(
-                    _dash_if_empty(df_active_fmt),
+                    _dash_if_empty(df_active_fmt, eq_cols=_EQ_COLS_ACTIVE),
                     cell_style=lambda c, v: (_style_perf_cell(v) if c in _cols_fleche_active
                                              else ""),
                     max_height=min(max(total_height, 100), 1000),
@@ -7115,7 +7117,7 @@ if _tab_open(tab_positions):
                     _bg_tx = {"ACHAT": "#f0f7ff", "VENTE": "#fdf2f2", "DIVIDENDE": "#f2fcf5", "APPORT": "#e6f4ea",
                               "RETRAIT": "#f5f3ff", "SPLIT": "#fff7ed", "REGROUPEMENT": "#fff7ed", "SPLIT/REGROUPEMENT": "#fff7ed"}
                     _row_styles_tx = [f"background-color: {_bg_tx[t]};" if t in _bg_tx else "" for t in df_table["Type"]]
-                    _html_table(_dash_if_empty(df_table), row_styles=_row_styles_tx, show_index=True, index_label="N°")
+                    _html_table(_dash_if_empty(df_table), row_styles=_row_styles_tx, show_index=True, index_label="N°", max_height=350)
                 else:
                     st.info("Aucune transaction trouvée avec ces critères.")
 
@@ -7335,12 +7337,14 @@ if _tab_open(tab_positions):
                 if base_perf_globale > 0:
                     _tot_rank['Contribution perf. (%)'] = fmt_perf_simple(pd.to_numeric(df_gain_rank['Contribution perf. (%)'], errors="coerce").sum())
                 _tot_rank['Nombre de mouvements'] = str(int(pd.to_numeric(df_gain_rank['Nombre de mouvements'], errors="coerce").fillna(0).sum()))
-                _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank])).iloc[0].to_dict()
+                _EQ_COLS_RANK = ("Gain Total Global (€)", "Performance (%)", "Contribution perf. (%)", "Perf. annuelle moy. (%)")
+                _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank]), eq_cols=_EQ_COLS_RANK).iloc[0].to_dict()
                 _tot_rank["N°"] = ""
                 _html_table(
-                    _dash_if_empty(df_gain_rank_fmt),
+                    _dash_if_empty(df_gain_rank_fmt, eq_cols=_EQ_COLS_RANK),
                     cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_rank else "",
                     total_row=_tot_rank,
+                    max_height=386,   # 10 lignes visibles (+ ligne Total), défilement au-delà
                     sticky_col="Nom",
                 )
             else:
@@ -8893,7 +8897,7 @@ if _tab_open(tab_perf):
 
                             st.markdown("#### 📊 Résultats de la Comparaison")
                             _html_table(
-                                df_comp_res[cols_final_comp],
+                                _dash_if_empty(df_comp_res[cols_final_comp], eq_cols=tuple(cols_final_comp[1:])),
                                 cell_style=lambda c, v: _style_perf_bg_cell(v) if c in cols_final_comp[1:] else "",
                             )
                         else:
@@ -8950,16 +8954,16 @@ if _tab_open(tab_dividends):
                     render_yearly_amounts(div_yearly_sum, "#0d9488", detail_source=df_divs, detail_value_col="Montant_Net", detail_kind="dividendes")
 
                     st.markdown("<br>", unsafe_allow_html=True)
-                    st.markdown("**Cartographie mensuelle :**")
+                    st.markdown("**Cartographie des dividendes mensuels :**")
                     build_calendar_heatmap(
                         df_divs, "Date_Heure", "Montant_Net",
                         ["#f0fdfa", "#0d9488"], "divs",
                         date_ouverture=(pea_opening_dt if not df_transactions.empty else None),
-                        breakdown_kind="dividendes"
+                        breakdown_kind="dividendes", compact=True
                     )
 
                     # Rendement mensuel = dividendes nets du mois ÷ capital investi moyen du mois (coût d'achat).
-                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
                     st.markdown("**Cartographie des rendements mensuels :**")
                     _rows_rend = []
                     try:
@@ -9418,7 +9422,7 @@ if _tab_open(tab_history):
                             _sale_q = df_q_res.pop("_sale").to_numpy()
                             _rs_q = _row_styles_of(style_entire_row_gradient(df_q_res))
                             _html_table(_dash_if_empty(df_q_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_q),
-                                        row_styles=_rs_q, show_index=True, index_label="N°")
+                                        row_styles=_rs_q, show_index=True, index_label="N°", max_height=350)
                         else:
                             st.info("Pas encore assez d'historique pour établir ce tableau.")
 
@@ -9477,7 +9481,7 @@ if _tab_open(tab_history):
                         _sale_m = df_m_res.pop("_sale").to_numpy()
                         _rs_m = _row_styles_of(style_entire_row_gradient(df_m_res))
                         _html_table(_dash_if_empty(df_m_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_m),
-                                    row_styles=_rs_m, show_index=True, index_label="N°")
+                                    row_styles=_rs_m, show_index=True, index_label="N°", max_height=350)
 
             with st.expander("📅 Historique des performances annuelles", expanded=True):
                 if not df_transactions.empty:
@@ -9538,7 +9542,7 @@ if _tab_open(tab_history):
                         _sale_y = df_y_res.pop("_sale").to_numpy()
                         _rs_y = _row_styles_of(style_entire_row_gradient(df_y_res))
                         _html_table(_dash_if_empty(df_y_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_y),
-                                    row_styles=_rs_y, show_index=True, index_label="N°")
+                                    row_styles=_rs_y, show_index=True, index_label="N°", max_height=350)
         _rendu_onglet_historique(df_transactions, tot_invested, _now_paris().strftime("%Y-%m-%d"), _epoch_now)
 
 
@@ -10039,8 +10043,7 @@ if _tab_open(tab_watchlist):
             _inject_metric_tips()
             st.markdown("<hr style='margin: 18px 0 12px 0;'>", unsafe_allow_html=True)
             st.markdown("### 📚 Fondamentaux & analystes")
-            _src = st.radio("Valeurs analysées", ["Portefeuille", "Watchlist"], horizontal=True,
-                            key="k_fond_src", label_visibility="collapsed")
+            _src = "Watchlist"
             _univers = []   # (nom, ticker, valeur actuelle ou None)
             if _src == "Portefeuille":
                 if df_port is not None and not df_port.empty:
@@ -10149,31 +10152,6 @@ if _tab_open(tab_watchlist):
                         cell_style=lambda c, v: (_style_perf_cell(v) if c == "Écart à l'objectif" else (_AV.get(str(v), "") if c == "Avis" else "")),
                         sticky_col="Nom",
                     )
-                    # Détail d'une valeur : répartition des avis et fourchette d'objectifs.
-                    _noms_det = [r["Nom"] for r in _rows_a]
-                    _choix = st.selectbox("Détail des analystes pour une valeur", options=_noms_det, index=None,
-                                          placeholder="Choisir une action pour voir le détail...", key="k_fond_detail")
-                    if _choix:
-                        _dd = next((d for (n, _t, _v, d) in _ok if n == _choix), None)
-                        if _dd:
-                            _rc = _dd.get("reco")
-                            _segs = [("Achat fort", "strongBuy", "#15803d", "#ffffff"), ("Achat", "buy", "#4ade80", "#14532d"),
-                                     ("Neutre", "hold", "#cbd5e1", "#1e293b"), ("Vente", "sell", "#f87171", "#7f1d1d"),
-                                     ("Vente forte", "strongSell", "#b91c1c", "#ffffff")]
-                            _tot_rc = sum((_rc or {}).values())
-                            if _rc and _tot_rc > 0:
-                                _bar = "".join(
-                                    f"<div style='flex:{_rc[k]}; background:{bg}; color:{fgc}; text-align:center; padding:5px 0; font-weight:800; font-size:0.85rem;'>{_rc[k]}</div>"
-                                    for (lb, k, bg, fgc) in _segs if _rc.get(k))
-                                _leg = " · ".join(f"<span style='color:{bg if bg != '#cbd5e1' else '#64748b'}; font-weight:700;'>■</span> {lb}" for (lb, k, bg, fgc) in _segs if _rc.get(k))
-                                st.markdown(f"<div style='font-weight:700; margin:8px 0 4px;'>{_esc(_choix)} : avis des analystes</div>"
-                                            f"<div style='display:flex; border-radius:8px; overflow:hidden;'>{_bar}</div>"
-                                            f"<div style='font-size:0.8rem; margin-top:4px;'>{_leg}</div>", unsafe_allow_html=True)
-                            _bas, _moy, _haut = _dd.get("cible_bas"), _dd.get("cible"), _dd.get("cible_haut")
-                            st.markdown(
-                                "<div style='font-size:0.9rem; margin-top:8px;'>Objectif : "
-                                f"<b>{fmt_eur(_bas) if _bas else '—'}</b> (bas) · <b>{fmt_eur(_moy) if _moy else '—'}</b> (moyen) · "
-                                f"<b>{fmt_eur(_haut) if _haut else '—'}</b> (haut)</div>", unsafe_allow_html=True)
                 else:
                     st.info("Pas d'objectif d'analystes disponible pour ces valeurs.")
 
