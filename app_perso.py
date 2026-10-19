@@ -2583,6 +2583,20 @@ _SECTEURS_FR = {
     "Communication Services": "Communication",
 }
 
+# Repli manuel quand Yahoo ne renvoie aucun secteur : fragment du nom (minuscules, sans accent) -> secteur. À compléter.
+_SECTEURS_MANUELS = {
+    "vusion": "Technologie", "2crsi": "Technologie", "asml": "Technologie",
+    "air liquide": "Matériaux de base", "schneider": "Industrie",
+    "credit agricole": "Services financiers", "tme pharma": "Santé",
+}
+
+def _secteur_manuel(nom):
+    n = _norm_nom(nom)
+    for k, v in _SECTEURS_MANUELS.items():
+        if k in n:
+            return v
+    return None
+
 def _secteur_fr(sect):
     """Nom de secteur en français ('Autre' si inconnu, ex. ETF sans secteur)."""
     if sect is None or (isinstance(sect, float) and np.isnan(sect)):
@@ -2864,7 +2878,19 @@ _ALLOC4_HTML = r"""
   function fit() {
     try {
       var h = Math.ceil(rootEl.getBoundingClientRect().height) + 16;
-      try { window.frameElement.style.height = h + 'px'; }
+      try {
+        var fe = window.frameElement;
+        fe.style.height = h + 'px'; fe.setAttribute('height', h);
+        // Streamlit fixe aussi la hauteur du conteneur parent : on l'aligne, sinon la section suivante chevauche la légende
+        // (cadre trop court) ou laisse un grand vide (cadre trop haut).
+        var p = fe.parentElement, k = 0;
+        while (p && k < 4) {
+          var cls = String(p.className || '');
+          if ((p.style && p.style.height) || /stElementContainer|element-container/.test(cls)) { p.style.height = h + 'px'; }
+          if (/stElementContainer|element-container/.test(cls)) break;
+          p = p.parentElement; k++;
+        }
+      }
       catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
     } catch (e) {}
   }
@@ -2888,7 +2914,10 @@ def _render_allocation(df_active, cash):
         for _, r in df_active.iterrows():
             v = float(r["Valeur Actuelle (€)"])
             if v > 0:
-                rows.append((str(r["Nom"]), str(r["Ticker"]), v, _secteur_fr(r.get("Secteur")), r.get("Pays")))
+                _sect_r = _secteur_fr(r.get("Secteur"))
+                if _sect_r == "Autre":
+                    _sect_r = _secteur_manuel(r["Nom"]) or _sect_r
+                rows.append((str(r["Nom"]), str(r["Ticker"]), v, _sect_r, r.get("Pays")))
     if not rows:
         st.info("Aucune position à répartir pour le moment.")
         return
@@ -2946,7 +2975,7 @@ def _render_allocation(df_active, cash):
     payload = json.dumps(don, ensure_ascii=False).replace("</", "<\\/")
     page = _ALLOC4_HTML.replace("__DON__", payload)
     _r1, _r2 = max(len(A), len(S)), max(len(P), len(K))
-    components.html(page, height=int(2 * (16 + 172) + (_r1 + _r2) * 14 + 14 + 36))
+    components.html(page, height=int(2 * 205 + (_r1 + _r2) * 16.5 + 22 + 20))
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
