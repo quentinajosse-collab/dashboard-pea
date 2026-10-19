@@ -1207,6 +1207,80 @@ _TIP_JS = r"""
 """
 
 
+# Explication « au clic » des petits indicateurs de la Vue d'ensemble : on touche/clique l'indicateur et une
+# bulle indique UNIQUEMENT comment son % est calculé (pas de bulle d'aide au survol à droite du libellé).
+_METRIC_TIPS = {
+    "Performance Globale": "% = gains cumulés (plus-values latentes + actées + dividendes) ÷ total des apports nets.",
+    "Performance YTD": "% = gain depuis le 1er janvier (latent + actée + dividendes) ÷ valeur du portefeuille au 31 décembre précédent.",
+    "Performance du Mois": "% = gain depuis le 1er du mois ÷ valeur du portefeuille à la fin du mois précédent.",
+    "Performance du Jour": "% = gain du jour ÷ valeur du portefeuille à la clôture de la veille (hors apports et retraits).",
+    "Performance Annuelle Moyenne": "% = (1 + performance globale) ^ (1 ÷ nombre d'années depuis l'ouverture) − 1, soit un taux annuel composé (calculé après 3 mois d'historique).",
+    "Plus-Value Latente": "% = plus-value latente ÷ capital investi dans les titres encore détenus.",
+    "Plus-Value Actée": "% = plus-value actée ÷ valeur totale actuelle du portefeuille (actions + cash).",
+    "Dividendes Reçus": "% = dividendes nets reçus ÷ total des apports nets.",
+    "Frais Totaux": "% = frais totaux (courtage + TTF) ÷ gains totaux (plus-values latentes + actées + dividendes encaissés).",
+    "Rendement sur cours": "% = dividendes nets annuels (reçus ÷ nombre d'années depuis l'ouverture, après 3 mois) ÷ valeur actuelle des titres détenus (cours du jour). La flèche indique le dividende annuel moyen en €.",
+    "Rendement sur coût": "% = dividendes nets annuels (reçus ÷ nombre d'années depuis l'ouverture, après 3 mois) ÷ coût de revient des titres détenus (PRU × quantités). La flèche indique le dividende annuel moyen en €.",
+    "PER pondéré": "Moyenne harmonique du PER (cours ÷ bénéfice par action, 12 derniers mois) des lignes, pondérée par leur valeur actuelle. ETF et valeurs sans bénéfice exclus.",
+    "P/B pondéré": "Moyenne harmonique du ratio cours ÷ valeur comptable par action, pondérée par la valeur actuelle des lignes. ETF et valeurs sans donnée exclus.",
+    "PEG pondéré": "Moyenne harmonique du PEG (PER ÷ croissance attendue des bénéfices), pondérée par la valeur actuelle des lignes. Valeurs sans PEG exclues.",
+    "Drawdown Maximum": "% = plus forte baisse du portefeuille depuis un sommet, calculée sur la performance quotidienne (hors apports et retraits). La flèche indique l'écart actuel par rapport au dernier sommet.",
+}
+
+_METRIC_TIP_JS = r"""
+(function () {
+  var P = window.parent;
+  if (!P) return;
+  P.__peaMetricTips = __TIPS__;
+  if (P.__peaMetricTipInit) return;
+  P.__peaMetricTipInit = true;
+  var code = '(' + function () {
+    var D = document, bubble = null;
+    var st = D.createElement('style');
+    st.textContent = '[data-testid="stMetric"].pea-tipable{cursor:pointer}' +
+      '[data-testid="stMetric"].pea-tipable [data-testid="stMetricLabel"] p::after{content:" ⓘ";opacity:.45;font-size:.85em}' +
+      '#pea-metric-bubble{position:fixed;z-index:999999;max-width:280px;padding:9px 12px;border-radius:10px;' +
+      'background:#1e293b;color:#f8fafc;font:500 13px/1.4 system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.28);pointer-events:none}';
+    D.head.appendChild(st);
+    function labelOf(m) { var l = m.querySelector('[data-testid="stMetricLabel"]'); return l ? l.textContent.trim() : ''; }
+    function mark() {
+      var tips = window.__peaMetricTips || {};
+      D.querySelectorAll('[data-testid="stMetric"]').forEach(function (m) {
+        if (tips[labelOf(m)]) m.classList.add('pea-tipable'); else m.classList.remove('pea-tipable');
+      });
+    }
+    function close() { if (bubble) { bubble.remove(); bubble = null; } }
+    D.addEventListener('click', function (e) {
+      var m = e.target.closest ? e.target.closest('[data-testid="stMetric"]') : null;
+      var txt = m ? (window.__peaMetricTips || {})[labelOf(m)] : null;
+      var same = bubble && m && bubble.__m === m;
+      close();
+      if (!txt || same) return;
+      bubble = D.createElement('div'); bubble.id = 'pea-metric-bubble'; bubble.textContent = txt; bubble.__m = m;
+      D.body.appendChild(bubble);
+      var r = m.getBoundingClientRect(), b = bubble.getBoundingClientRect();
+      var left = Math.min(Math.max(r.left + r.width / 2 - b.width / 2, 8), window.innerWidth - b.width - 8);
+      var top = r.top - b.height - 8; if (top < 8) top = r.bottom + 8;
+      bubble.style.left = left + 'px'; bubble.style.top = top + 'px';
+    }, true);
+    window.addEventListener('scroll', close, { passive: true, capture: true });
+    setInterval(mark, 700); mark();
+  } + ')();';
+  var s = P.document.createElement('script');
+  s.textContent = code;
+  P.document.head.appendChild(s);
+})();
+"""
+
+def _inject_metric_tips():
+    """Installe (une fois) l'explication au clic des indicateurs ; met à jour les textes à chaque exécution."""
+    try:
+        import streamlit.components.v1 as _components
+        _components.html("<script>" + _METRIC_TIP_JS.replace("__TIPS__", json.dumps(_METRIC_TIPS, ensure_ascii=False).replace("</", "<\\/")) + "</script>", height=0)
+    except Exception:
+        pass
+
+
 def _hover_zone_trace(x_edge, y_positions, customdata, hovertemplate):
     """Barre invisible couvrant toute la largeur de chaque ligne d'un classement horizontal : l'infobulle de la
     barre s'affiche alors en survolant (ou en touchant) n'importe quel point de la ligne, même quand la barre
@@ -1845,6 +1919,20 @@ def fmt_perf_simple(val):
         return "▬ 0,00%"
 
 
+def fmt_pts(val):
+    """Contribution à la performance : ▲ +0,52 % / ▼ -0,12 % / ▬ 0,00 %."""
+    try:
+        if pd.isna(val):
+            return "N/A"
+    except Exception:
+        return "N/A"
+    if val > 0.005:
+        return f"▲ +{val:,.2f} %".replace(",", " ").replace(".", ",")
+    if val < -0.005:
+        return f"▼ {val:,.2f} %".replace(",", " ").replace(".", ",")
+    return "▬ 0,00 %"
+
+
 def _style_perf_cell(v):
     """Couleur du texte d'une cellule de performance déjà formatée (▲ vert, ▼ rouge, ▬ gris)."""
     s = str(v)
@@ -1852,7 +1940,7 @@ def _style_perf_cell(v):
         return "color:#16a34a; font-weight:700;"
     if s.startswith("▼"):
         return "color:#dc2626; font-weight:700;"
-    return "color:#64748b;"
+    return "color:#64748b; font-weight:700;"
 
 def _arrow_sym(val, eps=0.005):
     """▲ (hausse) / ▼ (baisse) / ▬ (stable) selon le signe, avec une petite tolérance."""
@@ -1882,6 +1970,8 @@ def _style_perf_bg_cell(v):
         return "background-color: rgba(34,197,94,0.16); color:#15803d; font-weight:700;"
     if s.startswith("▼"):
         return "background-color: rgba(239,68,68,0.14); color:#b91c1c; font-weight:700;"
+    if s.startswith("=") or s.startswith("▬"):
+        return "color:#64748b; font-weight:700;"
     return ""
 
 
@@ -2114,6 +2204,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
         tds = [f'<th class="ix">{_esc(str(idx[i]))}</th>'] if show_index else []
         for c, v in zip(cols, row):
             cs = (cell_style(c, v) if cell_style else "") or ""
+            if str(v).startswith("= ") and "font-weight" not in cs:
+                cs += "font-weight:700;"
             p = parsed[c][i] if c in parsed else None
             if p is not None:
                 arrow, num, unit = p
@@ -2137,6 +2229,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
         for c in cols:
             v = total_row.get(c, "")
             cs = (cell_style(c, v) if cell_style else "") or ""
+            if str(v).startswith("= ") and "font-weight" not in cs:
+                cs += "font-weight:700;"
             p = parsed[c][_n_body] if c in parsed else None
             if p is not None:
                 arrow, num, unit = p
@@ -2361,7 +2455,7 @@ def _fmt_cell_heat(v, zero="-"):
         return f"{v:.0f}"
     return f"{v:.1f}".replace(".", ",")
 
-def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, date_ouverture=None, breakdown_kind=None):
+def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefix, date_ouverture=None, breakdown_kind=None, unit="eur", compact=False):
     """Cartographie mensuelle : une ligne par année (la plus récente en haut), un mois par colonne,
     montant compact écrit dans chaque case, dégradé blanc -> couleur d'accent, légende horizontale
     sous le graphique. Axes numériques (0..11 / 0..n-1) avec libellés personnalisés : cases carrées-ish,
@@ -2369,6 +2463,17 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
     if df_source.empty:
         st.info("Aucune donnée à afficher pour le moment.")
         return
+
+    if unit == "pct":
+        _fmt_v = lambda x: f"{x:.2f} %".replace(".", ",")
+        _cell = lambda x, zero="-": (zero if abs(x) < 0.005 else f"{x:.2f}".replace(".", ","))
+        _tick = lambda x: f"{x:.2f} %".replace(".", ",")
+        _lbl = "Rendement"
+    else:
+        _fmt_v = fmt_eur
+        _cell = _fmt_cell_heat
+        _tick = lambda x: _fmt_cell_heat(x, zero="0")
+        _lbl = "Total"
 
     mois_court = ["Jan", "Fév", "Mar", "Avr", "Mai", "Jui", "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"]
     mois_hover = ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sep", "Oct", "Nov", "Déc"]
@@ -2396,7 +2501,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
         for month in range(min_month, max_month + 1):
             val = float(monthly_sum.get((year, month), 0.0))
             z[yi, month - 1] = val
-            cell_txt = f"<b>{mois_hover[month - 1]} {year}</b><br><span style='color:{_accent};'><b>Total : {fmt_eur(val)}</b></span>"
+            cell_txt = f"<b>{mois_hover[month - 1]} {year}</b><br><span style='color:{_accent};'><b>{_lbl} : {_fmt_v(val)}</b></span>"
             if breakdown_kind is not None and val != 0:
                 df_cell = df_source[(dates.dt.year == year) & (dates.dt.month == month)]
                 lines = _breakdown_lines_for_kind(df_cell, breakdown_kind, value_col)
@@ -2415,15 +2520,16 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
             if np.isnan(v):
                 continue
             annotations.append(dict(
-                x=mi, y=yi, xref="x", yref="y", showarrow=False, text=_fmt_cell_heat(v),
+                x=mi, y=yi, xref="x", yref="y", showarrow=False, text=_cell(v),
                 font=dict(size=10, color="#ffffff" if (v / zmax) > 0.55 else "#0f172a"),
             ))
 
     row_h = 34
     plot_h = row_h * n
-    top_m, bot_m = 28, 78
+    top_m, bot_m = (18, 38) if (unit == "pct" or compact) else (28, 78)
+    _cb_off = 6.0 if (unit == "pct" or compact) else 14.0   # écart carte -> légende (plus serré pour les rendements)
     tick_vals = [0.0, zmax / 2.0, zmax]
-    tick_text = [_fmt_cell_heat(v, zero="0") for v in tick_vals]
+    tick_text = [_tick(v) for v in tick_vals]
 
     fig = go.Figure(data=go.Heatmap(
         z=z, x=list(range(12)), y=list(range(n)),
@@ -2432,7 +2538,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
         xgap=2, ygap=2, hoverongaps=False, showscale=True, name="",
         colorbar=dict(
             orientation="h", x=0.5, xanchor="center",
-            y=-(14.0 / plot_h), yanchor="top", yref="paper",
+            y=-(_cb_off / plot_h), yanchor="top", yref="paper",
             lenmode="fraction", len=0.9, thickness=10, outlinewidth=0,
             tickmode="array", tickvals=tick_vals, ticktext=tick_text,
             ticks="outside", ticklen=3, tickfont=dict(size=10),
@@ -2486,294 +2592,35 @@ def _secteur_fr(sect):
         return "Autre"
     return _SECTEURS_FR.get(t, t)
 
-_ALLOC_HTML = r"""
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
-  html, body { margin: 0; padding: 0; background: transparent; height: 100%; }
-  #root { box-sizing: border-box; display: grid; gap: 8px 14px; justify-content: center; align-items: start; padding: 4px 2px;
-          grid-template-columns: 210px minmax(150px, 200px) 210px minmax(150px, 200px);
-          grid-template-areas: "pa la pb lb";
-          font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); }
-  #wa { grid-area: pa; } #wb { grid-area: pb; } #legA { grid-area: la; } #legS { grid-area: lb; }
-  .wrap { position: relative; width: 100%; }
-  .ttl { text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .6; margin-bottom: 2px; }
-  svg { width: 100%; max-width: 210px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
-  .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
-  .slice.dim { opacity: .28; }
-  .row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; cursor: pointer;
-         transition: opacity .18s ease, background .18s ease; -webkit-tap-highlight-color: transparent; }
-  .row.sel { background: rgba(127,127,127,.14); }
-  .row.dim { opacity: .4; }
-  .dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 10px; }
-  .nm { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pc { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12px; opacity: .85; }
-  text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
-  html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  .mono { font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
-  /* Écran étroit : les deux camemberts restent côte à côte, légendes dessous (on voit toujours les deux). */
-  @media (max-width: 880px) {
-    #root { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "pa pb" "la lb"; gap: 6px 10px; }
-    svg { max-width: 200px; }
-    .nm { font-size: 12px; } .pc { font-size: 11px; } .row { padding: 4px 4px; gap: 6px; }
-  }
-</style>
-<div id="root">
-  <div class="wrap" id="wa"><div class="ttl">Par action</div><svg id="svgA" viewBox="0 0 240 240"></svg></div>
-  <div class="wrap" id="wb"><div class="ttl">Par secteur</div><svg id="svgS" viewBox="0 0 240 240"></svg></div>
-  <div id="legA"></div>
-  <div id="legS"></div>
-</div>
-<script>
-(function () {
-  var D = __DATA__, S = __SECT__, TOTAL = __TOTAL__;
-  var fg = '#334155';
-  try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
-  document.documentElement.style.setProperty('--fg', fg);
-
-  var NS = 'http://www.w3.org/2000/svg', C = 120, R = 104, r = 76, mute = 0;
-  var st = { t: null, i: -1 };
-  var svgA = document.getElementById('svgA'), svgS = document.getElementById('svgS');
-  var legA = document.getElementById('legA'), legS = document.getElementById('legS');
-
-  // Angle minimal visible pour que même les toutes petites parts restent présentes et cliquables.
-  function layout(items) {
-    var MIN = 2.2, raw = items.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
-    var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
-    raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
-    return ang;
-  }
-  var angA = layout(D), angS = layout(S);
-
-  function pt(rad, a) { var t = (a - 90) * Math.PI / 180; return [C + rad * Math.cos(t), C + rad * Math.sin(t)]; }
-  function arc(s, e) {
-    var gap = (e - s) > 4 ? 0.5 : 0.15; s += gap; e -= gap;
-    if (e - s >= 359.9) e = s + 359.9;
-    var big = (e - s) > 180 ? 1 : 0, p0 = pt(R, s), p1 = pt(R, e), p2 = pt(r, e), p3 = pt(r, s);
-    return 'M' + p0 + 'A' + R + ',' + R + ' 0 ' + big + ' 1 ' + p1 + 'L' + p2 + 'A' + r + ',' + r + ' 0 ' + big + ' 0 ' + p3 + 'Z';
-  }
-  function el(n, at, parent) {
-    var e = document.createElementNS(NS, n);
-    for (var key in at) e.setAttribute(key, at[key]);
-    parent.appendChild(e); return e;
-  }
-  function cut(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
-  function plural(n, a, b) { return n + ' ' + (n > 1 ? b : a); }
-
-  function toggle(t, i) {
-    if (st.t === t && st.i === i) st = { t: null, i: -1 }; else st = { t: t, i: i };
-    render();
-  }
-  function build(svg, items, ang, t) {
-    return items.map(function (d, i) {
-      var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice', 'data-t': t, 'data-i': i }, svg);
-      p.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
-      return p;
-    });
-  }
-  function center(svg) {
-    return [
-      el('text', { x: C, y: C - 26, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
-      el('text', { x: C, y: C - 2, 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 700, 'class': 'mono' }, svg),
-      el('text', { x: C, y: C + 16, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
-      el('text', { x: C, y: C + 32, 'text-anchor': 'middle', 'font-size': 10.5, opacity: .7 }, svg)
-    ];
-  }
-  function buildRows(leg, items, t) {
-    return items.map(function (d, i) {
-      var row = document.createElement('div'); row.className = 'row'; row.setAttribute('data-t', t); row.setAttribute('data-i', i);
-      row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
-      row.querySelector('.nm').textContent = d.n; row.title = d.n;
-      row.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
-      leg.appendChild(row); return row;
-    });
-  }
-  var slA = build(svgA, D, angA, 'a'), slS = build(svgS, S, angS, 's');
-  var cA = center(svgA), cS = center(svgS);
-  var rowsA = buildRows(legA, D, 'a'), rowsS = buildRows(legS, S, 's');
-
-  function paint(sl, ang, rows, isAct, on) {
-    sl.forEach(function (s, j) {
-      var a = on && isAct(j);
-      s.setAttribute('class', 'slice' + (on && !a ? ' dim' : ''));
-      if (a) {
-        var m = (ang[j][0] + ang[j][1]) / 2 * Math.PI / 180;
-        s.style.transform = 'translate(' + (Math.sin(m) * 5) + 'px,' + (-Math.cos(m) * 5) + 'px)';
-      } else { s.style.transform = ''; }
-    });
-    rows.forEach(function (rw, j) {
-      var a = on && isAct(j);
-      rw.className = 'row' + (a ? ' sel' : '') + (on && !a ? ' dim' : '');
-    });
-  }
-  function txt(c, a, b, d, e) { c[0].textContent = a; c[1].textContent = b; c[2].textContent = d; c[3].textContent = e; }
-
-  function render() {
-    var on = st.t !== null, actA = {}, actS = -1;
-    if (st.t === 'a') { actA[st.i] = 1; actS = D[st.i].s; }
-    else if (st.t === 's') { S[st.i].m.forEach(function (j) { actA[j] = 1; }); actS = st.i; }
-    // Une action sélectionnée surligne son secteur ; un secteur sélectionné surligne toutes ses actions.
-    paint(slA, angA, rowsA, function (j) { return !!actA[j]; }, on);
-    paint(slS, angS, rowsS, function (j) { return j === actS; }, on);
-    if (!on) {
-      txt(cA, 'Total portefeuille', TOTAL, plural(D.length, 'position', 'positions'), '');
-      txt(cS, 'Total portefeuille', TOTAL, plural(S.length, 'secteur', 'secteurs'), '');
-      return;
-    }
-    var sc = S[actS];
-    if (st.t === 'a') {
-      var d = D[st.i];
-      txt(cA, cut(d.n, 20), d.v, d.pt + ' %', cut(sc.n, 22));
-    } else {
-      txt(cA, cut(sc.n, 20), sc.v, sc.pt + ' %', plural(sc.m.length, 'action', 'actions'));
-    }
-    txt(cS, cut(sc.n, 20), sc.v, sc.pt + ' %', plural(sc.m.length, 'action', 'actions'));
-  }
-  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t !== null) { st = { t: null, i: -1 }; render(); } });
-  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
-
-  // Doigt maintenu (~0,25 s) sur une part ou une ligne de légende, puis glissé : la sélection suit le doigt.
-  var timer = null, scrub = false, sx = 0, sy = 0;
-  function hitAt(x, y) {
-    var e = document.elementFromPoint(x, y);
-    while (e && e !== document.body) {
-      var v = e.getAttribute && e.getAttribute('data-i');
-      if (v !== null && v !== undefined) return { t: e.getAttribute('data-t'), i: +v };
-      e = e.parentNode;
-    }
-    return null;
-  }
-  function stopHold() { if (timer) { clearTimeout(timer); timer = null; } if (scrub) { scrub = false; mute = Date.now() + 450; } }
-  document.addEventListener('touchstart', function (e) {
-    stopHold();
-    if (e.touches.length !== 1) return;
-    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-    if (!hitAt(sx, sy)) return;
-    timer = setTimeout(function () {
-      timer = null; scrub = true;
-      if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
-      var h = hitAt(sx, sy); if (h) { st = h; render(); }
-    }, 250);
-  }, { passive: true });
-  document.addEventListener('touchmove', function (e) {
-    var t = e.touches[0];
-    if (scrub) {
-      e.preventDefault();
-      var h = hitAt(t.clientX, t.clientY);
-      if (h && (h.t !== st.t || h.i !== st.i)) { st = h; render(); }
-    } else if (timer && (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10)) {
-      clearTimeout(timer); timer = null;
-    }
-  }, { passive: false });
-  document.addEventListener('touchend', stopHold, { passive: true });
-  document.addEventListener('touchcancel', stopHold, { passive: true });
-
-  function fit() {
-    try {
-      var rt = document.getElementById('root');
-      var h = Math.ceil(rt.getBoundingClientRect().height) + 10;
-      try { window.frameElement.style.height = h + 'px'; }
-      catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
-    } catch (e) {}
-  }
-  render(); fit();
-  window.addEventListener('resize', fit); setTimeout(fit, 150);
-})();
-</script>
-"""
-
-def _render_allocation(df_active, cash):
-    """Deux camemberts (anneaux) côte à côte : répartition par ACTION (toutes les positions actives, même
-    très petites, sans les liquidités) et répartition par SECTEUR. Composant 100 % côté navigateur (aucun
-    rechargement au clic). Au repos le centre affiche le total du portefeuille ; au clic sur une part (ou sa
-    ligne de légende) le centre affiche sa valeur et les autres parts sont atténuées. Les deux camemberts sont
-    liés : choisir une action surligne son secteur à droite (et le centre de l'action indique ce secteur) ;
-    choisir un secteur surligne toutes ses actions à gauche. Un second clic (ou un clic à côté) désélectionne."""
-    import streamlit.components.v1 as components
-    rows = []
-    if df_active is not None and not df_active.empty:
-        for _, r in df_active.iterrows():
-            v = float(r["Valeur Actuelle (€)"])
-            if v > 0:
-                rows.append((str(r["Nom"]), v, _secteur_fr(r.get("Secteur"))))
-    if not rows:
-        st.info("Aucune position à répartir pour le moment.")
-        return
-    rows.sort(key=lambda x: -x[1])
-    total = sum(v for _, v, _ in rows)
-    total_centre = total
-    if _ALLOC_CENTER_INCLUDE_CASH and cash is not None and cash > 0.005:
-        total_centre += float(cash)
-
-    def _pct_txt(p):
-        return f"{p:.2f}".replace(".", ",")
-
-    # Secteurs : valeur cumulée de leurs actions, triés par valeur décroissante.
-    sect_val = {}
-    for _, v, sc in rows:
-        sect_val[sc] = sect_val.get(sc, 0.0) + v
-    sect_order = sorted(sect_val, key=lambda k: -sect_val[k])
-    sect_idx = {k: i for i, k in enumerate(sect_order)}
-
-    data = [
-        {"n": n, "v": fmt_eur(v), "pct": v / total * 100, "pt": _pct_txt(v / total * 100),
-         "c": _alloc_color(i), "s": sect_idx[sc]}
-        for i, (n, v, sc) in enumerate(rows)
-    ]
-    sectors = [
-        {"n": k, "v": fmt_eur(sect_val[k]), "pct": sect_val[k] / total * 100, "pt": _pct_txt(sect_val[k] / total * 100),
-         "c": _alloc_color(i), "m": [j for j, (_, _, sc) in enumerate(rows) if sc == k]}
-        for i, k in enumerate(sect_order)
-    ]
-    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
-    payload_s = json.dumps(sectors, ensure_ascii=False).replace("</", "<\\/")
-    page = (_ALLOC_HTML
-            .replace("__DATA__", payload)
-            .replace("__SECT__", payload_s)
-            .replace("__TOTAL__", json.dumps(fmt_eur(total_centre), ensure_ascii=False)))
-    # Hauteur « pire cas » ; le script la réduit automatiquement à la hauteur réelle une fois affiché.
-    components.html(page, height=260 + 32 * max(len(rows), len(sectors)))
-
-
 # ------------------------------------------------------------------
-# Camemberts liés n°2 : revenus par continent (gauche) et tranche de capitalisation (droite)
+# Quatre camemberts liés : action / secteur / pays du siège / tranche de capitalisation
 # ------------------------------------------------------------------
-# Yahoo Finance ne fournit PAS la ventilation géographique du chiffre d'affaires. Pour les valeurs ci-dessous,
-# on utilise donc des ORDRES DE GRANDEUR issus des derniers rapports annuels (arrondis, à ajuster ici si besoin).
-# Pour toute autre valeur, repli sur le continent du siège social (100 %). Clé = fragment du nom, sans accent.
-_REVENUS_CONTINENT_REF = {
-    "air liquide": {"Europe": 34, "Amérique du Nord": 30, "Asie": 27, "Amérique du Sud": 4, "Afrique": 5},
-    "asml": {"Asie": 80, "Amérique du Nord": 12, "Europe": 8},
-    "schneider": {"Europe": 28, "Amérique du Nord": 32, "Asie": 28, "Amérique du Sud": 4, "Afrique": 8},
-    "credit agricole": {"Europe": 92, "Amérique du Nord": 4, "Asie": 4},
-    "vusion": {"Amérique du Nord": 55, "Europe": 35, "Asie": 10},
-    "msci world": {"Amérique du Nord": 75, "Europe": 16, "Asie": 6, "Océanie": 3},
+_PAYS_FR = {
+    "France": "France", "Germany": "Allemagne", "Netherlands": "Pays-Bas", "Belgium": "Belgique", "Italy": "Italie",
+    "Spain": "Espagne", "Portugal": "Portugal", "Ireland": "Irlande", "Luxembourg": "Luxembourg",
+    "Switzerland": "Suisse", "United Kingdom": "Royaume-Uni", "Sweden": "Suède", "Norway": "Norvège",
+    "Denmark": "Danemark", "Finland": "Finlande", "Austria": "Autriche", "Poland": "Pologne", "Greece": "Grèce",
+    "United States": "États-Unis", "Canada": "Canada", "Mexico": "Mexique", "Brazil": "Brésil", "China": "Chine",
+    "Japan": "Japon", "South Korea": "Corée du Sud", "Taiwan": "Taïwan", "Hong Kong": "Hong Kong", "India": "Inde",
+    "Singapore": "Singapour", "Israel": "Israël", "Australia": "Australie", "South Africa": "Afrique du Sud",
 }
-_COUNTRY_CONTINENT = {}
-for _cont, _pays in {
-    "Europe": ["France", "Germany", "Netherlands", "Belgium", "Italy", "Spain", "Portugal", "Ireland", "Luxembourg",
-               "Switzerland", "United Kingdom", "Sweden", "Norway", "Denmark", "Finland", "Austria", "Poland", "Greece"],
-    "Amérique du Nord": ["United States", "Canada", "Mexico"],
-    "Amérique du Sud": ["Brazil", "Argentina", "Chile", "Colombia", "Peru"],
-    "Asie": ["China", "Japan", "South Korea", "Taiwan", "Hong Kong", "India", "Singapore", "Israel", "Saudi Arabia"],
-    "Afrique": ["South Africa", "Morocco", "Egypt", "Nigeria"],
-    "Océanie": ["Australia", "New Zealand"],
-}.items():
-    for _p in _pays:
-        _COUNTRY_CONTINENT[_p] = _cont
+# Repli quand Yahoo ne donne pas le pays du siège (ETF, petites valeurs) : place de cotation (suffixe du ticker).
+_SUFFIXE_PAYS = {
+    ".PA": "France", ".AS": "Pays-Bas", ".DE": "Allemagne", ".F": "Allemagne", ".MI": "Italie", ".L": "Royaume-Uni",
+    ".BR": "Belgique", ".MC": "Espagne", ".LS": "Portugal", ".SW": "Suisse", ".ST": "Suède", ".CO": "Danemark",
+    ".OL": "Norvège", ".HE": "Finlande", ".VI": "Autriche", ".IR": "Irlande", ".TO": "Canada",
+}
 
-def _norm_nom(s):
-    import unicodedata
-    return "".join(c for c in unicodedata.normalize("NFD", str(s).lower()) if unicodedata.category(c) != "Mn")
-
-def _continent_split(nom, country):
-    """({continent: %}, estimé_par_ref) : ventilation des revenus d'une valeur par continent."""
-    n = _norm_nom(nom)
-    for key, split in _REVENUS_CONTINENT_REF.items():
-        if key in n:
-            tot = float(sum(split.values())) or 1.0
-            return {k: v / tot * 100 for k, v in split.items()}, True
-    cont = _COUNTRY_CONTINENT.get(country)
-    return ({cont: 100.0} if cont else {"Non déterminé": 100.0}), False
+def _pays_siege(pays, ticker):
+    """Pays du siège social en français ; à défaut, pays de la place de cotation ; sinon « Non déterminé »."""
+    p = str(pays).strip() if pays is not None else ""
+    if p and p.lower() not in ("nan", "none", "inconnu"):
+        return _PAYS_FR.get(p, p)
+    t = str(ticker).upper()
+    for suf, nom in _SUFFIXE_PAYS.items():
+        if t.endswith(suf):
+            return nom
+    return "Non déterminé" if "." in t else "États-Unis"
 
 def _fmt_cap(v):
     if v is None or v <= 0:
@@ -2801,53 +2648,91 @@ def _cap_bucket(mc, qt):
             return label
     return "Capitalisation inconnue"
 
-_ALLOC_PAIR_HTML = r"""
+# Yahoo Finance ne fournit PAS la ventilation géographique du chiffre d'affaires : pour les valeurs ci-dessous on
+# utilise des ORDRES DE GRANDEUR issus des rapports annuels (arrondis, à ajuster ici). Pour toute autre valeur,
+# repli sur le continent du siège social (100 %). Clé = fragment du nom, sans accent ni majuscule.
+_REVENUS_CONTINENT_REF = {
+    "air liquide": {"Europe": 34, "Amérique du Nord": 30, "Asie": 27, "Amérique du Sud": 4, "Afrique": 5},
+    "asml": {"Asie": 80, "Amérique du Nord": 12, "Europe": 8},
+    "schneider": {"Europe": 28, "Amérique du Nord": 32, "Asie": 28, "Amérique du Sud": 4, "Afrique": 8},
+    "credit agricole": {"Europe": 92, "Amérique du Nord": 4, "Asie": 4},
+    "vusion": {"Amérique du Nord": 55, "Europe": 35, "Asie": 10},
+    "msci world": {"Amérique du Nord": 75, "Europe": 16, "Asie": 6, "Océanie": 3},
+}
+_CONTINENT_PAYS_FR = {}
+for _cont, _pays in {
+    "Europe": ["France", "Allemagne", "Pays-Bas", "Belgique", "Italie", "Espagne", "Portugal", "Irlande", "Luxembourg",
+               "Suisse", "Royaume-Uni", "Suède", "Norvège", "Danemark", "Finlande", "Autriche", "Pologne", "Grèce"],
+    "Amérique du Nord": ["États-Unis", "Canada", "Mexique"],
+    "Amérique du Sud": ["Brésil"],
+    "Asie": ["Chine", "Japon", "Corée du Sud", "Taïwan", "Hong Kong", "Inde", "Singapour", "Israël"],
+    "Afrique": ["Afrique du Sud"],
+    "Océanie": ["Australie"],
+}.items():
+    for _p in _pays:
+        _CONTINENT_PAYS_FR[_p] = _cont
+
+def _norm_nom(s):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(s).lower()) if unicodedata.category(c) != "Mn")
+
+def _continent_split(nom, pays_fr):
+    """({continent: %}, par_reference) : revenus d'une valeur par continent (référence si connue, sinon siège)."""
+    n = _norm_nom(nom)
+    for key, split in _REVENUS_CONTINENT_REF.items():
+        if key in n:
+            tot = float(sum(split.values())) or 1.0
+            return {k: v / tot * 100 for k, v in split.items()}, True
+    return {_CONTINENT_PAYS_FR.get(pays_fr, "Non déterminé"): 100.0}, False
+
+_ALLOC4_HTML = r"""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
-  html, body { margin: 0; padding: 0; background: transparent; height: 100%; }
-  #root { box-sizing: border-box; display: grid; gap: 8px 14px; justify-content: center; align-items: start; padding: 4px 2px;
-          grid-template-columns: 210px minmax(150px, 200px) 210px minmax(150px, 200px);
-          grid-template-areas: "pa la pb lb";
-          font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); }
-  #wa { grid-area: pa; } #wb { grid-area: pb; } #legA { grid-area: la; } #legS { grid-area: lb; }
-  .wrap { position: relative; width: 100%; }
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #root { box-sizing: border-box; padding: 4px 2px; font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+          color: var(--fg, #334155); }
+  #grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 14px; align-items: start; }
+  .cell { min-width: 0; }
   .ttl { text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .6; margin-bottom: 2px; }
-  svg { width: 100%; max-width: 210px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
+  svg { width: 100%; max-width: 280px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
   .slice.dim { opacity: .28; }
-  .row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; cursor: pointer;
+  .leg { margin-top: 4px; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 8px; cursor: pointer;
          transition: opacity .18s ease, background .18s ease; -webkit-tap-highlight-color: transparent; }
   .row.sel { background: rgba(127,127,127,.14); }
   .row.dim { opacity: .4; }
   .dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 10px; }
-  .nm { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nm { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .pc { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12px; opacity: .85; }
   text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
   html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .mono { font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
-  @media (max-width: 880px) {
-    #root { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "pa pb" "la lb"; gap: 6px 10px; }
-    svg { max-width: 200px; }
-    .nm { font-size: 12px; } .pc { font-size: 11px; } .row { padding: 4px 4px; gap: 6px; }
+  /* Téléphone : 2 x 2 serrés, légende toujours visible sous chaque camembert, lignes compactes pour que
+     l'ensemble tienne si possible sur un seul écran ; une seule ligne d'écart entre les deux rangées. */
+  @media (max-width: 760px) {
+    #grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 6px; }
+    .ttl { font-size: 10px; margin-bottom: 0; }
+    svg { max-width: 210px; }
+    .leg { margin-top: 0; }
+    .nm { font-size: 11px; } .pc { font-size: 10.5px; }
+    .row { padding: 1px 3px; gap: 5px; }
+    .dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 2px; }
   }
 </style>
 <div id="root">
-  <div class="wrap" id="wa"><div class="ttl">__TTL_L__</div><svg id="svgA" viewBox="0 0 240 240"></svg></div>
-  <div class="wrap" id="wb"><div class="ttl">__TTL_R__</div><svg id="svgS" viewBox="0 0 240 240"></svg></div>
-  <div id="legA"></div>
-  <div id="legS"></div>
+  <div id="grid"></div>
 </div>
 <script>
 (function () {
-  var L = __L__, R = __R__, CL = __CL__, CR = __CR__, NL = __NL__, NR = __NR__;
+  var DON = __DON__;
   var fg = '#334155';
   try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
   document.documentElement.style.setProperty('--fg', fg);
 
-  var NS = 'http://www.w3.org/2000/svg', C = 120, RAD = 104, r = 76, mute = 0;
-  var st = { t: null, i: -1 };
-  var svgA = document.getElementById('svgA'), svgS = document.getElementById('svgS');
-  var legA = document.getElementById('legA'), legS = document.getElementById('legS');
+  var NS = 'http://www.w3.org/2000/svg', C = 120, RAD = 106, r = 78, mute = 0;
+  var st = { t: -1, i: -1 };
+  var grid = document.getElementById('grid'), rootEl = document.getElementById('root');
 
   function layout(items) {
     var MIN = 2.2, raw = items.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
@@ -2855,7 +2740,6 @@ _ALLOC_PAIR_HTML = r"""
     raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
     return ang;
   }
-  var angL = layout(L), angR = layout(R);
   function pt(rad, a) { var t = (a - 90) * Math.PI / 180; return [C + rad * Math.cos(t), C + rad * Math.sin(t)]; }
   function arc(s, e) {
     var gap = (e - s) > 4 ? 0.5 : 0.15; s += gap; e -= gap;
@@ -2870,85 +2754,84 @@ _ALLOC_PAIR_HTML = r"""
   }
   function cut(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
   function plural(n, w) { return n + ' ' + (n > 1 ? w[1] : w[0]); }
-  var AC = ['action', 'actions'];
   function inter(a, b) { for (var i = 0; i < a.length; i++) if (b.indexOf(a[i]) >= 0) return true; return false; }
 
   function toggle(t, i) {
-    if (st.t === t && st.i === i) st = { t: null, i: -1 }; else st = { t: t, i: i };
+    if (st.t === t && st.i === i) st = { t: -1, i: -1 }; else st = { t: t, i: i };
     render();
   }
-  function build(svg, items, ang, t) {
-    return items.map(function (d, i) {
-      var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice', 'data-t': t, 'data-i': i }, svg);
+
+  DON.forEach(function (D, t) {
+    D.ang = layout(D.items);
+    var cell = document.createElement('div'); cell.className = 'cell';
+    cell.innerHTML = '<div class="ttl"></div><svg viewBox="0 0 240 240"></svg><div class="leg"></div>';
+    cell.querySelector('.ttl').textContent = D.title;
+    grid.appendChild(cell);
+    var svg = cell.querySelector('svg'), leg = cell.querySelector('.leg');
+    D.sl = D.items.map(function (d, i) {
+      var p = el('path', { d: arc(D.ang[i][0], D.ang[i][1]), fill: d.c, 'class': 'slice', 'data-t': t, 'data-i': i }, svg);
       p.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
       return p;
     });
-  }
-  function center(svg) {
-    return [
-      el('text', { x: C, y: C - 26, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
-      el('text', { x: C, y: C - 2, 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 700, 'class': 'mono' }, svg),
-      el('text', { x: C, y: C + 16, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
-      el('text', { x: C, y: C + 32, 'text-anchor': 'middle', 'font-size': 10.5, opacity: .7 }, svg)
+    D.ct = [
+      el('text', { x: C, y: C - 26, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 }, svg),
+      el('text', { x: C, y: C - 2, 'text-anchor': 'middle', 'font-size': 18, 'font-weight': 700, 'class': 'mono' }, svg),
+      el('text', { x: C, y: C + 17, 'text-anchor': 'middle', 'font-size': 12, opacity: .7 }, svg),
+      el('text', { x: C, y: C + 34, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg)
     ];
-  }
-  function buildRows(leg, items, t) {
-    return items.map(function (d, i) {
+    D.rows = D.items.map(function (d, i) {
       var row = document.createElement('div'); row.className = 'row'; row.setAttribute('data-t', t); row.setAttribute('data-i', i);
       row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
       row.querySelector('.nm').textContent = d.n; row.title = d.n + ' — ' + d.v;
       row.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
       leg.appendChild(row); return row;
     });
-  }
-  var slL = build(svgA, L, angL, 'l'), slR = build(svgS, R, angR, 'r');
-  var cL = center(svgA), cR = center(svgS);
-  var rowsL = buildRows(legA, L, 'l'), rowsR = buildRows(legS, R, 'r');
+  });
 
-  function paint(sl, ang, rows, isAct, on) {
-    sl.forEach(function (s, j) {
+  function paint(D, isAct, on) {
+    D.sl.forEach(function (s, j) {
       var a = on && isAct(j);
       s.setAttribute('class', 'slice' + (on && !a ? ' dim' : ''));
       if (a) {
-        var m = (ang[j][0] + ang[j][1]) / 2 * Math.PI / 180;
+        var m = (D.ang[j][0] + D.ang[j][1]) / 2 * Math.PI / 180;
         s.style.transform = 'translate(' + (Math.sin(m) * 5) + 'px,' + (-Math.cos(m) * 5) + 'px)';
       } else { s.style.transform = ''; }
     });
-    rows.forEach(function (rw, j) {
+    D.rows.forEach(function (rw, j) {
       var a = on && isAct(j);
       rw.className = 'row' + (a ? ' sel' : '') + (on && !a ? ' dim' : '');
     });
   }
   function txt(c, a, b, d, e) { c[0].textContent = a; c[1].textContent = b; c[2].textContent = d; c[3].textContent = e; }
-  function show(c, d) { txt(c, cut(d.n, 20), d.v, d.pt + ' %', plural(d.m.length, AC)); }
+  function show(D, d) { txt(D.ct, cut(d.n, 20), d.v, d.pt + ' %', d.x ? cut(d.x, 22) : plural(d.m.length, DON[0].nouns)); }
 
   function render() {
-    var on = st.t !== null, actL = {}, actR = {};
-    if (st.t === 'l') {
-      actL[st.i] = 1;
-      R.forEach(function (it, j) { if (inter(it.m, L[st.i].m)) actR[j] = 1; });
-    } else if (st.t === 'r') {
-      actR[st.i] = 1;
-      L.forEach(function (it, j) { if (inter(it.m, R[st.i].m)) actL[j] = 1; });
-    }
-    paint(slL, angL, rowsL, function (j) { return !!actL[j]; }, on);
-    paint(slR, angR, rowsR, function (j) { return !!actR[j]; }, on);
-    if (!on) { txt(cL, CL[0], CL[1], CL[2], CL[3]); txt(cR, CR[0], CR[1], CR[2], CR[3]); return; }
-    var selL = st.t === 'l', sel = selL ? L[st.i] : R[st.i];
-    show(selL ? cL : cR, sel);
-    var oth = selL ? R : L, oact = selL ? actR : actL, ids = Object.keys(oact);
-    if (ids.length === 1) show(selL ? cR : cL, oth[+ids[0]]);
-    else txt(selL ? cR : cL, 'Lié à ' + cut(sel.n, 14), plural(ids.length, selL ? NR : NL), '', '');
+    var on = st.t >= 0;
+    var sel = on ? DON[st.t].items[st.i] : null;
+    DON.forEach(function (D, t) {
+      var act = {};
+      if (on) {
+        if (t === st.t) act[st.i] = 1;
+        else D.items.forEach(function (it, j) { if (inter(it.m, sel.m)) act[j] = 1; });
+      }
+      paint(D, function (j) { return !!act[j]; }, on);
+      if (!on) { txt(D.ct, D.rest[0], D.rest[1], D.rest[2], D.rest[3]); return; }
+      if (t === st.t) { show(D, sel); return; }
+      var ids = Object.keys(act);
+      if (ids.length === 1) show(D, D.items[+ids[0]]);
+      else txt(D.ct, 'Lié à ' + cut(sel.n, 14), plural(ids.length, D.nouns), '', '');
+    });
   }
-  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t !== null) { st = { t: null, i: -1 }; render(); } });
+  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t >= 0) { st = { t: -1, i: -1 }; render(); } });
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
+  // Doigt maintenu (~0,25 s) sur une part ou une ligne de légende, puis glissé : la sélection suit le doigt.
   var timer = null, scrub = false, sx = 0, sy = 0;
   function hitAt(x, y) {
     var e = document.elementFromPoint(x, y);
     while (e && e !== document.body) {
       var v = e.getAttribute && e.getAttribute('data-i');
-      if (v !== null && v !== undefined) return { t: e.getAttribute('data-t'), i: +v };
+      if (v !== null && v !== undefined) return { t: +e.getAttribute('data-t'), i: +v };
       e = e.parentNode;
     }
     return null;
@@ -2980,78 +2863,90 @@ _ALLOC_PAIR_HTML = r"""
 
   function fit() {
     try {
-      var rt = document.getElementById('root');
-      var h = Math.ceil(rt.getBoundingClientRect().height) + 10;
+      var h = Math.ceil(rootEl.getBoundingClientRect().height) + 16;
       try { window.frameElement.style.height = h + 'px'; }
       catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
     } catch (e) {}
   }
   render(); fit();
-  window.addEventListener('resize', fit); setTimeout(fit, 150);
+  window.addEventListener('resize', fit); setTimeout(fit, 150); setTimeout(fit, 600); setTimeout(fit, 1500);
+  try { new ResizeObserver(fit).observe(rootEl); } catch (e) {}
+  try { document.fonts.ready.then(fit); } catch (e) {}
 })();
 </script>
 """
 
-def _render_allocation_geo(df_active):
-    """Deux camemberts liés : revenus par continent (gauche) et tranche de capitalisation (droite). Un clic sur un
-    continent surligne les tranches de capitalisation des sociétés qui y réalisent du chiffre d'affaires, et
-    inversement. Valeurs en € = part du portefeuille concernée."""
+def _render_allocation(df_active, cash):
+    """Quatre camemberts (anneaux) tous liés : par ACTION, par SECTEUR, par PAYS du siège social et par TRANCHE
+    DE CAPITALISATION. Composant 100 % côté navigateur (aucun rechargement au clic). Au repos le centre affiche
+    un total ; au clic sur une part (ou sa ligne de légende) elle est mise en avant, et dans CHACUN des trois
+    autres camemberts les parts qui lui sont liées (mêmes actions) sont surlignées avec leur valeur au centre.
+    Un second clic (ou un clic à côté) désélectionne. Sur téléphone : 2 x 2 serrés, légende repliable."""
     import streamlit.components.v1 as components
     rows = []
     if df_active is not None and not df_active.empty:
         for _, r in df_active.iterrows():
             v = float(r["Valeur Actuelle (€)"])
             if v > 0:
-                rows.append((str(r["Nom"]), str(r["Ticker"]), v, r.get("Pays")))
+                rows.append((str(r["Nom"]), str(r["Ticker"]), v, _secteur_fr(r.get("Secteur")), r.get("Pays")))
     if not rows:
         st.info("Aucune position à répartir pour le moment.")
         return
+    rows.sort(key=lambda x: -x[2])
     total = sum(x[2] for x in rows)
-    _pct_txt = lambda p: f"{p:.2f}".replace(".", ",")
+    _pct = lambda p: f"{p:.2f}".replace(".", ",")
 
-    # --- Continents (valeur du portefeuille ventilée selon la répartition des revenus de chaque société)
-    cont_val, cont_mem, n_est, fallback_noms = {}, {}, 0, []
-    for idx, (nom, tick, v, pays) in enumerate(rows):
-        split, is_ref = _continent_split(nom, pays)
+    def _groupe(cles, offset=0, ordre=None, extra=None):
+        val, mem = {}, {}
+        for idx, k in enumerate(cles):
+            val[k] = val.get(k, 0.0) + rows[idx][2]
+            mem.setdefault(k, []).append(idx)
+        ordre = [k for k in (ordre or sorted(val, key=lambda k: -val[k])) if k in val]
+        return [{"n": k, "v": fmt_eur(val[k]), "pct": val[k] / total * 100, "pt": _pct(val[k] / total * 100),
+                 "c": _alloc_color(i + offset), "m": mem[k]} for i, k in enumerate(ordre)]
+
+    # 1) Actions (une part par position ; le 4e texte du centre = le secteur)
+    A = [{"n": n, "v": fmt_eur(v), "pct": v / total * 100, "pt": _pct(v / total * 100),
+          "c": _alloc_color(i), "m": [i], "x": sc} for i, (n, _t, v, sc, _p) in enumerate(rows)]
+    # 2) Secteurs
+    S = _groupe([x[3] for x in rows])
+    # 3) Revenus par continent : répartition connue si possible, sinon continent du siège social (100 %)
+    cont_val, cont_mem, siege = {}, {}, []
+    for idx, (n, tk, v, _sc, p) in enumerate(rows):
+        split, is_ref = _continent_split(n, _pays_siege(p, tk))
         if not is_ref:
-            fallback_noms.append(nom)
-        for cont, p in split.items():
-            cont_val[cont] = cont_val.get(cont, 0.0) + v * p / 100.0
+            siege.append(n)
+        for cont, pc in split.items():
+            cont_val[cont] = cont_val.get(cont, 0.0) + v * pc / 100.0
             cont_mem.setdefault(cont, []).append(idx)
-    cont_order = sorted(cont_val, key=lambda k: -cont_val[k])
-    L = [{"n": k, "v": fmt_eur(cont_val[k]), "pct": cont_val[k] / total * 100, "pt": _pct_txt(cont_val[k] / total * 100),
-          "c": _alloc_color(i), "m": cont_mem[k]} for i, k in enumerate(cont_order)]
-
-    # --- Capitalisation
-    bucket_val, bucket_mem, cap_total, n_cap = {}, {}, 0.0, 0
-    for idx, (nom, tick, v, pays) in enumerate(rows):
+    P = [{"n": k, "v": fmt_eur(cont_val[k]), "pct": cont_val[k] / total * 100, "pt": _pct(cont_val[k] / total * 100),
+          "c": _alloc_color(i + 2), "m": cont_mem[k]} for i, k in enumerate(sorted(cont_val, key=lambda k: -cont_val[k]))]
+    # 4) Tranches de capitalisation
+    caps, cap_total, n_cap = [], 0.0, 0
+    for (_n, tick, _v, _s, _p) in rows:
         mc, qt, _cur = get_ticker_marketcap(tick)
-        b = _cap_bucket(mc, qt)
-        bucket_val[b] = bucket_val.get(b, 0.0) + v
-        bucket_mem.setdefault(b, []).append(idx)
+        caps.append(_cap_bucket(mc, qt))
         if mc and qt not in _ETF_QUOTE_TYPES:
             cap_total += float(mc)
             n_cap += 1
-    order_cap = [b[0] for b in _CAP_BUCKETS] + ["ETF / fonds", "Capitalisation inconnue"]
-    cap_order = [b for b in order_cap if b in bucket_val]
-    R = [{"n": k, "v": fmt_eur(bucket_val[k]), "pct": bucket_val[k] / total * 100, "pt": _pct_txt(bucket_val[k] / total * 100),
-          "c": _alloc_color(i + 3), "m": bucket_mem[k]} for i, k in enumerate(cap_order)]
+    K = _groupe(caps, offset=3, ordre=[b[0] for b in _CAP_BUCKETS] + ["ETF / fonds", "Capitalisation inconnue"])
 
-    def _js(o):
-        return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
-    CL = ["Total portefeuille", fmt_eur(total), f"{len(L)} continent{'s' if len(L) > 1 else ''}", ""]
-    CR = ["Capitalisation cumulée", _fmt_cap(cap_total) if n_cap else "N/A", f"{n_cap} société{'s' if n_cap > 1 else ''}", "(hors ETF)"]
-    page = (_ALLOC_PAIR_HTML
-            .replace("__TTL_L__", "Revenus par continent").replace("__TTL_R__", "Par capitalisation")
-            .replace("__L__", _js(L)).replace("__R__", _js(R)).replace("__CL__", _js(CL)).replace("__CR__", _js(CR))
-            .replace("__NL__", _js(["continent", "continents"])).replace("__NR__", _js(["tranche", "tranches"])))
-    components.html(page, height=260 + 32 * max(len(L), len(R)))
-    note = ("ℹ️ Les revenus par continent sont des **estimations** (ordres de grandeur issus des rapports annuels) pour "
-            "les valeurs suivies dans `_REVENUS_CONTINENT_REF` ; pour les autres, c'est le continent du siège social "
-            "qui est utilisé (Yahoo Finance ne fournit pas la ventilation du chiffre d'affaires).")
-    if fallback_noms:
-        note += " Siège social retenu pour : " + ", ".join(fallback_noms) + "."
-    st.caption(note)
+    plur = lambda n, a, b: f"{n} {a if n < 2 else b}"
+    don = [
+        {"title": "Par action", "items": A, "nouns": ["action", "actions"],
+         "rest": ["Total portefeuille", fmt_eur(total), plur(len(A), "position", "positions"), ""]},
+        {"title": "Par secteur", "items": S, "nouns": ["secteur", "secteurs"],
+         "rest": ["Total portefeuille", fmt_eur(total), plur(len(S), "secteur", "secteurs"), ""]},
+        {"title": "Revenus / continent", "items": P, "nouns": ["continent", "continents"],
+         "rest": ["Total portefeuille", fmt_eur(total), plur(len(P), "continent", "continents"), ""]},
+        {"title": "Par capitalisation", "items": K, "nouns": ["tranche", "tranches"],
+         "rest": ["Capitalisation cumulée", _fmt_cap(cap_total) if n_cap else "N/A", plur(n_cap, "société", "sociétés"), "(hors ETF)"]},
+    ]
+    # Les noms au singulier/pluriel du « m » (nombre d'actions) viennent du 1er camembert.
+    payload = json.dumps(don, ensure_ascii=False).replace("</", "<\\/")
+    page = _ALLOC4_HTML.replace("__DON__", payload)
+    _r1, _r2 = max(len(A), len(S)), max(len(P), len(K))
+    components.html(page, height=int(2 * (16 + 215 + 8 + 20) + (_r1 + _r2) * 20 + 60))
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
@@ -3066,9 +2961,106 @@ def _progress_bar_html(pct, gradient, glow_color, texte):
     )
 
 
+
+_JAUGE_HTML = r"""
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #w { position: relative; max-width: 380px; margin: 0 auto; font-family: Manrope, Inter, system-ui, sans-serif; color: var(--fg, #334155);
+       -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; cursor: pointer; }
+  svg { width: 100%; height: auto; display: block; }
+  text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
+  #tip { position: absolute; display: none; padding: 7px 12px; border-radius: 10px; font-size: 13px; font-weight: 700; line-height: 1.35;
+         text-align: center; white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,.25); transform: translate(-50%, -125%); pointer-events: none; }
+  #tip small { display: block; font-weight: 600; opacity: .9; font-size: 11.5px; }
+</style>
+<div id="w"><svg id="g" viewBox="0 0 300 190"></svg><div id="tip"></div></div>
+<script>
+(function () {
+  var D = __DATA__;
+  var fg = '#334155';
+  try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
+  document.documentElement.style.setProperty('--fg', fg);
+  var NS = 'http://www.w3.org/2000/svg', CX = 150, CY = 150, R = 112, SW = 22;
+  // Palette logique selon la position sur la jauge : vert (large marge) -> lime -> ambre -> orange -> rouge (plafond proche).
+  var STOPS = [[0, [22,163,74]], [45, [132,204,22]], [70, [245,158,11]], [88, [249,115,22]], [100, [220,38,38]]];
+  function colorAt(p) {
+    p = Math.max(0, Math.min(100, p));
+    for (var i = 1; i < STOPS.length; i++) {
+      if (p <= STOPS[i][0]) {
+        var a = STOPS[i-1], b = STOPS[i], t = (p - a[0]) / (b[0] - a[0]);
+        return [0,1,2].map(function (k) { return Math.round(a[1][k] + (b[1][k] - a[1][k]) * t); });
+      }
+    }
+    return STOPS[STOPS.length-1][1];
+  }
+  function rgb(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (a === undefined ? 1 : a) + ')'; }
+  function pt(f, r) { var th = Math.PI * f; return [CX - r * Math.cos(th), CY - r * Math.sin(th)]; }
+  var svg = document.getElementById('g');
+  function el(n, at) { var e = document.createElementNS(NS, n); for (var k in at) e.setAttribute(k, at[k]); svg.appendChild(e); return e; }
+  var pct = Math.max(0, Math.min(100, D.pct)), N = 100;
+  for (var i = 0; i < N; i++) {
+    var f0 = i / N, f1 = (i + 1) / N + 0.0015, p0 = pt(f0, R), p1 = pt(f1, R);
+    var on = (i + 0.5) < pct;
+    el('path', { d: 'M' + p0 + 'A' + R + ',' + R + ' 0 0 1 ' + p1, fill: 'none', 'stroke-width': SW, stroke: rgb(colorAt(i + 0.5), on ? 1 : 0.2) });
+  }
+  var cur = colorAt(pct), fm = pct / 100, pm = pt(fm, R);
+  // repères 0 / 50 k / 100 k / 150 k
+  [[0, '0'], [1/3, D.t1], [2/3, D.t2], [1, D.t3]].forEach(function (t) {
+    var p = pt(t[0], R + 24);
+    var x = p[0], y = p[1] + (t[0] === 0 || t[0] === 1 ? 14 : 4);
+    var tx = el('text', { x: x, y: y, 'text-anchor': 'middle', 'font-size': 10.5, opacity: .7 }); tx.textContent = t[1];
+  });
+  var mk = el('circle', { cx: pm[0], cy: pm[1], r: 8.5, fill: rgb(cur), stroke: '#ffffff', 'stroke-width': 3 });
+  var c1 = el('text', { x: CX, y: CY - 6, 'text-anchor': 'middle', 'font-size': 30, 'font-weight': 800 }); c1.textContent = D.pct_txt;
+  c1.style.fill = rgb(cur);
+  var c2 = el('text', { x: CX, y: CY + 16, 'text-anchor': 'middle', 'font-size': 11.5, opacity: .7 }); c2.textContent = 'du plafond';
+  var tip = document.getElementById('tip'), w = document.getElementById('w');
+  var lum = (0.299 * cur[0] + 0.587 * cur[1] + 0.114 * cur[2]) / 255;
+  tip.style.background = rgb(cur); tip.style.color = lum > 0.62 ? '#1f2937' : '#ffffff';
+  tip.innerHTML = D.amount + '<small>' + D.pct_txt + ' du plafond</small>';
+  function place() {
+    var box = svg.getBoundingClientRect(), k = box.width / 300, tw = tip.offsetWidth;
+    var x = Math.min(Math.max(pm[0] * k, tw / 2 + 4), box.width - tw / 2 - 4), y = pm[1] * k;
+    tip.style.left = x + 'px';
+    if (y < 70) { tip.style.transform = 'translate(-50%, 35%)'; tip.style.top = y + 'px'; }
+    else { tip.style.transform = 'translate(-50%, -125%)'; tip.style.top = (y - 12) + 'px'; }
+  }
+  var open = false;
+  function setOpen(v) { open = v; tip.style.display = v ? 'block' : 'none'; if (v) place(); fit(); }
+  w.addEventListener('click', function (e) { e.stopPropagation(); setOpen(!open); });
+  document.body.addEventListener('click', function () { if (open) setOpen(false); });
+  function fit() {
+    try {
+      var h = Math.ceil(w.getBoundingClientRect().height) + 14;
+      try { window.frameElement.style.height = h + 'px'; }
+      catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
+    } catch (e) {}
+  }
+  window.addEventListener('resize', function () { if (open) place(); fit(); });
+  fit(); setTimeout(fit, 150);
+})();
+</script>
+"""
+
+def _render_jauge_pea(total_verse, plafond):
+    """Jauge semi-circulaire des versements cumulés sur le plafond du PEA : palette vert -> rouge selon la position,
+    et au clic une infobulle (montant versé) dans la couleur de la jauge à l'endroit atteint."""
+    import streamlit.components.v1 as components
+    pct = (total_verse / plafond * 100.0) if plafond > 0 else 0.0
+    reste = max(plafond - total_verse, 0.0)
+    pct_txt = f"{pct:.1f} %".replace(".", ",")
+    data = {
+        "pct": pct, "pct_txt": pct_txt, "amount": fmt_eur(total_verse),
+        "t1": f"{plafond / 3 / 1000:.0f} k€", "t2": f"{plafond * 2 / 3 / 1000:.0f} k€", "t3": f"{plafond / 1000:.0f} k€",
+        "sub": f"{_esc(fmt_eur(total_verse))} versés sur {_esc(fmt_eur(plafond))} · reste <b>{_esc(fmt_eur(reste))}</b>",
+    }
+    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    components.html(_JAUGE_HTML.replace("__DATA__", payload), height=250)
+
+
 _FAILED_TICKERS = set()  # se remplit automatiquement avec les tickers dont le cours est introuvable
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def _get_live_price_real(ticker):
     if not ticker or ticker in _FAILED_TICKERS:
         return None
@@ -3094,7 +3086,7 @@ def _get_live_price_real(ticker):
         _FAILED_TICKERS.add(ticker)
         return None
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def get_previous_close(ticker):
     """Clôture de la séance précédente donnée par Yahoo (fast_info). Sert uniquement à combler la clôture de la
     veille quand la bougie journalière correspondante manque dans l'historique."""
@@ -3212,6 +3204,39 @@ def _fetch_info_full(ticker):
         _ticker_info_store().save(ticker, out)
     return out
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_info_fallback(ticker):
+    """Repli quand la page « info » de Yahoo ne répond pas (limitation de débit, blocage du serveur) : type de produit,
+    devise et capitalisation via d'autres points d'accès (fast_info / métadonnées de l'historique de cours)."""
+    mc = qt = cur = None
+    tk = yf.Ticker(ticker)
+    try:
+        fi = tk.fast_info
+        try:
+            v = float(fi["market_cap"])
+            mc = v if v > 0 else None
+        except Exception:
+            mc = None
+        try:
+            cur = fi["currency"]
+        except Exception:
+            cur = None
+    except Exception:
+        pass
+    try:
+        md = tk.history_metadata or {}
+        qt = str(md.get("instrumentType") or "").upper() or None
+        cur = cur or md.get("currency")
+    except Exception:
+        pass
+    return {"mc": mc, "qt": qt or "", "cur": cur}
+
+def _info_fallback_safe(ticker):
+    try:
+        return _fetch_info_fallback(ticker)
+    except Exception:
+        return {"mc": None, "qt": "", "cur": None}
+
 def get_ticker_info(ticker):
     if not ticker or ticker in _FAILED_TICKERS:
         return "Autre", "Inconnu"
@@ -3219,7 +3244,8 @@ def get_ticker_info(ticker):
         d = _fetch_info_full(ticker)
         return d["sector"], d["country"]
     except Exception:
-        return "Autre", "Inconnu"
+        fb = _info_fallback_safe(ticker)
+        return ("ETF / Fonds" if fb.get("qt") in _ETF_QUOTE_TYPES else "Autre"), "Inconnu"
 
 def get_ticker_marketcap(ticker):
     """(capitalisation en €, type de produit, devise) ; capitalisation None pour un ETF / si inconnue."""
@@ -3229,9 +3255,10 @@ def get_ticker_marketcap(ticker):
         d = _fetch_info_full(ticker)
         return d.get("mc"), d.get("qt") or "", d.get("cur")
     except Exception:
-        return None, "", None
+        fb = _info_fallback_safe(ticker)
+        return fb.get("mc"), fb.get("qt") or "", fb.get("cur")
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_historical_price_at(ticker, target_date):
     if not ticker or ticker in _FAILED_TICKERS:
         return None
@@ -3248,7 +3275,7 @@ def get_historical_price_at(ticker, target_date):
     except Exception:
         return None
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=1800, show_spinner=False)
 def _get_ticker_history_real(ticker, start_date_str):
     """Historique complet des clôtures d'un ticker depuis start_date_str, mis en cache 30 min
     (au lieu de 5 min : le passé ne change pas, et le dernier point est de toute façon remplacé
@@ -3438,7 +3465,7 @@ def get_ticker_history(ticker, start_date_str):
                 return _df
     return _get_ticker_history_real(ticker, start_date_str)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_watchlist_variations(ticker):
     """Variation du prix (delta en €, % ) sur plusieurs horizons — jour, 7 jours, 30 jours,
     6 mois, 12 mois — pour un ticker de la watchlist, à partir de son historique de clôtures
@@ -3490,7 +3517,7 @@ def get_watchlist_variations(ticker):
 
     return result
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_benchmark_history(ticker, start_str, end_str):
     """Historique de clôture d'un indice/benchmark, mis en cache 1h. Utilisé à la fois par le
     graphique de performance comparée et le tableau comparatif : sans ce cache, chaque
@@ -3625,7 +3652,7 @@ _start_date_str_precharge = (
 # _MARKET_PREFETCH_MIN_INTERVAL secondes maximum (en-deçà du plus petit TTL ci-dessus), ce qui
 # supprime cette latence perçue sur toutes les interactions du formulaire sans jamais servir de
 # données plus vieilles que ce que les caches auraient de toute façon renvoyé.
-_MARKET_PREFETCH_MIN_INTERVAL = 240  # secondes
+_MARKET_PREFETCH_MIN_INTERVAL = 540  # secondes (juste sous le TTL de 600 s des cours en direct)
 _now_ts = time_module.time()
 _last_prefetch_ts = st.session_state.get("_last_market_prefetch_ts", 0.0)
 _wl_tickers_alertes = [
@@ -3647,7 +3674,11 @@ if (_tickers_a_precharger or _wl_tickers_alertes) and (_now_ts - _last_prefetch_
         except Exception:
             pass   # impossible de démarrer un thread : on retombe sur l'attente classique ci-dessous
     if _swr is None or not _swr.serve_stale:
-        with st.spinner("📡 Récupération des cours en cours..."):
+        # Caches encore chauds (dernière actualisation complète < _MARKET_FRESH_WINDOW) : relecture quasi instantanée,
+        # donc sans barre de chargement (elle apparaissait à chaque changement d'onglet après quelques minutes).
+        _caches_chauds = _swr is not None and (time_module.time() - _swr.last_fresh_ts) <= _MARKET_FRESH_WINDOW
+        _spin_ctx = contextlib.nullcontext()   # pas de barre dans la page : seul le « Running… » natif de Streamlit s'affiche
+        with _spin_ctx:
             _prefetch_results = _prefetch_market_data(_tickers_a_precharger, _start_date_str_precharge, _wl_tickers_alertes)
         st.session_state["_last_market_prefetch_ts"] = _now_ts
         if _swr is not None:
@@ -3669,7 +3700,7 @@ if _swr is not None and _swr.serve_stale:
 # ==========================================
 # 2. MOTEUR DE CALCUL DES POSITIONS & PERF
 # ==========================================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def compute_portfolio_metrics_cached(df_in, target_datetime=None):
     df = df_in.copy()
     if df.empty:
@@ -3904,7 +3935,7 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
 def compute_portfolio_metrics(df, target_datetime=None):
     return compute_portfolio_metrics_cached(df, target_datetime)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def compute_cash_actuel_cached(df_in):
     """Calcule uniquement le solde ACTUEL de la poche espèces du PEA, en rejouant l'impact de
     chaque transaction sur le cash (même logique que get_portfolio_history_cached), mais SANS
@@ -3961,7 +3992,7 @@ def compute_cash_actuel_cached(df_in):
 def compute_cash_actuel(df):
     return compute_cash_actuel_cached(df)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def compute_realized_pnl_par_vente_cached(df_in):
     """Rejoue exactement le même calcul de plus-value réalisée (coût moyen pondéré, PRU
     recalculé à chaque ACHAT/VENTE/SPLIT) que compute_portfolio_metrics_cached, mais renvoie
@@ -4022,7 +4053,7 @@ def compute_realized_pnl_par_vente_cached(df_in):
 def compute_realized_pnl_par_vente(df):
     return compute_realized_pnl_par_vente_cached(df)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def detect_ttf_anomalies_cached(df_in):
     """Détecte automatiquement, sur TOUT l'historique des transactions, les journées où de la
     TTF a été réglée à l'achat sur des titres finalement revendus le même jour. La TTF française
@@ -4129,7 +4160,7 @@ elif st.session_state["_swr_seen_epoch_metrics"] != _epoch_now:
     get_watchlist_variations.clear()
     st.session_state["_swr_seen_epoch_metrics"] = _epoch_now
 
-with st.spinner("⏳ Calcul des indicateurs du portefeuille (cours en direct)..."):
+with contextlib.nullcontext():
     df_port, tot_invested, tot_value_actions, tot_fees, tot_dividends, tot_realized_pnl, tot_cost_basis_global = compute_portfolio_metrics(df_transactions)
 
 # Pré-calculs pour le formulaire "Nouvelle opération" : la liste des actions possédées/de tout
@@ -4896,10 +4927,10 @@ def dialog_simulation_operation():
     def _delta_pct(delta_val):
         color = "#16a34a" if delta_val > 0.005 else ("#dc2626" if delta_val < -0.005 else "#64748b")
         if delta_val > 0.005:
-            return f"▲ +{delta_val:,.2f} pts".replace(",", " ").replace(".", ","), color
+            return f"▲ +{delta_val:,.2f} %".replace(",", " ").replace(".", ","), color
         if delta_val < -0.005:
-            return f"▼ {delta_val:,.2f} pts".replace(",", " ").replace(".", ","), color
-        return "▬ 0,00 pts", color
+            return f"▼ {delta_val:,.2f} %".replace(",", " ").replace(".", ","), color
+        return "▬ 0,00 %", color
 
     def _render_before_after(items):
         cards = ""
@@ -5592,7 +5623,7 @@ def _ticker_position_series_cached(ticker, df_ticker, start_date_str, end_date_s
     return daily_shares, daily_invested, daily_realized, daily_divs, current_shares, current_invested
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def _compute_ticker_daily_history_cached(ticker, df_ticker, start_date_str, end_date_str):
     """Calcule la série quotidienne (valeur, capital investi, gain réalisé cumulé, dividendes
     cumulés) d'UN SEUL ticker, sur toute la période 'all_dates' — logique RIGOUREUSEMENT
@@ -5674,7 +5705,7 @@ def _compute_ticker_daily_history_cached(ticker, df_ticker, start_date_str, end_
     }, index=all_dates)
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_portfolio_history_cached(df_in):
     df = df_in.copy()
     if df.empty:
@@ -6300,7 +6331,7 @@ _TAB_STATE_KEYS = {
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
     "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
-    "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
+    "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", "k_fond_src", "k_fond_detail", ),
     "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_impot", "k_rp_retrait", "k_rp_infl", ),
 }
 _tab_objs_by_name = {
@@ -6324,6 +6355,7 @@ if _TABS_LAZY:
 # ------------------------------------------
 if _tab_open(tab_overview):
     with tab_overview:
+        _inject_metric_tips()
         with st.expander("📊 Vue d'ensemble du Portefeuille", expanded=True):
             # Conteneurs RÉELS (st.container(key=...), même mécanisme que les encadrés rouges
             # _req_field un peu plus haut dans le fichier) plutôt que des <div> ouverts dans un
@@ -6340,14 +6372,10 @@ if _tab_open(tab_overview):
                 st.markdown("<p class='dashboard-section-title'>💰 Capital & Investissement</p>", unsafe_allow_html=True)
                 with st.container(key="row_capital_wrap"):
                     r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
-                    r1_c1.metric("Valeur Actuelle", fmt_eur(tot_value_globale),
-                                 help="Valeur totale du PEA aujourd'hui : actions et ETF valorisés au cours en direct, plus le cash disponible.")
-                    r1_c2.metric("Montant Investi", fmt_eur(tot_invested),
-                                 help="Capital actuellement investi dans les titres encore détenus (PRU net × quantité, frais inclus). Les positions soldées ne sont pas comptées.")
-                    r1_c3.metric("Cash Disponible", fmt_eur(poche_especes),
-                                 help="Liquidités du PEA non investies : apports, produits de ventes et dividendes, moins les achats, frais et retraits.")
-                    r1_c4.metric("Total Apports", fmt_eur(apports_totaux),
-                                 help="Total des versements nets depuis l'ouverture (apports moins retraits). Le plafond de versements du PEA est de 150 000 €.")
+                    r1_c1.metric("Valeur Actuelle", fmt_eur(tot_value_globale))
+                    r1_c2.metric("Montant Investi", fmt_eur(tot_invested))
+                    r1_c3.metric("Cash Disponible", fmt_eur(poche_especes))
+                    r1_c4.metric("Total Apports", fmt_eur(apports_totaux))
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>📈 Performances</p>", unsafe_allow_html=True)
                 with st.container(key="row_perf_wrap"):
@@ -6360,24 +6388,36 @@ if _tab_open(tab_overview):
                         _perf_an_txt = fmt_perf_text_only(_perf_an_moy)
                     else:
                         _perf_an_txt = "N/A"
-                    # Rangée 1 : Globale | YTD ; rangée 2 : Mois | Jour ; puis la performance annuelle moyenne
-                    # centrée sur toute la largeur.
+                    # 3 rangées de 2 : Globale | YTD ; Mois | Jour ; Perf. annuelle moyenne | Drawdown maximum.
                     r2_c1, r2_c2 = st.columns(2)
-                    r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules),
-                                 help="Le % = gains cumulés depuis l'ouverture (plus-values latentes + actées + dividendes) ÷ total des apports nets. Le montant sous le % est ce gain en €.")
-                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr),
-                                 help="Le % = gain depuis le 1er janvier (latent + actée + dividendes) ÷ valeur du portefeuille au 31 décembre précédent. Le montant est ce gain en €.")
+                    r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules))
+                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr))
                     r2b_c1, r2b_c2 = st.columns(2)
-                    r2b_c1.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo),
-                                  help="Le % = gain depuis le 1er du mois ÷ valeur du portefeuille à la fin du mois précédent. Le montant est ce gain en €.")
-                    r2b_c2.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j),
-                                  help="Le % = gain du jour ÷ valeur du portefeuille à la clôture de la veille (hors apports et retraits). Le montant est ce gain en €.")
+                    r2b_c1.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo))
+                    r2b_c2.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
                     # Gain moyen par an en € (gain total cumulé ramené à une année), affiché sur la flèche.
                     _gain_an_moy = (total_gains_cumules / _ans_pea) if _ans_pea >= 0.25 else None
-                    with st.container(key="center_metric_perf_an"):
-                        st.metric("Performance Annuelle Moyenne", _perf_an_txt,
-                                  delta=(_delta(_gain_an_moy) if _gain_an_moy is not None else None),
-                                  help="Le % = performance globale ramenée à un taux annuel composé depuis l'ouverture du PEA (disponible après 3 mois). Le montant = gain moyen par an en €.")
+                    # Drawdown : plus forte baisse depuis un sommet de la performance quotidienne (flux d'apports exclus).
+                    _dd_max, _dd_cur = None, None
+                    try:
+                        _hd = history_df_global
+                        if _hd is not None and len(_hd) >= 3:
+                            _v = _hd["Valeur du Portefeuille (€)"].astype(float)
+                            _a = _hd["Apports Cumulés (€)"].astype(float)
+                            _prev = _v.shift(1)
+                            _r = ((_v - _prev - _a.diff().fillna(0.0)) / _prev).where(_prev > 0).fillna(0.0)
+                            _idx = (1.0 + _r).cumprod()
+                            _peak = np.maximum(_idx.cummax(), 1.0)
+                            _dd = (_idx / _peak - 1.0) * 100.0
+                            _dd_max, _dd_cur = float(_dd.min()), float(_dd.iloc[-1])
+                    except Exception:
+                        _dd_max, _dd_cur = None, None
+                    r2c_c1, r2c_c2 = st.columns(2)
+                    r2c_c1.metric("Performance Annuelle Moyenne", _perf_an_txt,
+                                  delta=(_delta(_gain_an_moy) if _gain_an_moy is not None else None))
+                    r2c_c2.metric("Drawdown Maximum",
+                                  (fmt_perf_text_only(min(_dd_max, 0.0)) if _dd_max is not None else "N/A"),
+                                  delta=(f"{_dd_cur:.2f}%".replace(".", ",") if _dd_cur is not None else None))
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>🏷️ Plus-values, Dividendes & Frais</p>", unsafe_allow_html=True)
                 with st.container(key="row_gains_wrap"):
@@ -6388,38 +6428,32 @@ if _tab_open(tab_overview):
                     # Plus-Value Actée : gain déjà réalisé rapporté à la valeur totale actuelle du
                     # portefeuille (actions + poche espèces).
                     pct_actee = (tot_realized_pnl / tot_value_globale * 100) if tot_value_globale > 0 else 0.0
-                    r3_c1.metric("Plus-Value Latente", fmt_eur(global_pnl), delta=(f"{pct_latente:+,.2f}%".replace(",", " ").replace(".", ",")),
-                                 help="Gain non encore réalisé sur les titres détenus (valeur actuelle − capital investi). Le % est rapporté au capital investi dans ces titres.")
-                    r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")),
-                                 help="Gain déjà encaissé grâce aux ventes (net de frais, base PRU). Le % est rapporté à la valeur totale actuelle du portefeuille (actions + cash).")
+                    r3_c1.metric("Plus-Value Latente", fmt_eur(global_pnl), delta=(f"{pct_latente:+,.2f}%".replace(",", " ").replace(".", ",")))
+                    r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")))
                     r3b_c1, r3b_c2 = st.columns(2)
                     # % pertinent pour les dividendes et les frais : rapportés au total des apports nets (l'argent
                     # réellement sorti de la poche), comme la performance globale -> directement comparables entre eux.
                     pct_div_apports = (net_divs_total / apports_totaux * 100) if apports_totaux > 0 else None
-                    pct_frais_apports = (tot_fees / apports_totaux * 100) if apports_totaux > 0 else None
+                    pct_frais_apports = (tot_fees / total_gains_cumules * 100) if total_gains_cumules > 0 else None
                     r3b_c1.metric("Dividendes Reçus", fmt_eur(net_divs_total),
-                                  delta=(f"{pct_div_apports:+,.2f}%".replace(",", " ").replace(".", ",") if pct_div_apports is not None else None),
-                                  help="Dividendes et rompus nets perçus depuis l'ouverture (après retenue à la source). Le % = dividendes ÷ total des apports nets : la part de vos versements récupérée sous forme de dividendes.")
+                                  delta=(f"{pct_div_apports:+,.2f}%".replace(",", " ").replace(".", ",") if pct_div_apports is not None else None))
                     r3b_c2.metric("Frais Totaux", fmt_eur(tot_fees),
-                                  delta=(f"{pct_frais_apports:.2f}% des apports".replace(".", ",") if pct_frais_apports is not None else None),
-                                  delta_color="off",
-                                  help="Courtage et TTF payés à l'achat et à la vente depuis l'ouverture. Le % = frais ÷ total des apports nets : ce que les frais ont coûté par rapport à l'argent versé.")
+                                  delta=(f"{pct_frais_apports:.2f}%".replace(".", ",") if pct_frais_apports is not None else None),
+                                  delta_color="inverse")
 
-                    # Rendement moyen des dividendes sur le capital investi : dividendes nets perçus, ramenés à
-                    # une année (si le PEA a plus de 3 mois), rapportés au capital actuellement investi.
+                    # Rendements des dividendes : dividendes nets annuels (reçus ÷ années depuis l'ouverture, après
+                    # 3 mois) rapportés soit à la valeur actuelle des titres (cours), soit à leur coût de revient (PRU).
                     _ans_div = max((_now_paris() - pea_opening_dt).days / 365.25, 0.0) if not df_transactions.empty else 0.0
-                    if tot_invested > 0:
-                        _rend_cumule = net_divs_total / tot_invested * 100
-                        _rend_moy = _rend_cumule / _ans_div if _ans_div >= 0.25 else _rend_cumule
-                        _rend_moy_txt = f"{_rend_moy:.2f} %".replace(".", ",")
-                    else:
-                        _rend_moy_txt = "N/A"
+                    _div_annuel = (net_divs_total / _ans_div) if _ans_div >= 0.25 else net_divs_total
+                    _rend_cours_txt = f"{_div_annuel / tot_value_actions * 100:.2f} %".replace(".", ",") if tot_value_actions > 0 else "N/A"
+                    _rend_cout_txt = f"{_div_annuel / tot_invested * 100:.2f} %".replace(".", ",") if tot_invested > 0 else "N/A"
                     # Dividendes moyens perçus par an en € (sur la flèche), comme les autres montants.
                     _div_an_moy = (net_divs_total / _ans_div) if _ans_div >= 0.25 else None
-                    with st.container(key="center_metric_rend_div"):
-                        st.metric("Rendement Moyen des Dividendes", _rend_moy_txt,
-                                  delta=(_delta(_div_an_moy) if _div_an_moy is not None else None),
-                                  help="Le % = dividendes nets perçus ramenés à une année (après 3 mois d'historique) ÷ capital actuellement investi. Le montant = dividendes moyens perçus par an en €.")
+                    r3c_c1, r3c_c2 = st.columns(2)
+                    r3c_c1.metric("Rendement sur cours", _rend_cours_txt,
+                                  delta=(_delta(_div_an_moy) if _div_an_moy is not None else None))
+                    r3c_c2.metric("Rendement sur coût", _rend_cout_txt,
+                                  delta=(_delta(_div_an_moy) if _div_an_moy is not None else None))
 
         # --- Alerte watchlist : valeurs suivies proches de leur zone d'achat (voir l'onglet
         # "👁️ Watchlist"). Déplacée au-dessus de "Vue d'ensemble du Portefeuille", au même endroit
@@ -6556,9 +6590,9 @@ if _tab_open(tab_overview):
             # ce repère de marché), pas le % du montant déjà atteint — un objectif rempli à 20 %
             # peut être trivial à finir si le reste vient d'un apport, et inversement.
             if objectif_deja_couvert:
-                grad_color = "linear-gradient(90deg, #16a34a, #4ade80)"
+                grad_color = "linear-gradient(90deg, #15803d, #22c55e)"
                 badge = "🎉 Objectif déjà couvert"
-                badge_color = "#16a34a"
+                badge_color = "#15803d"
                 badge_detail = "Votre épargne prévue suffit, sans performance boursière supplémentaire."
             elif perf_necessaire_pct is None:
                 grad_color = "linear-gradient(90deg, #94a3b8, #cbd5e1)"
@@ -6571,40 +6605,42 @@ if _tab_open(tab_overview):
                 badge_color = "#16a34a"
                 badge_detail = f"Nettement sous la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
             elif perf_necessaire_pct <= repere_marche_periode:
-                grad_color = "linear-gradient(90deg, #0284c7, #38bdf8)"
+                grad_color = "linear-gradient(90deg, #65a30d, #a3e635)"
                 badge = "🚀 Objectif réaliste"
-                badge_color = "#0284c7"
+                badge_color = "#4d7c0f"
                 badge_detail = f"En ligne avec la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
             elif perf_necessaire_pct <= repere_marche_periode * 2:
-                grad_color = "linear-gradient(90deg, #7c3aed, #a78bfa)"
+                grad_color = "linear-gradient(90deg, #f59e0b, #fbbf24)"
                 badge = "⚡ Objectif ambitieux"
-                badge_color = "#7c3aed"
+                badge_color = "#d97706"
                 badge_detail = "Nécessite une performance nettement supérieure à la moyenne du marché."
             else:
-                grad_color = "linear-gradient(90deg, #d97706, #fbbf24)"
+                grad_color = "linear-gradient(90deg, #dc2626, #f87171)"
                 badge = "🔥 Objectif très ambitieux"
-                badge_color = "#d97706"
+                badge_color = "#dc2626"
                 badge_detail = "Nécessite une performance très supérieure à la moyenne du marché — peu probable en l'état."
 
             pct_str = f"{prog_pct:,.1f}%".replace(".", ",")
             pct_suffix = " du montant visé (épargne prévue incluse)" if apport_prevision > 0 else " du montant visé"
 
+            def _obj_card(label, value, color, big=False):
+                return (f'<div style="background:{color}14; border:1px solid {color}55; border-radius:12px; padding:8px 4px; '
+                        'text-align:center; min-width:0; display:flex; flex-direction:column; justify-content:center;">'
+                        f'<div style="font-size:min({"0.74rem" if big else "0.68rem"},{"2.9vw" if big else "2.6vw"}); color:#64748b; text-transform:uppercase; font-weight:700; '
+                        f'letter-spacing:0.03em; line-height:1.25;">{label}</div>'
+                        f'<div style="font-size:min({"1.3rem" if big else "1.1rem"},{"5vw" if big else "4vw"}); font-weight:800; color:{color}; margin-top:3px; line-height:1.25;">{value}</div></div>')
+            _grid = "display:grid; gap:6px; margin-top:8px;"
             st.markdown(
-                f"""
-            {_progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)}
-            <div class="pea-stats">
-                <div class="pea-stat"><div class="k">Actuel</div><div class="v">{fmt_eur(tot_value_globale)}</div></div>
-                <div class="pea-stat"><div class="k">Reste à atteindre</div><div class="v" style="color:{badge_color};">{fmt_eur(montant_restant)}</div></div>
-                <div class="pea-stat"><div class="k">Cible</div><div class="v">{fmt_eur(new_target)}</div></div>
-            </div>
-            <div style="margin-top: 12px; padding: 10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid {badge_color}; border-radius:8px;">
-                <div style="font-size:0.88rem; font-weight:700; color:{badge_color};">{badge}</div>
-                <div style="font-size:0.78rem; color:#64748b; margin-top:2px;">{badge_detail}</div>
-                <div style="font-size:0.82rem; font-weight:600; color:#475569; margin-top:6px;">
-                    📊 Performance requise sur vos actions d'ici le {_cur_fin.strftime('%d/%m/%Y')} : <b style="color:#0f172a;">{perf_necessaire_str}</b>
-                </div>
-            </div>
-            """, 
+                _progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)
+                + f'<div style="{_grid} grid-template-columns:repeat(3,minmax(0,1fr));">'
+                + _obj_card("Actuel", fmt_eur(tot_value_globale), "#0284c7")
+                + _obj_card("Reste à atteindre", fmt_eur(montant_restant), badge_color)
+                + _obj_card("Cible", fmt_eur(new_target), "#4f46e5")
+                + '</div>'
+                + f'<div style="{_grid} grid-template-columns:repeat(2,minmax(0,1fr));">'
+                + _obj_card("Niveau de l'objectif", badge, badge_color, big=True)
+                + _obj_card("Performance requise", perf_necessaire_str, badge_color, big=True)
+                + '</div>',
                 unsafe_allow_html=True
             )
 
@@ -6722,7 +6758,7 @@ if _tab_open(tab_overview):
                     _tbl_obj,
                     row_styles=_styles_t,
                     cell_style=lambda c, v: _style_perf_cell(v) if c in ("Écart (€)", "Écart (%)") else "",
-                    max_height=420,
+                    max_height=350,   # 10 lignes visibles
                     focus_row=_focus,
                 )
 
@@ -6882,9 +6918,10 @@ if _tab_open(tab_positions):
                 _t_vj = _som_act("Var Jour (€)")
                 _t_val_veille = _t_val - _t_vj
                 _tot_act["Prix actuel (€)"] = f"({fmt_perf(_t_vj / _t_val_veille * 100)})" if _t_val_veille > 0 else ""
-                _tot_act = _dash_if_empty(pd.DataFrame([_tot_act])).iloc[0].to_dict()
+                _EQ_COLS_ACTIVE = tuple(c for c in ("Gain Latent (€)", "Performance (%)", "Perf. PRU ajusté (%)", "Perf. annuelle moy. (%)") if c in df_active_fmt.columns)
+                _tot_act = _dash_if_empty(pd.DataFrame([_tot_act]), eq_cols=_EQ_COLS_ACTIVE).iloc[0].to_dict()
                 _html_table(
-                    _dash_if_empty(df_active_fmt),
+                    _dash_if_empty(df_active_fmt, eq_cols=_EQ_COLS_ACTIVE),
                     cell_style=lambda c, v: (_style_perf_cell(v) if c in _cols_fleche_active
                                              else ""),
                     max_height=min(max(total_height, 100), 1000),
@@ -6896,8 +6933,6 @@ if _tab_open(tab_positions):
 
         with st.expander("🥧 Répartition du portefeuille", expanded=True):
             _render_allocation(df_active, poche_especes)
-            st.markdown("<hr style='margin: 14px 0 8px 0;'>", unsafe_allow_html=True)
-            _render_allocation_geo(df_active)
 
         with st.expander("📜 Détail complet des transactions", expanded=True):
             if not df_transactions.empty:
@@ -7124,7 +7159,7 @@ if _tab_open(tab_positions):
                     _bg_tx = {"ACHAT": "#f0f7ff", "VENTE": "#fdf2f2", "DIVIDENDE": "#f2fcf5", "APPORT": "#e6f4ea",
                               "RETRAIT": "#f5f3ff", "SPLIT": "#fff7ed", "REGROUPEMENT": "#fff7ed", "SPLIT/REGROUPEMENT": "#fff7ed"}
                     _row_styles_tx = [f"background-color: {_bg_tx[t]};" if t in _bg_tx else "" for t in df_table["Type"]]
-                    _html_table(_dash_if_empty(df_table), row_styles=_row_styles_tx, show_index=True, index_label="N°")
+                    _html_table(_dash_if_empty(df_table), row_styles=_row_styles_tx, show_index=True, index_label="N°", max_height=350)
                 else:
                     st.info("Aucune transaction trouvée avec ces critères.")
 
@@ -7297,6 +7332,14 @@ if _tab_open(tab_positions):
                     df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Perf. annuelle moy. (%)',
                     [_perf_annualisee(pf, j) for pf, j in zip(df_gain_rank['Performance (%)'], df_gain_rank['Détention (jour)'])]
                 )
+                # Contribution à la performance globale du portefeuille (en %) : gain total de la ligne ÷ total des
+                # apports nets. La somme des lignes redonne la performance globale. Placée entre « Performance » et
+                # « Perf. annuelle moy. ».
+                df_gain_rank.insert(
+                    df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Contribution perf. (%)',
+                    (pd.to_numeric(df_gain_rank['Gain Total Global (€)'], errors="coerce") / base_perf_globale * 100.0)
+                    if base_perf_globale > 0 else np.nan
+                )
                 df_gain_rank.insert(0, "N°", range(1, len(df_gain_rank) + 1))
 
                 df_gain_rank_fmt = df_gain_rank.drop(columns=['Capital Investi (€)', 'Secondes Détention']).copy()
@@ -7308,12 +7351,13 @@ if _tab_open(tab_positions):
                 df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
                 df_gain_rank_fmt['Perf. annuelle moy. (%)'] = df_gain_rank_fmt['Perf. annuelle moy. (%)'].apply(fmt_perf_simple)
+                df_gain_rank_fmt['Contribution perf. (%)'] = df_gain_rank_fmt['Contribution perf. (%)'].apply(fmt_perf_simple)
                 df_gain_rank_fmt['Détention (jour)'] = [
                     _fmt_duree_detention(j, sec)
                     for j, sec in zip(df_gain_rank['Détention (jour)'], df_gain_rank['Secondes Détention'])
                 ]
 
-                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)', 'Perf. annuelle moy. (%)']
+                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)', 'Contribution perf. (%)', 'Perf. annuelle moy. (%)']
                 # Ligne Total : somme de chaque colonne sur toutes les actions du classement. La performance n'est pas
                 # totalisée ici (la base de calcul diffère selon que la position est ouverte ou soldée).
                 _tot_rank = {c: "" for c in df_gain_rank_fmt.columns}
@@ -7332,13 +7376,17 @@ if _tab_open(tab_positions):
                     _jtot = float((pd.to_numeric(df_gain_rank['Détention (jour)'], errors="coerce").fillna(0)[_bases.index] * _bases).sum() / _bases.sum())
                     _tot_rank['Performance (%)'] = fmt_perf_simple(_perf_tot)
                     _tot_rank['Perf. annuelle moy. (%)'] = fmt_perf_simple(_perf_annualisee(_perf_tot, _jtot))
+                if base_perf_globale > 0:
+                    _tot_rank['Contribution perf. (%)'] = fmt_perf_simple(pd.to_numeric(df_gain_rank['Contribution perf. (%)'], errors="coerce").sum())
                 _tot_rank['Nombre de mouvements'] = str(int(pd.to_numeric(df_gain_rank['Nombre de mouvements'], errors="coerce").fillna(0).sum()))
-                _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank])).iloc[0].to_dict()
+                _EQ_COLS_RANK = ("Gain Total Global (€)", "Performance (%)", "Contribution perf. (%)", "Perf. annuelle moy. (%)")
+                _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank]), eq_cols=_EQ_COLS_RANK).iloc[0].to_dict()
                 _tot_rank["N°"] = ""
                 _html_table(
-                    _dash_if_empty(df_gain_rank_fmt),
+                    _dash_if_empty(df_gain_rank_fmt, eq_cols=_EQ_COLS_RANK),
                     cell_style=lambda c, v: _style_perf_cell(v) if c in _cols_fleche_rank else "",
                     total_row=_tot_rank,
+                    max_height=386,   # 10 lignes visibles (+ ligne Total), défilement au-delà
                     sticky_col="Nom",
                 )
             else:
@@ -7377,6 +7425,10 @@ if _tab_open(tab_apports):
             _net_jour = _df_mv.groupby(_df_mv["Date_Heure"].dt.normalize())["Net"].sum().cumsum()
             _fin_serie = max(_today_paris(), _net_jour.index.max())
             _cumul = _net_jour.reindex(pd.date_range(_net_jour.index.min(), _fin_serie), method="ffill")
+
+            with st.expander("🎯 Jauge de versements du PEA", expanded=True):
+                # Le plafond de 150 000 € porte sur les versements cumulés : un retrait ne libère pas de place.
+                _render_jauge_pea(_total_verse, PLAFOND_APPORTS)
 
             with st.expander("📈 Évolution des apports cumulés", expanded=True):
                 fig_ap = go.Figure()
@@ -8887,7 +8939,7 @@ if _tab_open(tab_perf):
 
                             st.markdown("#### 📊 Résultats de la Comparaison")
                             _html_table(
-                                df_comp_res[cols_final_comp],
+                                _dash_if_empty(df_comp_res[cols_final_comp], eq_cols=tuple(cols_final_comp[1:])),
                                 cell_style=lambda c, v: _style_perf_bg_cell(v) if c in cols_final_comp[1:] else "",
                             )
                         else:
@@ -8944,19 +8996,46 @@ if _tab_open(tab_dividends):
                     render_yearly_amounts(div_yearly_sum, "#0d9488", detail_source=df_divs, detail_value_col="Montant_Net", detail_kind="dividendes")
 
                     st.markdown("<br>", unsafe_allow_html=True)
-                    st.markdown("**Cartographie mensuelle :**")
+                    st.markdown("**Cartographie des dividendes mensuels :**")
                     build_calendar_heatmap(
                         df_divs, "Date_Heure", "Montant_Net",
                         ["#f0fdfa", "#0d9488"], "divs",
                         date_ouverture=(pea_opening_dt if not df_transactions.empty else None),
-                        breakdown_kind="dividendes"
+                        breakdown_kind="dividendes", compact=True
                     )
+
+                    # Rendement mensuel = dividendes nets du mois ÷ capital investi moyen du mois (coût d'achat).
+                    st.markdown("<p style='margin:-26px 0 0 0; font-weight:700;'>Cartographie des rendements mensuels :</p>", unsafe_allow_html=True)
+                    _rows_rend = []
+                    try:
+                        _h_rend = get_portfolio_history(df_transactions)
+                        if _h_rend is not None and not _h_rend.empty:
+                            _inv_m = _h_rend["Capital Investi Total (€)"].astype(float).groupby([_h_rend.index.year, _h_rend.index.month]).mean()
+                            _div_m = df_divs.groupby(["Année", "Mois_Num"])["Montant_Net"].sum()
+                            for (_an_r, _mo_r), _val_r in _div_m.items():
+                                _inv_r = float(_inv_m.get((int(_an_r), int(_mo_r)), 0.0))
+                                if _inv_r > 0:
+                                    _rows_rend.append({
+                                        "Date_Heure": pd.Timestamp(year=int(_an_r), month=int(_mo_r), day=1),
+                                        "Rendement": float(_val_r) / _inv_r * 100.0,
+                                    })
+                    except Exception:
+                        _rows_rend = []
+                    if _rows_rend:
+                        build_calendar_heatmap(
+                            pd.DataFrame(_rows_rend), "Date_Heure", "Rendement",
+                            ["#f0fdfa", "#0f766e"], "rend",
+                            date_ouverture=(pea_opening_dt if not df_transactions.empty else None),
+                            unit="pct"
+                        )
+                    else:
+                        st.info("Pas encore de rendement mensuel à afficher.")
 
                 else:
                     st.info("Aucun dividende ni rompu perçu pour le moment.")
 
                 # --- Nouvelle partie, directement sous la cartographie mensuelle des dividendes ---
-                st.markdown("<hr style='margin: 22px 0 18px 0;'>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin: -22px 0 18px 0;'>", unsafe_allow_html=True)
                 st.markdown("### 📅 Calendrier des dividendes à venir")
 
                 df_divs_only_cal = df_transactions[df_transactions["Type"] == "DIVIDENDE"].copy()
@@ -9384,7 +9463,7 @@ if _tab_open(tab_history):
                             _sale_q = df_q_res.pop("_sale").to_numpy()
                             _rs_q = _row_styles_of(style_entire_row_gradient(df_q_res))
                             _html_table(_dash_if_empty(df_q_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_q),
-                                        row_styles=_rs_q, show_index=True, index_label="N°")
+                                        row_styles=_rs_q, show_index=True, index_label="N°", max_height=350)
                         else:
                             st.info("Pas encore assez d'historique pour établir ce tableau.")
 
@@ -9443,7 +9522,7 @@ if _tab_open(tab_history):
                         _sale_m = df_m_res.pop("_sale").to_numpy()
                         _rs_m = _row_styles_of(style_entire_row_gradient(df_m_res))
                         _html_table(_dash_if_empty(df_m_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_m),
-                                    row_styles=_rs_m, show_index=True, index_label="N°")
+                                    row_styles=_rs_m, show_index=True, index_label="N°", max_height=350)
 
             with st.expander("📅 Historique des performances annuelles", expanded=True):
                 if not df_transactions.empty:
@@ -9504,7 +9583,7 @@ if _tab_open(tab_history):
                         _sale_y = df_y_res.pop("_sale").to_numpy()
                         _rs_y = _row_styles_of(style_entire_row_gradient(df_y_res))
                         _html_table(_dash_if_empty(df_y_res, eq_cols=("PV latente", "Performance"), sale_flag=_sale_y),
-                                    row_styles=_rs_y, show_index=True, index_label="N°")
+                                    row_styles=_rs_y, show_index=True, index_label="N°", max_height=350)
         _rendu_onglet_historique(df_transactions, tot_invested, _now_paris().strftime("%Y-%m-%d"), _epoch_now)
 
 
@@ -9531,7 +9610,7 @@ if _tab_open(tab_fees):
                 render_yearly_amounts(fees_yearly_sum, "#f97316", detail_source=df_fees_pure, detail_value_col="Frais Totaux (€)", detail_kind="frais")
 
                 st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown("**Cartographie mensuelle :**")
+                st.markdown("**Cartographie des frais mensuels :**")
                 build_calendar_heatmap(
                     df_fees_pure, "Date_Heure", "Frais Totaux (€)",
                     ["#fff7ed", "#f97316"], "fees",
@@ -9544,6 +9623,91 @@ if _tab_open(tab_fees):
 # ------------------------------------------
 # ONGLET WATCHLIST : actions suivies, hors portefeuille, avec zone d'achat optionnelle
 # ------------------------------------------
+
+# ------------------------------------------
+# FONDAMENTAUX & ANALYSTES (Yahoo Finance) : PER / P/B / PEG, marge / ROE / dette, résultats, objectifs, recommandations
+# ------------------------------------------
+def _fnum(x):
+    try:
+        v = float(x)
+        return None if (v != v or v in (float("inf"), float("-inf"))) else v
+    except Exception:
+        return None
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _fetch_fondamentaux(ticker):
+    """Indicateurs fondamentaux et avis d'analystes d'une valeur (mis en cache 6 h). LÈVE une exception si Yahoo ne
+    répond pas, pour ne jamais mémoriser un échec passager."""
+    tk = yf.Ticker(ticker)
+    info = None
+    for _att in range(2):
+        try:
+            with _INFO_SEMAPHORE:
+                info = tk.info
+            if isinstance(info, dict) and len(info) >= 5:
+                break
+            info = None
+        except Exception:
+            info = None
+        time_module.sleep(0.6)
+    if info is None:
+        raise RuntimeError(f"fondamentaux indisponibles pour {ticker}")
+    ebitda = _fnum(info.get("ebitda"))
+    dette, cash = _fnum(info.get("totalDebt")), _fnum(info.get("totalCash"))
+    dn_ebitda = ((dette - (cash or 0.0)) / ebitda) if (dette is not None and ebitda and ebitda > 0) else None
+    today = _today_paris().date()
+    earn = None
+    try:
+        cal = tk.calendar
+        v = cal.get("Earnings Date") if isinstance(cal, dict) else None
+        if v:
+            ds = sorted(pd.Timestamp(x).date() for x in (v if isinstance(v, (list, tuple)) else [v]))
+            fut = [d for d in ds if d >= today]
+            earn = fut[0] if fut else None
+    except Exception:
+        earn = None
+    if earn is None:
+        try:
+            ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
+            if ts:
+                d = datetime.fromtimestamp(float(ts)).date()
+                earn = d if d >= today else None
+        except Exception:
+            earn = None
+    reco = None
+    try:
+        rs = tk.recommendations_summary
+        if rs is not None and len(rs) > 0:
+            r0 = rs.iloc[0]
+            reco = {k: int(_fnum(r0.get(k)) or 0) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")}
+    except Exception:
+        reco = None
+    return {
+        "per": _fnum(info.get("trailingPE")), "pb": _fnum(info.get("priceToBook")),
+        "peg": _fnum(info.get("trailingPegRatio")) or _fnum(info.get("pegRatio")),
+        "marge": _fnum(info.get("profitMargins")), "roe": _fnum(info.get("returnOnEquity")),
+        "dn_ebitda": dn_ebitda,
+        "cible": _fnum(info.get("targetMeanPrice")), "cible_bas": _fnum(info.get("targetLowPrice")),
+        "cible_haut": _fnum(info.get("targetHighPrice")), "nb_analystes": _fnum(info.get("numberOfAnalystOpinions")),
+        "reco_key": str(info.get("recommendationKey") or ""), "reco_moy": _fnum(info.get("recommendationMean")),
+        "prix": _fnum(info.get("currentPrice")) or _fnum(info.get("regularMarketPrice")),
+        "earn": earn, "reco": reco,
+    }
+
+def _charger_fondamentaux(tickers):
+    def _one(t):
+        try:
+            return t, _fetch_fondamentaux(t)
+        except Exception:
+            return t, None
+    out = {}
+    if not tickers:
+        return out
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(tickers))) as ex:
+        for t, d in ex.map(_one, tickers):
+            out[t] = d
+    return out
+
 def _watchlist_get():
     """Renvoie la liste de la watchlist stockée dans la config (persistée dans config_pea.json,
     comme le reste des réglages de l'app)."""
@@ -9913,6 +10077,149 @@ if _tab_open(tab_watchlist):
             )
 
         _watchlist_tab_fragment()
+
+        # --- Fondamentaux & analystes : portefeuille (positions détenues) ou watchlist ---
+        @fragment_wrapper
+        def _fondamentaux_fragment():
+            _inject_metric_tips()
+            st.markdown("<hr style='margin: 18px 0 12px 0;'>", unsafe_allow_html=True)
+            st.markdown("### 📚 Fondamentaux & analystes")
+            _src = "Watchlist"
+            _univers = []   # (nom, ticker, valeur actuelle ou None)
+            if _src == "Portefeuille":
+                if df_port is not None and not df_port.empty:
+                    for _, _r in df_port[df_port["Quantité"] > 0.0001].iterrows():
+                        if _r.get("Ticker"):
+                            _univers.append((str(_r["Nom"]), str(_r["Ticker"]), float(_r["Valeur Actuelle (€)"])))
+            else:
+                for _it in _watchlist_get():
+                    if _it.get("ticker"):
+                        _univers.append((str(_it.get("nom") or _it["ticker"]), str(_it["ticker"]), None))
+            if not _univers:
+                st.info("Aucune valeur à analyser pour le moment.")
+                return
+            with st.spinner("Chargement des données fondamentales..."):
+                _data = _charger_fondamentaux(sorted({u[1] for u in _univers}))
+            _ok = [(n, t, v, _data.get(t)) for (n, t, v) in _univers if _data.get(t)]
+            if not _ok:
+                st.warning("Données indisponibles pour le moment (Yahoo Finance ne répond pas). Réessayez dans quelques minutes.")
+                return
+            _fr = lambda x, d=1: f"{x:,.{d}f}".replace(",", " ").replace(".", ",")
+
+            # 24. PER / P/B / PEG pondérés (portefeuille uniquement)
+            if _src == "Portefeuille":
+                with st.expander("📐 Valorisation pondérée du portefeuille", expanded=True):
+                    _tot_val = sum(v for (_n, _t, v, _d) in _ok if v) or 0.0
+                    def _pond(cle):
+                        num = den = 0.0
+                        for (_n, _t, v, d) in _ok:
+                            x = d.get(cle)
+                            if v and x and x > 0:
+                                num += v
+                                den += v / x
+                        return (num / den if den > 0 else None), num
+                    _cols_v = st.columns(3)
+                    _cov = 0.0
+                    for _c, (lbl, cle) in zip(_cols_v, [("PER pondéré", "per"), ("P/B pondéré", "pb"), ("PEG pondéré", "peg")]):
+                        _val, _couv = _pond(cle)
+                        _cov = max(_cov, _couv)
+                        _c.metric(lbl, _fr(_val, 1) if _val is not None else "N/A")
+                    if _tot_val > 0:
+                        st.caption(f"Calculés sur {_cov / _tot_val * 100:.0f} % de la valeur du portefeuille (ETF et valeurs sans donnée exclus).")
+
+            # 26. Marge, ROE et dette nette / EBITDA par ligne
+            with st.expander("🏦 Qualité financière par ligne", expanded=True):
+                _rows_q = []
+                for (n, _t, _v, d) in _ok:
+                    if d.get("marge") is None and d.get("roe") is None and d.get("dn_ebitda") is None:
+                        continue
+                    _rows_q.append({
+                        "Nom": n,
+                        "Marge nette": f"{d['marge'] * 100:.1f} %".replace(".", ",") if d.get("marge") is not None else "—",
+                        "ROE": f"{d['roe'] * 100:.1f} %".replace(".", ",") if d.get("roe") is not None else "—",
+                        "Dette nette / EBITDA": f"{_fr(d['dn_ebitda'], 1)}x" if d.get("dn_ebitda") is not None else "—",
+                    })
+                if _rows_q:
+                    _NIV = ["background-color: rgba(239,68,68,0.14); color:#b91c1c; font-weight:700;",
+                            "background-color: rgba(245,158,11,0.16); color:#92400e; font-weight:700;",
+                            "background-color: rgba(34,197,94,0.16); color:#15803d; font-weight:700;"]
+                    def _q_style(c, v):
+                        t = str(v)
+                        if t in ("—", ""):
+                            return "color:#94a3b8;"
+                        try:
+                            x = float(t.replace("x", "").replace("%", "").replace(" ", "").replace(",", "."))
+                        except Exception:
+                            return ""
+                        if c == "Marge nette":
+                            return _NIV[2 if x >= 15 else (1 if x >= 5 else 0)]
+                        if c == "ROE":
+                            return _NIV[2 if x >= 15 else (1 if x >= 8 else 0)]
+                        if c.startswith("Dette"):
+                            return _NIV[2 if x <= 1.5 else (1 if x <= 3 else 0)]
+                        return ""
+                    _html_table(pd.DataFrame(_rows_q), cell_style=_q_style, sticky_col="Nom")
+                else:
+                    st.info("Aucune donnée de qualité financière disponible (ETF, ou Yahoo sans information).")
+
+            # 25 + 28. Objectifs et recommandations des analystes
+            with st.expander("🎯 Objectifs et recommandations des analystes", expanded=True):
+                _RECO_FR = {"strong_buy": ("Achat fort", 2), "buy": ("Achat", 2), "hold": ("Neutre", 1),
+                            "underperform": ("Vente", 0), "sell": ("Vente", 0), "strong_sell": ("Vente forte", 0)}
+                _rows_a, _tri = [], []
+                for (n, t, _v, d) in _ok:
+                    if not d.get("cible"):
+                        continue
+                    px = get_live_price(t) or d.get("prix")
+                    ecart = ((d["cible"] / px - 1.0) * 100.0) if px else None
+                    lbl_r = _RECO_FR.get(d.get("reco_key"), ("—", None))[0]
+                    nb = int(d["nb_analystes"]) if d.get("nb_analystes") else None
+                    _rows_a.append({
+                        "Nom": n, "Cours": fmt_eur(px) if px else "—", "Objectif moyen": fmt_eur(d["cible"]),
+                        "Écart à l'objectif": fmt_perf_simple(ecart) if ecart is not None else "—",
+                        "Avis": lbl_r, "Analystes": str(nb) if nb else "—",
+                    })
+                    _tri.append(ecart if ecart is not None else -1e9)
+                if _rows_a:
+                    _ord = sorted(range(len(_rows_a)), key=lambda i: -_tri[i])
+                    _df_a = pd.DataFrame([_rows_a[i] for i in _ord])
+                    _AV = {"Achat fort": "background-color: rgba(34,197,94,0.22); color:#15803d; font-weight:700;",
+                           "Achat": "background-color: rgba(34,197,94,0.14); color:#15803d; font-weight:700;",
+                           "Neutre": "background-color: rgba(148,163,184,0.20); color:#475569; font-weight:700;",
+                           "Vente": "background-color: rgba(239,68,68,0.14); color:#b91c1c; font-weight:700;",
+                           "Vente forte": "background-color: rgba(239,68,68,0.22); color:#b91c1c; font-weight:700;"}
+                    _html_table(
+                        _df_a,
+                        cell_style=lambda c, v: (_style_perf_cell(v) if c == "Écart à l'objectif" else (_AV.get(str(v), "") if c == "Avis" else "")),
+                        sticky_col="Nom",
+                    )
+                else:
+                    st.info("Pas d'objectif d'analystes disponible pour ces valeurs.")
+
+            # 27. Prochaines publications de résultats
+            with st.expander("📅 Prochaines publications de résultats", expanded=True):
+                _auj = _today_paris().date()
+                _rows_e = sorted([(d["earn"], n) for (n, _t, _v, d) in _ok if d.get("earn")])
+                if _rows_e:
+                    def _dans(dt):
+                        j = (dt - _auj).days
+                        return "Aujourd'hui" if j == 0 else ("Demain" if j == 1 else f"Dans {j} j")
+                    _df_e = pd.DataFrame([{"Nom": n, "Date": dt.strftime("%d/%m/%Y"), "Échéance": _dans(dt)} for (dt, n) in _rows_e])
+                    def _e_style(c, v):
+                        if c != "Échéance":
+                            return ""
+                        t = str(v)
+                        j = 0 if t == "Aujourd'hui" else (1 if t == "Demain" else int(t.split()[1]))
+                        if j <= 7:
+                            return "background-color: rgba(245,158,11,0.20); color:#92400e; font-weight:700;"
+                        if j <= 30:
+                            return "background-color: rgba(59,130,246,0.14); color:#1d4ed8; font-weight:700;"
+                        return ""
+                    _html_table(_df_e, cell_style=_e_style, sticky_col="Nom")
+                else:
+                    st.info("Aucune date de publication annoncée pour ces valeurs.")
+
+        _fondamentaux_fragment()
 
 # ------------------------------------------
 # ONGLET SIMULATEURS : projection de la valeur, revenu passif, retrait
