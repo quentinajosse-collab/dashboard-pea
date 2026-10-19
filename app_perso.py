@@ -1940,7 +1940,7 @@ def _style_perf_cell(v):
         return "color:#16a34a; font-weight:700;"
     if s.startswith("▼"):
         return "color:#dc2626; font-weight:700;"
-    return "color:#64748b;"
+    return "color:#64748b; font-weight:700;"
 
 def _arrow_sym(val, eps=0.005):
     """▲ (hausse) / ▼ (baisse) / ▬ (stable) selon le signe, avec une petite tolérance."""
@@ -2204,6 +2204,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
         tds = [f'<th class="ix">{_esc(str(idx[i]))}</th>'] if show_index else []
         for c, v in zip(cols, row):
             cs = (cell_style(c, v) if cell_style else "") or ""
+            if str(v).startswith("= ") and "font-weight" not in cs:
+                cs += "font-weight:700;"
             p = parsed[c][i] if c in parsed else None
             if p is not None:
                 arrow, num, unit = p
@@ -2227,6 +2229,8 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
         for c in cols:
             v = total_row.get(c, "")
             cs = (cell_style(c, v) if cell_style else "") or ""
+            if str(v).startswith("= ") and "font-weight" not in cs:
+                cs += "font-weight:700;"
             p = parsed[c][_n_body] if c in parsed else None
             if p is not None:
                 arrow, num, unit = p
@@ -2522,7 +2526,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
 
     row_h = 34
     plot_h = row_h * n
-    top_m, bot_m = (18, 44) if (unit == "pct" or compact) else (28, 78)
+    top_m, bot_m = (18, 38) if (unit == "pct" or compact) else (28, 78)
     _cb_off = 6.0 if (unit == "pct" or compact) else 14.0   # écart carte -> légende (plus serré pour les rendements)
     tick_vals = [0.0, zmax / 2.0, zmax]
     tick_text = [_tick(v) for v in tick_vals]
@@ -2941,7 +2945,8 @@ def _render_allocation(df_active, cash):
     # Les noms au singulier/pluriel du « m » (nombre d'actions) viennent du 1er camembert.
     payload = json.dumps(don, ensure_ascii=False).replace("</", "<\\/")
     page = _ALLOC4_HTML.replace("__DON__", payload)
-    components.html(page, height=680)
+    _r1, _r2 = max(len(A), len(S)), max(len(P), len(K))
+    components.html(page, height=int(2 * (16 + 215 + 8 + 20) + (_r1 + _r2) * 20 + 60))
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
@@ -6583,22 +6588,24 @@ if _tab_open(tab_overview):
             pct_str = f"{prog_pct:,.1f}%".replace(".", ",")
             pct_suffix = " du montant visé (épargne prévue incluse)" if apport_prevision > 0 else " du montant visé"
 
+            def _obj_card(label, value, color):
+                return (f'<div style="background:{color}14; border:1px solid {color}55; border-radius:12px; padding:8px 4px; '
+                        'text-align:center; min-width:0; display:flex; flex-direction:column; justify-content:center;">'
+                        '<div style="font-size:min(0.66rem,2.5vw); color:#64748b; text-transform:uppercase; font-weight:700; '
+                        f'letter-spacing:0.03em; line-height:1.25;">{label}</div>'
+                        f'<div style="font-size:min(1rem,3.7vw); font-weight:800; color:{color}; margin-top:3px; line-height:1.25;">{value}</div></div>')
+            _grid = "display:grid; gap:6px; margin-top:8px;"
             st.markdown(
-                f"""
-            {_progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)}
-            <div class="pea-stats">
-                <div class="pea-stat"><div class="k">Actuel</div><div class="v">{fmt_eur(tot_value_globale)}</div></div>
-                <div class="pea-stat"><div class="k">Reste à atteindre</div><div class="v" style="color:{badge_color};">{fmt_eur(montant_restant)}</div></div>
-                <div class="pea-stat"><div class="k">Cible</div><div class="v">{fmt_eur(new_target)}</div></div>
-            </div>
-            <div style="margin-top: 12px; padding: 10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-left: 4px solid {badge_color}; border-radius:8px;">
-                <div style="font-size:0.88rem; font-weight:700; color:{badge_color};">{badge}</div>
-                <div style="font-size:0.78rem; color:#64748b; margin-top:2px;">{badge_detail}</div>
-                <div style="font-size:0.82rem; font-weight:600; color:#475569; margin-top:6px;">
-                    📊 Performance requise sur vos actions d'ici le {_cur_fin.strftime('%d/%m/%Y')} : <b style="color:#0f172a;">{perf_necessaire_str}</b>
-                </div>
-            </div>
-            """, 
+                _progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)
+                + f'<div style="{_grid} grid-template-columns:repeat(3,minmax(0,1fr));">'
+                + _obj_card("Actuel", fmt_eur(tot_value_globale), "#0284c7")
+                + _obj_card("Reste à atteindre", fmt_eur(montant_restant), badge_color)
+                + _obj_card("Cible", fmt_eur(new_target), "#4f46e5")
+                + '</div>'
+                + f'<div style="{_grid} grid-template-columns:repeat(2,minmax(0,1fr));">'
+                + _obj_card("Niveau de l'objectif", badge, badge_color)
+                + _obj_card(f"Performance requise d'ici le {_cur_fin.strftime('%d/%m/%Y')}", perf_necessaire_str, badge_color)
+                + '</div>',
                 unsafe_allow_html=True
             )
 
@@ -8963,8 +8970,7 @@ if _tab_open(tab_dividends):
                     )
 
                     # Rendement mensuel = dividendes nets du mois ÷ capital investi moyen du mois (coût d'achat).
-                    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-                    st.markdown("**Cartographie des rendements mensuels :**")
+                    st.markdown("<p style='margin:-26px 0 0 0; font-weight:700;'>Cartographie des rendements mensuels :</p>", unsafe_allow_html=True)
                     _rows_rend = []
                     try:
                         _h_rend = get_portfolio_history(df_transactions)
@@ -8994,7 +9000,7 @@ if _tab_open(tab_dividends):
                     st.info("Aucun dividende ni rompu perçu pour le moment.")
 
                 # --- Nouvelle partie, directement sous la cartographie mensuelle des dividendes ---
-                st.markdown("<hr style='margin: 6px 0 18px 0;'>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin: -22px 0 18px 0;'>", unsafe_allow_html=True)
                 st.markdown("### 📅 Calendrier des dividendes à venir")
 
                 df_divs_only_cal = df_transactions[df_transactions["Type"] == "DIVIDENDE"].copy()
@@ -9569,7 +9575,7 @@ if _tab_open(tab_fees):
                 render_yearly_amounts(fees_yearly_sum, "#f97316", detail_source=df_fees_pure, detail_value_col="Frais Totaux (€)", detail_kind="frais")
 
                 st.markdown("<br>", unsafe_allow_html=True)
-                st.markdown("**Cartographie mensuelle :**")
+                st.markdown("**Cartographie des frais mensuels :**")
                 build_calendar_heatmap(
                     df_fees_pure, "Date_Heure", "Frais Totaux (€)",
                     ["#fff7ed", "#f97316"], "fees",
