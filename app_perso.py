@@ -2588,6 +2588,7 @@ _SECTEURS_MANUELS = {
     "vusion": "Technologie", "2crsi": "Technologie", "asml": "Technologie",
     "air liquide": "Matériaux de base", "schneider": "Industrie",
     "credit agricole": "Services financiers", "tme pharma": "Santé",
+    "dbt": "Industrie", "aton": "Santé", "haffner": "Énergie",
 }
 
 def _secteur_manuel(nom):
