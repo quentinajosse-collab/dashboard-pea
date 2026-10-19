@@ -2734,6 +2734,326 @@ def _render_allocation(df_active, cash):
     components.html(page, height=260 + 32 * max(len(rows), len(sectors)))
 
 
+# ------------------------------------------------------------------
+# Camemberts liés n°2 : revenus par continent (gauche) et tranche de capitalisation (droite)
+# ------------------------------------------------------------------
+# Yahoo Finance ne fournit PAS la ventilation géographique du chiffre d'affaires. Pour les valeurs ci-dessous,
+# on utilise donc des ORDRES DE GRANDEUR issus des derniers rapports annuels (arrondis, à ajuster ici si besoin).
+# Pour toute autre valeur, repli sur le continent du siège social (100 %). Clé = fragment du nom, sans accent.
+_REVENUS_CONTINENT_REF = {
+    "air liquide": {"Europe": 34, "Amérique du Nord": 30, "Asie": 27, "Amérique du Sud": 4, "Afrique": 5},
+    "asml": {"Asie": 80, "Amérique du Nord": 12, "Europe": 8},
+    "schneider": {"Europe": 28, "Amérique du Nord": 32, "Asie": 28, "Amérique du Sud": 4, "Afrique": 8},
+    "credit agricole": {"Europe": 92, "Amérique du Nord": 4, "Asie": 4},
+    "vusion": {"Amérique du Nord": 55, "Europe": 35, "Asie": 10},
+    "msci world": {"Amérique du Nord": 75, "Europe": 16, "Asie": 6, "Océanie": 3},
+}
+_COUNTRY_CONTINENT = {}
+for _cont, _pays in {
+    "Europe": ["France", "Germany", "Netherlands", "Belgium", "Italy", "Spain", "Portugal", "Ireland", "Luxembourg",
+               "Switzerland", "United Kingdom", "Sweden", "Norway", "Denmark", "Finland", "Austria", "Poland", "Greece"],
+    "Amérique du Nord": ["United States", "Canada", "Mexico"],
+    "Amérique du Sud": ["Brazil", "Argentina", "Chile", "Colombia", "Peru"],
+    "Asie": ["China", "Japan", "South Korea", "Taiwan", "Hong Kong", "India", "Singapore", "Israel", "Saudi Arabia"],
+    "Afrique": ["South Africa", "Morocco", "Egypt", "Nigeria"],
+    "Océanie": ["Australia", "New Zealand"],
+}.items():
+    for _p in _pays:
+        _COUNTRY_CONTINENT[_p] = _cont
+
+def _norm_nom(s):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(s).lower()) if unicodedata.category(c) != "Mn")
+
+def _continent_split(nom, country):
+    """({continent: %}, estimé_par_ref) : ventilation des revenus d'une valeur par continent."""
+    n = _norm_nom(nom)
+    for key, split in _REVENUS_CONTINENT_REF.items():
+        if key in n:
+            tot = float(sum(split.values())) or 1.0
+            return {k: v / tot * 100 for k, v in split.items()}, True
+    cont = _COUNTRY_CONTINENT.get(country)
+    return ({cont: 100.0} if cont else {"Non déterminé": 100.0}), False
+
+def _fmt_cap(v):
+    if v is None or v <= 0:
+        return "N/A"
+    if v >= 1e12:
+        return f"{v / 1e12:,.2f} Bn€".replace(",", " ").replace(".", ",")
+    if v >= 1e9:
+        return f"{v / 1e9:,.1f} Md€".replace(",", " ").replace(".", ",")
+    return f"{v / 1e6:,.0f} M€".replace(",", " ")
+
+_CAP_BUCKETS = [
+    ("Grandes (> 10 Md€)", 10e9, None),
+    ("Moyennes (2–10 Md€)", 2e9, 10e9),
+    ("Petites (300 M€–2 Md€)", 300e6, 2e9),
+    ("Très petites (< 300 M€)", 0.0, 300e6),
+]
+
+def _cap_bucket(mc, qt):
+    if qt in _ETF_QUOTE_TYPES:
+        return "ETF / fonds"
+    if mc is None or mc <= 0:
+        return "Capitalisation inconnue"
+    for label, lo, hi in _CAP_BUCKETS:
+        if mc >= lo and (hi is None or mc < hi):
+            return label
+    return "Capitalisation inconnue"
+
+_ALLOC_PAIR_HTML = r"""
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap');
+  html, body { margin: 0; padding: 0; background: transparent; height: 100%; }
+  #root { box-sizing: border-box; display: grid; gap: 8px 14px; justify-content: center; align-items: start; padding: 4px 2px;
+          grid-template-columns: 210px minmax(150px, 200px) 210px minmax(150px, 200px);
+          grid-template-areas: "pa la pb lb";
+          font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif; color: var(--fg, #334155); }
+  #wa { grid-area: pa; } #wb { grid-area: pb; } #legA { grid-area: la; } #legS { grid-area: lb; }
+  .wrap { position: relative; width: 100%; }
+  .ttl { text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .6; margin-bottom: 2px; }
+  svg { width: 100%; max-width: 210px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
+  .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
+  .slice.dim { opacity: .28; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 8px; cursor: pointer;
+         transition: opacity .18s ease, background .18s ease; -webkit-tap-highlight-color: transparent; }
+  .row.sel { background: rgba(127,127,127,.14); }
+  .row.dim { opacity: .4; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 10px; }
+  .nm { flex: 1; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pc { font-weight: 700; font-variant-numeric: tabular-nums; font-size: 12px; opacity: .85; }
+  text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
+  html, body, svg, .row { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .mono { font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
+  @media (max-width: 880px) {
+    #root { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "pa pb" "la lb"; gap: 6px 10px; }
+    svg { max-width: 200px; }
+    .nm { font-size: 12px; } .pc { font-size: 11px; } .row { padding: 4px 4px; gap: 6px; }
+  }
+</style>
+<div id="root">
+  <div class="wrap" id="wa"><div class="ttl">__TTL_L__</div><svg id="svgA" viewBox="0 0 240 240"></svg></div>
+  <div class="wrap" id="wb"><div class="ttl">__TTL_R__</div><svg id="svgS" viewBox="0 0 240 240"></svg></div>
+  <div id="legA"></div>
+  <div id="legS"></div>
+</div>
+<script>
+(function () {
+  var L = __L__, R = __R__, CL = __CL__, CR = __CR__, NL = __NL__, NR = __NR__;
+  var fg = '#334155';
+  try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
+  document.documentElement.style.setProperty('--fg', fg);
+
+  var NS = 'http://www.w3.org/2000/svg', C = 120, RAD = 104, r = 76, mute = 0;
+  var st = { t: null, i: -1 };
+  var svgA = document.getElementById('svgA'), svgS = document.getElementById('svgS');
+  var legA = document.getElementById('legA'), legS = document.getElementById('legS');
+
+  function layout(items) {
+    var MIN = 2.2, raw = items.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
+    var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
+    raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
+    return ang;
+  }
+  var angL = layout(L), angR = layout(R);
+  function pt(rad, a) { var t = (a - 90) * Math.PI / 180; return [C + rad * Math.cos(t), C + rad * Math.sin(t)]; }
+  function arc(s, e) {
+    var gap = (e - s) > 4 ? 0.5 : 0.15; s += gap; e -= gap;
+    if (e - s >= 359.9) e = s + 359.9;
+    var big = (e - s) > 180 ? 1 : 0, p0 = pt(RAD, s), p1 = pt(RAD, e), p2 = pt(r, e), p3 = pt(r, s);
+    return 'M' + p0 + 'A' + RAD + ',' + RAD + ' 0 ' + big + ' 1 ' + p1 + 'L' + p2 + 'A' + r + ',' + r + ' 0 ' + big + ' 0 ' + p3 + 'Z';
+  }
+  function el(n, at, parent) {
+    var e = document.createElementNS(NS, n);
+    for (var key in at) e.setAttribute(key, at[key]);
+    parent.appendChild(e); return e;
+  }
+  function cut(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+  function plural(n, w) { return n + ' ' + (n > 1 ? w[1] : w[0]); }
+  var AC = ['action', 'actions'];
+  function inter(a, b) { for (var i = 0; i < a.length; i++) if (b.indexOf(a[i]) >= 0) return true; return false; }
+
+  function toggle(t, i) {
+    if (st.t === t && st.i === i) st = { t: null, i: -1 }; else st = { t: t, i: i };
+    render();
+  }
+  function build(svg, items, ang, t) {
+    return items.map(function (d, i) {
+      var p = el('path', { d: arc(ang[i][0], ang[i][1]), fill: d.c, 'class': 'slice', 'data-t': t, 'data-i': i }, svg);
+      p.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
+      return p;
+    });
+  }
+  function center(svg) {
+    return [
+      el('text', { x: C, y: C - 26, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
+      el('text', { x: C, y: C - 2, 'text-anchor': 'middle', 'font-size': 17, 'font-weight': 700, 'class': 'mono' }, svg),
+      el('text', { x: C, y: C + 16, 'text-anchor': 'middle', 'font-size': 11, opacity: .7 }, svg),
+      el('text', { x: C, y: C + 32, 'text-anchor': 'middle', 'font-size': 10.5, opacity: .7 }, svg)
+    ];
+  }
+  function buildRows(leg, items, t) {
+    return items.map(function (d, i) {
+      var row = document.createElement('div'); row.className = 'row'; row.setAttribute('data-t', t); row.setAttribute('data-i', i);
+      row.innerHTML = '<span class="dot" style="background:' + d.c + '"></span><span class="nm"></span><span class="pc">' + d.pt + ' %</span>';
+      row.querySelector('.nm').textContent = d.n; row.title = d.n + ' — ' + d.v;
+      row.addEventListener('click', function (ev) { ev.stopPropagation(); if (Date.now() < mute) return; toggle(t, i); });
+      leg.appendChild(row); return row;
+    });
+  }
+  var slL = build(svgA, L, angL, 'l'), slR = build(svgS, R, angR, 'r');
+  var cL = center(svgA), cR = center(svgS);
+  var rowsL = buildRows(legA, L, 'l'), rowsR = buildRows(legS, R, 'r');
+
+  function paint(sl, ang, rows, isAct, on) {
+    sl.forEach(function (s, j) {
+      var a = on && isAct(j);
+      s.setAttribute('class', 'slice' + (on && !a ? ' dim' : ''));
+      if (a) {
+        var m = (ang[j][0] + ang[j][1]) / 2 * Math.PI / 180;
+        s.style.transform = 'translate(' + (Math.sin(m) * 5) + 'px,' + (-Math.cos(m) * 5) + 'px)';
+      } else { s.style.transform = ''; }
+    });
+    rows.forEach(function (rw, j) {
+      var a = on && isAct(j);
+      rw.className = 'row' + (a ? ' sel' : '') + (on && !a ? ' dim' : '');
+    });
+  }
+  function txt(c, a, b, d, e) { c[0].textContent = a; c[1].textContent = b; c[2].textContent = d; c[3].textContent = e; }
+  function show(c, d) { txt(c, cut(d.n, 20), d.v, d.pt + ' %', plural(d.m.length, AC)); }
+
+  function render() {
+    var on = st.t !== null, actL = {}, actR = {};
+    if (st.t === 'l') {
+      actL[st.i] = 1;
+      R.forEach(function (it, j) { if (inter(it.m, L[st.i].m)) actR[j] = 1; });
+    } else if (st.t === 'r') {
+      actR[st.i] = 1;
+      L.forEach(function (it, j) { if (inter(it.m, R[st.i].m)) actL[j] = 1; });
+    }
+    paint(slL, angL, rowsL, function (j) { return !!actL[j]; }, on);
+    paint(slR, angR, rowsR, function (j) { return !!actR[j]; }, on);
+    if (!on) { txt(cL, CL[0], CL[1], CL[2], CL[3]); txt(cR, CR[0], CR[1], CR[2], CR[3]); return; }
+    var selL = st.t === 'l', sel = selL ? L[st.i] : R[st.i];
+    show(selL ? cL : cR, sel);
+    var oth = selL ? R : L, oact = selL ? actR : actL, ids = Object.keys(oact);
+    if (ids.length === 1) show(selL ? cR : cL, oth[+ids[0]]);
+    else txt(selL ? cR : cL, 'Lié à ' + cut(sel.n, 14), plural(ids.length, selL ? NR : NL), '', '');
+  }
+  document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t !== null) { st = { t: null, i: -1 }; render(); } });
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+  var timer = null, scrub = false, sx = 0, sy = 0;
+  function hitAt(x, y) {
+    var e = document.elementFromPoint(x, y);
+    while (e && e !== document.body) {
+      var v = e.getAttribute && e.getAttribute('data-i');
+      if (v !== null && v !== undefined) return { t: e.getAttribute('data-t'), i: +v };
+      e = e.parentNode;
+    }
+    return null;
+  }
+  function stopHold() { if (timer) { clearTimeout(timer); timer = null; } if (scrub) { scrub = false; mute = Date.now() + 450; } }
+  document.addEventListener('touchstart', function (e) {
+    stopHold();
+    if (e.touches.length !== 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    if (!hitAt(sx, sy)) return;
+    timer = setTimeout(function () {
+      timer = null; scrub = true;
+      if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
+      var h = hitAt(sx, sy); if (h) { st = h; render(); }
+    }, 250);
+  }, { passive: true });
+  document.addEventListener('touchmove', function (e) {
+    var t = e.touches[0];
+    if (scrub) {
+      e.preventDefault();
+      var h = hitAt(t.clientX, t.clientY);
+      if (h && (h.t !== st.t || h.i !== st.i)) { st = h; render(); }
+    } else if (timer && (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10)) {
+      clearTimeout(timer); timer = null;
+    }
+  }, { passive: false });
+  document.addEventListener('touchend', stopHold, { passive: true });
+  document.addEventListener('touchcancel', stopHold, { passive: true });
+
+  function fit() {
+    try {
+      var rt = document.getElementById('root');
+      var h = Math.ceil(rt.getBoundingClientRect().height) + 10;
+      try { window.frameElement.style.height = h + 'px'; }
+      catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
+    } catch (e) {}
+  }
+  render(); fit();
+  window.addEventListener('resize', fit); setTimeout(fit, 150);
+})();
+</script>
+"""
+
+def _render_allocation_geo(df_active):
+    """Deux camemberts liés : revenus par continent (gauche) et tranche de capitalisation (droite). Un clic sur un
+    continent surligne les tranches de capitalisation des sociétés qui y réalisent du chiffre d'affaires, et
+    inversement. Valeurs en € = part du portefeuille concernée."""
+    import streamlit.components.v1 as components
+    rows = []
+    if df_active is not None and not df_active.empty:
+        for _, r in df_active.iterrows():
+            v = float(r["Valeur Actuelle (€)"])
+            if v > 0:
+                rows.append((str(r["Nom"]), str(r["Ticker"]), v, r.get("Pays")))
+    if not rows:
+        st.info("Aucune position à répartir pour le moment.")
+        return
+    total = sum(x[2] for x in rows)
+    _pct_txt = lambda p: f"{p:.2f}".replace(".", ",")
+
+    # --- Continents (valeur du portefeuille ventilée selon la répartition des revenus de chaque société)
+    cont_val, cont_mem, n_est, fallback_noms = {}, {}, 0, []
+    for idx, (nom, tick, v, pays) in enumerate(rows):
+        split, is_ref = _continent_split(nom, pays)
+        if not is_ref:
+            fallback_noms.append(nom)
+        for cont, p in split.items():
+            cont_val[cont] = cont_val.get(cont, 0.0) + v * p / 100.0
+            cont_mem.setdefault(cont, []).append(idx)
+    cont_order = sorted(cont_val, key=lambda k: -cont_val[k])
+    L = [{"n": k, "v": fmt_eur(cont_val[k]), "pct": cont_val[k] / total * 100, "pt": _pct_txt(cont_val[k] / total * 100),
+          "c": _alloc_color(i), "m": cont_mem[k]} for i, k in enumerate(cont_order)]
+
+    # --- Capitalisation
+    bucket_val, bucket_mem, cap_total, n_cap = {}, {}, 0.0, 0
+    for idx, (nom, tick, v, pays) in enumerate(rows):
+        mc, qt, _cur = get_ticker_marketcap(tick)
+        b = _cap_bucket(mc, qt)
+        bucket_val[b] = bucket_val.get(b, 0.0) + v
+        bucket_mem.setdefault(b, []).append(idx)
+        if mc and qt not in _ETF_QUOTE_TYPES:
+            cap_total += float(mc)
+            n_cap += 1
+    order_cap = [b[0] for b in _CAP_BUCKETS] + ["ETF / fonds", "Capitalisation inconnue"]
+    cap_order = [b for b in order_cap if b in bucket_val]
+    R = [{"n": k, "v": fmt_eur(bucket_val[k]), "pct": bucket_val[k] / total * 100, "pt": _pct_txt(bucket_val[k] / total * 100),
+          "c": _alloc_color(i + 3), "m": bucket_mem[k]} for i, k in enumerate(cap_order)]
+
+    def _js(o):
+        return json.dumps(o, ensure_ascii=False).replace("</", "<\\/")
+    CL = ["Total portefeuille", fmt_eur(total), f"{len(L)} continent{'s' if len(L) > 1 else ''}", ""]
+    CR = ["Capitalisation cumulée", _fmt_cap(cap_total) if n_cap else "N/A", f"{n_cap} société{'s' if n_cap > 1 else ''}", "(hors ETF)"]
+    page = (_ALLOC_PAIR_HTML
+            .replace("__TTL_L__", "Revenus par continent").replace("__TTL_R__", "Par capitalisation")
+            .replace("__L__", _js(L)).replace("__R__", _js(R)).replace("__CL__", _js(CL)).replace("__CR__", _js(CR))
+            .replace("__NL__", _js(["continent", "continents"])).replace("__NR__", _js(["tranche", "tranches"])))
+    components.html(page, height=260 + 32 * max(len(L), len(R)))
+    note = ("ℹ️ Les revenus par continent sont des **estimations** (ordres de grandeur issus des rapports annuels) pour "
+            "les valeurs suivies dans `_REVENUS_CONTINENT_REF` ; pour les autres, c'est le continent du siège social "
+            "qui est utilisé (Yahoo Finance ne fournit pas la ventilation du chiffre d'affaires).")
+    if fallback_noms:
+        note += " Siège social retenu pour : " + ", ".join(fallback_noms) + "."
+    st.caption(note)
+
+
 def _progress_bar_html(pct, gradient, glow_color, texte):
     """Barre de progression pleine largeur (objectif, net conservé après retrait)."""
     pct_c = max(0.0, min(float(pct), 100.0))
@@ -2813,17 +3133,21 @@ class _TickerInfoStore:
             self.data = {}
 
     def lookup(self, ticker):
+        """Renvoie le dict mémorisé (sector, country, mc, qt, cur) s'il est frais ET complet, sinon None.
+        Les anciennes entrées (sans « qt » = type de produit) ou celles dont le secteur vaut « Autre » sans
+        être un ETF sont ignorées : elles proviennent d'une réponse Yahoo incomplète (limitation de débit)
+        et étaient la cause de l'affichage « tout en Autre » dans la répartition par secteur."""
         entry = self.data.get(ticker)
         try:
-            if entry and (time_module.time() - float(entry.get("ts", 0))) < _TICKER_INFO_MAX_AGE:
-                return entry["sector"], entry["country"]
+            if entry and (time_module.time() - float(entry.get("ts", 0))) < _TICKER_INFO_MAX_AGE and "qt" in entry:
+                return entry
         except Exception:
             pass
         return None
 
-    def save(self, ticker, sector, country):
+    def save(self, ticker, entry):
         with self.lock:
-            self.data[ticker] = {"sector": sector, "country": country, "ts": time_module.time()}
+            self.data[ticker] = dict(entry, ts=time_module.time())
             try:
                 tmp_path = self.path + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
@@ -2845,23 +3169,67 @@ class _TickerInfoStore:
 def _ticker_info_store():
     return _TickerInfoStore(_TICKER_INFO_FILE)
 
-@st.cache_data(ttl=86400)
+import threading as _threading_info
+# Au plus 4 requêtes « info » simultanées vers Yahoo : le préchargement lance ~20 threads en parallèle,
+# ce qui déclenchait la limitation de débit (réponse vide) -> secteur « Autre » pour toutes les valeurs.
+_INFO_SEMAPHORE = _threading_info.Semaphore(4)
+_ETF_QUOTE_TYPES = ("ETF", "MUTUALFUND", "INDEX")
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _fetch_info_full(ticker):
+    """Secteur, pays, capitalisation boursière et type de produit d'une valeur (une seule requête Yahoo).
+    LÈVE une exception si Yahoo ne répond pas correctement : st.cache_data ne mémorise jamais une
+    exception, donc un échec passager n'est plus figé pendant 24 h (c'était la cause du « tout en Autre »)."""
+    _known = _ticker_info_store().lookup(ticker)
+    if _known is not None:
+        return {k: _known.get(k) for k in ("sector", "country", "mc", "qt", "cur")}
+    info = None
+    last_exc = None
+    for attempt in range(3):
+        try:
+            with _INFO_SEMAPHORE:
+                info = yf.Ticker(ticker).info
+            if isinstance(info, dict) and len(info) >= 5:
+                break
+            info = None
+        except Exception as exc:
+            last_exc = exc
+            info = None
+        time_module.sleep(0.8 * (attempt + 1))
+    if info is None:
+        raise RuntimeError(f"info indisponible pour {ticker}: {last_exc}")
+    qt = str(info.get("quoteType") or "").upper()
+    sector = info.get("sector") or ("ETF / Fonds" if qt in _ETF_QUOTE_TYPES else "Autre")
+    out = {
+        "sector": sector,
+        "country": info.get("country") or "Inconnu",
+        "mc": info.get("marketCap"),
+        "qt": qt or "EQUITY",
+        "cur": info.get("currency"),
+    }
+    # On n'écrit sur disque que les réponses réellement complètes (secteur connu, ou ETF).
+    if info.get("sector") or qt in _ETF_QUOTE_TYPES:
+        _ticker_info_store().save(ticker, out)
+    return out
+
 def get_ticker_info(ticker):
     if not ticker or ticker in _FAILED_TICKERS:
         return "Autre", "Inconnu"
-    _known = _ticker_info_store().lookup(ticker)
-    if _known is not None:
-        return _known
     try:
-        t = yf.Ticker(ticker)
-        info = t.info
-        sector = info.get("sector", "Autre")
-        country = info.get("country", "Inconnu")
-        if isinstance(info, dict) and len(info) >= 5:
-            _ticker_info_store().save(ticker, sector, country)
-        return sector, country
+        d = _fetch_info_full(ticker)
+        return d["sector"], d["country"]
     except Exception:
         return "Autre", "Inconnu"
+
+def get_ticker_marketcap(ticker):
+    """(capitalisation en €, type de produit, devise) ; capitalisation None pour un ETF / si inconnue."""
+    if not ticker or ticker in _FAILED_TICKERS:
+        return None, "", None
+    try:
+        d = _fetch_info_full(ticker)
+        return d.get("mc"), d.get("qt") or "", d.get("cur")
+    except Exception:
+        return None, "", None
 
 @st.cache_data(ttl=3600)
 def get_historical_price_at(ticker, target_date):
@@ -5972,10 +6340,14 @@ if _tab_open(tab_overview):
                 st.markdown("<p class='dashboard-section-title'>💰 Capital & Investissement</p>", unsafe_allow_html=True)
                 with st.container(key="row_capital_wrap"):
                     r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
-                    r1_c1.metric("Valeur Actuelle", fmt_eur(tot_value_globale))
-                    r1_c2.metric("Montant Investi", fmt_eur(tot_invested))
-                    r1_c3.metric("Cash Disponible", fmt_eur(poche_especes))
-                    r1_c4.metric("Total Apports", fmt_eur(apports_totaux))
+                    r1_c1.metric("Valeur Actuelle", fmt_eur(tot_value_globale),
+                                 help="Valeur totale du PEA aujourd'hui : actions et ETF valorisés au cours en direct, plus le cash disponible.")
+                    r1_c2.metric("Montant Investi", fmt_eur(tot_invested),
+                                 help="Capital actuellement investi dans les titres encore détenus (PRU net × quantité, frais inclus). Les positions soldées ne sont pas comptées.")
+                    r1_c3.metric("Cash Disponible", fmt_eur(poche_especes),
+                                 help="Liquidités du PEA non investies : apports, produits de ventes et dividendes, moins les achats, frais et retraits.")
+                    r1_c4.metric("Total Apports", fmt_eur(apports_totaux),
+                                 help="Total des versements nets depuis l'ouverture (apports moins retraits). Le plafond de versements du PEA est de 150 000 €.")
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>📈 Performances</p>", unsafe_allow_html=True)
                 with st.container(key="row_perf_wrap"):
@@ -5991,16 +6363,21 @@ if _tab_open(tab_overview):
                     # Rangée 1 : Globale | YTD ; rangée 2 : Mois | Jour ; puis la performance annuelle moyenne
                     # centrée sur toute la largeur.
                     r2_c1, r2_c2 = st.columns(2)
-                    r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules))
-                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr))
+                    r2_c1.metric("Performance Globale", fmt_perf_text_only(perf_globale), delta=_delta(total_gains_cumules),
+                                 help="Le % = gains cumulés depuis l'ouverture (plus-values latentes + actées + dividendes) ÷ total des apports nets. Le montant sous le % est ce gain en €.")
+                    r2_c2.metric("Performance YTD", fmt_perf_text_only(perf_ytd), delta=_delta(gain_total_yr),
+                                 help="Le % = gain depuis le 1er janvier (latent + actée + dividendes) ÷ valeur du portefeuille au 31 décembre précédent. Le montant est ce gain en €.")
                     r2b_c1, r2b_c2 = st.columns(2)
-                    r2b_c1.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo))
-                    r2b_c2.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j))
+                    r2b_c1.metric("Performance du Mois", fmt_perf_text_only(perf_mois_en_cours), delta=_delta(gain_total_mo),
+                                  help="Le % = gain depuis le 1er du mois ÷ valeur du portefeuille à la fin du mois précédent. Le montant est ce gain en €.")
+                    r2b_c2.metric("Performance du Jour", fmt_perf_text_only(perf_jour), delta=_delta(gain_total_j),
+                                  help="Le % = gain du jour ÷ valeur du portefeuille à la clôture de la veille (hors apports et retraits). Le montant est ce gain en €.")
                     # Gain moyen par an en € (gain total cumulé ramené à une année), affiché sur la flèche.
                     _gain_an_moy = (total_gains_cumules / _ans_pea) if _ans_pea >= 0.25 else None
                     with st.container(key="center_metric_perf_an"):
                         st.metric("Performance Annuelle Moyenne", _perf_an_txt,
-                                  delta=(_delta(_gain_an_moy) if _gain_an_moy is not None else None))
+                                  delta=(_delta(_gain_an_moy) if _gain_an_moy is not None else None),
+                                  help="Le % = performance globale ramenée à un taux annuel composé depuis l'ouverture du PEA (disponible après 3 mois). Le montant = gain moyen par an en €.")
 
                 st.markdown("<p class='dashboard-section-title' style='margin-top: 16px;'>🏷️ Plus-values, Dividendes & Frais</p>", unsafe_allow_html=True)
                 with st.container(key="row_gains_wrap"):
@@ -6011,11 +6388,22 @@ if _tab_open(tab_overview):
                     # Plus-Value Actée : gain déjà réalisé rapporté à la valeur totale actuelle du
                     # portefeuille (actions + poche espèces).
                     pct_actee = (tot_realized_pnl / tot_value_globale * 100) if tot_value_globale > 0 else 0.0
-                    r3_c1.metric("Plus-Value Latente", fmt_eur(global_pnl), delta=(f"{pct_latente:+,.2f}%".replace(",", " ").replace(".", ",")))
-                    r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")))
+                    r3_c1.metric("Plus-Value Latente", fmt_eur(global_pnl), delta=(f"{pct_latente:+,.2f}%".replace(",", " ").replace(".", ",")),
+                                 help="Gain non encore réalisé sur les titres détenus (valeur actuelle − capital investi). Le % est rapporté au capital investi dans ces titres.")
+                    r3_c2.metric("Plus-Value Actée", fmt_eur(tot_realized_pnl), delta=(f"{pct_actee:+,.2f}%".replace(",", " ").replace(".", ",")),
+                                 help="Gain déjà encaissé grâce aux ventes (net de frais, base PRU). Le % est rapporté à la valeur totale actuelle du portefeuille (actions + cash).")
                     r3b_c1, r3b_c2 = st.columns(2)
-                    r3b_c1.metric("Dividendes Reçus", fmt_eur(net_divs_total))
-                    r3b_c2.metric("Frais Totaux", fmt_eur(tot_fees))
+                    # % pertinent pour les dividendes et les frais : rapportés au total des apports nets (l'argent
+                    # réellement sorti de la poche), comme la performance globale -> directement comparables entre eux.
+                    pct_div_apports = (net_divs_total / apports_totaux * 100) if apports_totaux > 0 else None
+                    pct_frais_apports = (tot_fees / apports_totaux * 100) if apports_totaux > 0 else None
+                    r3b_c1.metric("Dividendes Reçus", fmt_eur(net_divs_total),
+                                  delta=(f"{pct_div_apports:+,.2f}%".replace(",", " ").replace(".", ",") if pct_div_apports is not None else None),
+                                  help="Dividendes et rompus nets perçus depuis l'ouverture (après retenue à la source). Le % = dividendes ÷ total des apports nets : la part de vos versements récupérée sous forme de dividendes.")
+                    r3b_c2.metric("Frais Totaux", fmt_eur(tot_fees),
+                                  delta=(f"{pct_frais_apports:.2f}% des apports".replace(".", ",") if pct_frais_apports is not None else None),
+                                  delta_color="off",
+                                  help="Courtage et TTF payés à l'achat et à la vente depuis l'ouverture. Le % = frais ÷ total des apports nets : ce que les frais ont coûté par rapport à l'argent versé.")
 
                     # Rendement moyen des dividendes sur le capital investi : dividendes nets perçus, ramenés à
                     # une année (si le PEA a plus de 3 mois), rapportés au capital actuellement investi.
@@ -6030,7 +6418,8 @@ if _tab_open(tab_overview):
                     _div_an_moy = (net_divs_total / _ans_div) if _ans_div >= 0.25 else None
                     with st.container(key="center_metric_rend_div"):
                         st.metric("Rendement Moyen des Dividendes", _rend_moy_txt,
-                                  delta=(_delta(_div_an_moy) if _div_an_moy is not None else None))
+                                  delta=(_delta(_div_an_moy) if _div_an_moy is not None else None),
+                                  help="Le % = dividendes nets perçus ramenés à une année (après 3 mois d'historique) ÷ capital actuellement investi. Le montant = dividendes moyens perçus par an en €.")
 
         # --- Alerte watchlist : valeurs suivies proches de leur zone d'achat (voir l'onglet
         # "👁️ Watchlist"). Déplacée au-dessus de "Vue d'ensemble du Portefeuille", au même endroit
@@ -6507,6 +6896,8 @@ if _tab_open(tab_positions):
 
         with st.expander("🥧 Répartition du portefeuille", expanded=True):
             _render_allocation(df_active, poche_especes)
+            st.markdown("<hr style='margin: 14px 0 8px 0;'>", unsafe_allow_html=True)
+            _render_allocation_geo(df_active)
 
         with st.expander("📜 Détail complet des transactions", expanded=True):
             if not df_transactions.empty:
@@ -9693,7 +10084,7 @@ def _render_sim_epargne(valeur_depart):
                 )
                 c7, _c8 = st.columns(2)
                 taux_ret = c7.number_input(
-                    "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25, value=3.0, key="k_rp_retrait",
+                    "Taux de retrait (%)", min_value=0.0, max_value=20.0, step=0.25, value=4.0, key="k_rp_retrait",
                     help="Part du capital net retirée chaque année pour le revenu passif.",
                 )
             _fiable = "" if annees_ecoulees >= 1 else " ⚠️ historique court, peu fiable"
