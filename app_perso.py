@@ -1221,6 +1221,9 @@ _METRIC_TIPS = {
     "Frais Totaux": "% = frais totaux (courtage + TTF) ÷ gains totaux (plus-values latentes + actées + dividendes encaissés).",
     "Rendement sur cours": "% = dividendes nets annuels (reçus ÷ nombre d'années depuis l'ouverture, après 3 mois) ÷ valeur actuelle des titres détenus (cours du jour). La flèche indique le dividende annuel moyen en €.",
     "Rendement sur coût": "% = dividendes nets annuels (reçus ÷ nombre d'années depuis l'ouverture, après 3 mois) ÷ coût de revient des titres détenus (PRU × quantités). La flèche indique le dividende annuel moyen en €.",
+    "PER pondéré": "Moyenne harmonique du PER (cours ÷ bénéfice par action, 12 derniers mois) des lignes, pondérée par leur valeur actuelle. ETF et valeurs sans bénéfice exclus.",
+    "P/B pondéré": "Moyenne harmonique du ratio cours ÷ valeur comptable par action, pondérée par la valeur actuelle des lignes. ETF et valeurs sans donnée exclus.",
+    "PEG pondéré": "Moyenne harmonique du PEG (PER ÷ croissance attendue des bénéfices), pondérée par la valeur actuelle des lignes. Valeurs sans PEG exclues.",
     "Drawdown Maximum": "% = plus forte baisse du portefeuille depuis un sommet, calculée sur la performance quotidienne (hors apports et retraits). La flèche indique l'écart actuel par rapport au dernier sommet.",
 }
 
@@ -1917,17 +1920,17 @@ def fmt_perf_simple(val):
 
 
 def fmt_pts(val):
-    """Contribution en points de performance : ▲ +0,52 pt / ▼ -0,12 pt / ▬ 0,00 pt."""
+    """Contribution à la performance : ▲ +0,52 % / ▼ -0,12 % / ▬ 0,00 %."""
     try:
         if pd.isna(val):
             return "N/A"
     except Exception:
         return "N/A"
     if val > 0.005:
-        return f"▲ +{val:,.2f} pt".replace(",", " ").replace(".", ",")
+        return f"▲ +{val:,.2f} %".replace(",", " ").replace(".", ",")
     if val < -0.005:
-        return f"▼ {val:,.2f} pt".replace(",", " ").replace(".", ",")
-    return "▬ 0,00 pt"
+        return f"▼ {val:,.2f} %".replace(",", " ").replace(".", ",")
+    return "▬ 0,00 %"
 
 
 def _style_perf_cell(v):
@@ -2517,7 +2520,8 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
 
     row_h = 34
     plot_h = row_h * n
-    top_m, bot_m = 28, 78
+    top_m, bot_m = (18, 44) if unit == "pct" else (28, 78)
+    _cb_off = 6.0 if unit == "pct" else 14.0   # écart carte -> légende (plus serré pour les rendements)
     tick_vals = [0.0, zmax / 2.0, zmax]
     tick_text = [_tick(v) for v in tick_vals]
 
@@ -2528,7 +2532,7 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
         xgap=2, ygap=2, hoverongaps=False, showscale=True, name="",
         colorbar=dict(
             orientation="h", x=0.5, xanchor="center",
-            y=-(14.0 / plot_h), yanchor="top", yref="paper",
+            y=-(_cb_off / plot_h), yanchor="top", yref="paper",
             lenmode="fraction", len=0.9, thickness=10, outlinewidth=0,
             tickmode="array", tickvals=tick_vals, ticktext=tick_text,
             ticks="outside", ticklen=3, tickfont=dict(size=10),
@@ -2684,7 +2688,7 @@ _ALLOC4_HTML = r"""
   #grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 14px; align-items: start; }
   .cell { min-width: 0; }
   .ttl { text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .6; margin-bottom: 2px; }
-  svg { width: 100%; max-width: 230px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
+  svg { width: 100%; max-width: 280px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
   .slice.dim { opacity: .28; }
   .leg { margin-top: 4px; }
@@ -2703,7 +2707,7 @@ _ALLOC4_HTML = r"""
   @media (max-width: 760px) {
     #grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 6px; }
     .ttl { font-size: 10px; margin-bottom: 0; }
-    svg { max-width: 150px; }
+    svg { max-width: 210px; }
     .leg { margin-top: 0; }
     .nm { font-size: 11px; } .pc { font-size: 10.5px; }
     .row { padding: 1px 3px; gap: 5px; }
@@ -2946,6 +2950,106 @@ def _progress_bar_html(pct, gradient, glow_color, texte):
         '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:0 8px; text-align:center; '
         f'font-size:0.88rem; font-weight:800; color:#0f172a; text-shadow: 0 1px 3px rgba(255,255,255,0.75);">{texte}</div></div>'
     )
+
+
+
+_JAUGE_HTML = r"""
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #w { position: relative; max-width: 380px; margin: 0 auto; font-family: Manrope, Inter, system-ui, sans-serif; color: var(--fg, #334155);
+       -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; cursor: pointer; }
+  svg { width: 100%; height: auto; display: block; }
+  text { font-family: inherit; fill: var(--fg, #334155); pointer-events: none; }
+  #tip { position: absolute; display: none; padding: 7px 12px; border-radius: 10px; font-size: 13px; font-weight: 700; line-height: 1.35;
+         text-align: center; white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,.25); transform: translate(-50%, -125%); pointer-events: none; }
+  #tip small { display: block; font-weight: 600; opacity: .9; font-size: 11.5px; }
+  #sub { text-align: center; font-size: 13px; margin-top: 2px; }
+</style>
+<div id="w"><svg id="g" viewBox="0 0 300 190"></svg><div id="tip"></div>
+<div id="sub"></div></div>
+<script>
+(function () {
+  var D = __DATA__;
+  var fg = '#334155';
+  try { fg = window.parent.getComputedStyle(window.parent.document.body).color || fg; } catch (e) {}
+  document.documentElement.style.setProperty('--fg', fg);
+  var NS = 'http://www.w3.org/2000/svg', CX = 150, CY = 150, R = 112, SW = 22;
+  // Palette logique selon la position sur la jauge : vert (large marge) -> lime -> ambre -> orange -> rouge (plafond proche).
+  var STOPS = [[0, [22,163,74]], [45, [132,204,22]], [70, [245,158,11]], [88, [249,115,22]], [100, [220,38,38]]];
+  function colorAt(p) {
+    p = Math.max(0, Math.min(100, p));
+    for (var i = 1; i < STOPS.length; i++) {
+      if (p <= STOPS[i][0]) {
+        var a = STOPS[i-1], b = STOPS[i], t = (p - a[0]) / (b[0] - a[0]);
+        return [0,1,2].map(function (k) { return Math.round(a[1][k] + (b[1][k] - a[1][k]) * t); });
+      }
+    }
+    return STOPS[STOPS.length-1][1];
+  }
+  function rgb(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + (a === undefined ? 1 : a) + ')'; }
+  function pt(f, r) { var th = Math.PI * f; return [CX - r * Math.cos(th), CY - r * Math.sin(th)]; }
+  var svg = document.getElementById('g');
+  function el(n, at) { var e = document.createElementNS(NS, n); for (var k in at) e.setAttribute(k, at[k]); svg.appendChild(e); return e; }
+  var pct = Math.max(0, Math.min(100, D.pct)), N = 100;
+  for (var i = 0; i < N; i++) {
+    var f0 = i / N, f1 = (i + 1) / N + 0.0015, p0 = pt(f0, R), p1 = pt(f1, R);
+    var on = (i + 0.5) < pct;
+    el('path', { d: 'M' + p0 + 'A' + R + ',' + R + ' 0 0 1 ' + p1, fill: 'none', 'stroke-width': SW, stroke: rgb(colorAt(i + 0.5), on ? 1 : 0.2) });
+  }
+  var cur = colorAt(pct), fm = pct / 100, pm = pt(fm, R);
+  // repères 0 / 50 k / 100 k / 150 k
+  [[0, '0'], [1/3, D.t1], [2/3, D.t2], [1, D.t3]].forEach(function (t) {
+    var p = pt(t[0], R + 24);
+    var x = p[0], y = p[1] + (t[0] === 0 || t[0] === 1 ? 14 : 4);
+    var tx = el('text', { x: x, y: y, 'text-anchor': 'middle', 'font-size': 10.5, opacity: .7 }); tx.textContent = t[1];
+  });
+  var mk = el('circle', { cx: pm[0], cy: pm[1], r: 8.5, fill: rgb(cur), stroke: '#ffffff', 'stroke-width': 3 });
+  var c1 = el('text', { x: CX, y: CY - 6, 'text-anchor': 'middle', 'font-size': 30, 'font-weight': 800 }); c1.textContent = D.pct_txt;
+  c1.style.fill = rgb(cur);
+  var c2 = el('text', { x: CX, y: CY + 16, 'text-anchor': 'middle', 'font-size': 11.5, opacity: .7 }); c2.textContent = 'du plafond';
+  document.getElementById('sub').innerHTML = D.sub;
+  var tip = document.getElementById('tip'), w = document.getElementById('w');
+  var lum = (0.299 * cur[0] + 0.587 * cur[1] + 0.114 * cur[2]) / 255;
+  tip.style.background = rgb(cur); tip.style.color = lum > 0.62 ? '#1f2937' : '#ffffff';
+  tip.innerHTML = D.amount + '<small>' + D.pct_txt + ' du plafond</small>';
+  function place() {
+    var box = svg.getBoundingClientRect(), k = box.width / 300, tw = tip.offsetWidth;
+    var x = Math.min(Math.max(pm[0] * k, tw / 2 + 4), box.width - tw / 2 - 4), y = pm[1] * k;
+    tip.style.left = x + 'px';
+    if (y < 70) { tip.style.transform = 'translate(-50%, 35%)'; tip.style.top = y + 'px'; }
+    else { tip.style.transform = 'translate(-50%, -125%)'; tip.style.top = (y - 12) + 'px'; }
+  }
+  var open = false;
+  function setOpen(v) { open = v; tip.style.display = v ? 'block' : 'none'; if (v) place(); fit(); }
+  w.addEventListener('click', function (e) { e.stopPropagation(); setOpen(!open); });
+  document.body.addEventListener('click', function () { if (open) setOpen(false); });
+  function fit() {
+    try {
+      var h = Math.ceil(w.getBoundingClientRect().height) + 14;
+      try { window.frameElement.style.height = h + 'px'; }
+      catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
+    } catch (e) {}
+  }
+  window.addEventListener('resize', function () { if (open) place(); fit(); });
+  fit(); setTimeout(fit, 150);
+})();
+</script>
+"""
+
+def _render_jauge_pea(total_verse, plafond):
+    """Jauge semi-circulaire des versements cumulés sur le plafond du PEA : palette vert -> rouge selon la position,
+    et au clic une infobulle (montant versé) dans la couleur de la jauge à l'endroit atteint."""
+    import streamlit.components.v1 as components
+    pct = (total_verse / plafond * 100.0) if plafond > 0 else 0.0
+    reste = max(plafond - total_verse, 0.0)
+    pct_txt = f"{pct:.1f} %".replace(".", ",")
+    data = {
+        "pct": pct, "pct_txt": pct_txt, "amount": fmt_eur(total_verse),
+        "t1": f"{plafond / 3 / 1000:.0f} k€", "t2": f"{plafond * 2 / 3 / 1000:.0f} k€", "t3": f"{plafond / 1000:.0f} k€",
+        "sub": f"{_esc(fmt_eur(total_verse))} versés sur {_esc(fmt_eur(plafond))} · reste <b>{_esc(fmt_eur(reste))}</b>",
+    }
+    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    components.html(_JAUGE_HTML.replace("__DATA__", payload), height=250)
 
 
 _FAILED_TICKERS = set()  # se remplit automatiquement avec les tickers dont le cours est introuvable
@@ -3507,7 +3611,7 @@ _start_date_str_precharge = (
 # _MARKET_PREFETCH_MIN_INTERVAL secondes maximum (en-deçà du plus petit TTL ci-dessus), ce qui
 # supprime cette latence perçue sur toutes les interactions du formulaire sans jamais servir de
 # données plus vieilles que ce que les caches auraient de toute façon renvoyé.
-_MARKET_PREFETCH_MIN_INTERVAL = 240  # secondes
+_MARKET_PREFETCH_MIN_INTERVAL = 540  # secondes (juste sous le TTL de 600 s des cours en direct)
 _now_ts = time_module.time()
 _last_prefetch_ts = st.session_state.get("_last_market_prefetch_ts", 0.0)
 _wl_tickers_alertes = [
@@ -3529,7 +3633,11 @@ if (_tickers_a_precharger or _wl_tickers_alertes) and (_now_ts - _last_prefetch_
         except Exception:
             pass   # impossible de démarrer un thread : on retombe sur l'attente classique ci-dessous
     if _swr is None or not _swr.serve_stale:
-        with st.spinner("📡 Récupération des cours en cours..."):
+        # Caches encore chauds (dernière actualisation complète < _MARKET_FRESH_WINDOW) : relecture quasi instantanée,
+        # donc sans barre de chargement (elle apparaissait à chaque changement d'onglet après quelques minutes).
+        _caches_chauds = _swr is not None and (time_module.time() - _swr.last_fresh_ts) <= _MARKET_FRESH_WINDOW
+        _spin_ctx = contextlib.nullcontext() if _caches_chauds else st.spinner("📡 Récupération des cours en cours...")
+        with _spin_ctx:
             _prefetch_results = _prefetch_market_data(_tickers_a_precharger, _start_date_str_precharge, _wl_tickers_alertes)
         st.session_state["_last_market_prefetch_ts"] = _now_ts
         if _swr is not None:
@@ -4778,10 +4886,10 @@ def dialog_simulation_operation():
     def _delta_pct(delta_val):
         color = "#16a34a" if delta_val > 0.005 else ("#dc2626" if delta_val < -0.005 else "#64748b")
         if delta_val > 0.005:
-            return f"▲ +{delta_val:,.2f} pts".replace(",", " ").replace(".", ","), color
+            return f"▲ +{delta_val:,.2f} %".replace(",", " ").replace(".", ","), color
         if delta_val < -0.005:
-            return f"▼ {delta_val:,.2f} pts".replace(",", " ").replace(".", ","), color
-        return "▬ 0,00 pts", color
+            return f"▼ {delta_val:,.2f} %".replace(",", " ").replace(".", ","), color
+        return "▬ 0,00 %", color
 
     def _render_before_after(items):
         cards = ""
@@ -6182,7 +6290,7 @@ _TAB_STATE_KEYS = {
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
     "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
-    "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
+    "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", "k_fond_src", "k_fond_detail", ),
     "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_impot", "k_rp_retrait", "k_rp_infl", ),
 }
 _tab_objs_by_name = {
@@ -7180,11 +7288,11 @@ if _tab_open(tab_positions):
                     df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Perf. annuelle moy. (%)',
                     [_perf_annualisee(pf, j) for pf, j in zip(df_gain_rank['Performance (%)'], df_gain_rank['Détention (jour)'])]
                 )
-                # Contribution à la performance globale du portefeuille (en points) : gain total de la ligne ÷ total des
+                # Contribution à la performance globale du portefeuille (en %) : gain total de la ligne ÷ total des
                 # apports nets. La somme des lignes redonne la performance globale. Placée entre « Performance » et
                 # « Perf. annuelle moy. ».
                 df_gain_rank.insert(
-                    df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Contribution perf. (pts)',
+                    df_gain_rank.columns.get_loc('Performance (%)') + 1, 'Contribution perf. (%)',
                     (pd.to_numeric(df_gain_rank['Gain Total Global (€)'], errors="coerce") / base_perf_globale * 100.0)
                     if base_perf_globale > 0 else np.nan
                 )
@@ -7199,13 +7307,13 @@ if _tab_open(tab_positions):
                 df_gain_rank_fmt['Dividendes Reçus (€)'] = df_gain_rank_fmt['Dividendes Reçus (€)'].apply(fmt_eur)
                 df_gain_rank_fmt['Performance (%)'] = df_gain_rank_fmt['Performance (%)'].apply(lambda x: fmt_perf_simple(x))
                 df_gain_rank_fmt['Perf. annuelle moy. (%)'] = df_gain_rank_fmt['Perf. annuelle moy. (%)'].apply(fmt_perf_simple)
-                df_gain_rank_fmt['Contribution perf. (pts)'] = df_gain_rank_fmt['Contribution perf. (pts)'].apply(fmt_pts)
+                df_gain_rank_fmt['Contribution perf. (%)'] = df_gain_rank_fmt['Contribution perf. (%)'].apply(fmt_perf_simple)
                 df_gain_rank_fmt['Détention (jour)'] = [
                     _fmt_duree_detention(j, sec)
                     for j, sec in zip(df_gain_rank['Détention (jour)'], df_gain_rank['Secondes Détention'])
                 ]
 
-                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)', 'Contribution perf. (pts)', 'Perf. annuelle moy. (%)']
+                _cols_fleche_rank = ['Gain Réalisé (€)', 'Gain Latent (€)', 'Gain Total Global (€)', 'Performance (%)', 'Contribution perf. (%)', 'Perf. annuelle moy. (%)']
                 # Ligne Total : somme de chaque colonne sur toutes les actions du classement. La performance n'est pas
                 # totalisée ici (la base de calcul diffère selon que la position est ouverte ou soldée).
                 _tot_rank = {c: "" for c in df_gain_rank_fmt.columns}
@@ -7225,7 +7333,7 @@ if _tab_open(tab_positions):
                     _tot_rank['Performance (%)'] = fmt_perf_simple(_perf_tot)
                     _tot_rank['Perf. annuelle moy. (%)'] = fmt_perf_simple(_perf_annualisee(_perf_tot, _jtot))
                 if base_perf_globale > 0:
-                    _tot_rank['Contribution perf. (pts)'] = fmt_pts(pd.to_numeric(df_gain_rank['Contribution perf. (pts)'], errors="coerce").sum())
+                    _tot_rank['Contribution perf. (%)'] = fmt_perf_simple(pd.to_numeric(df_gain_rank['Contribution perf. (%)'], errors="coerce").sum())
                 _tot_rank['Nombre de mouvements'] = str(int(pd.to_numeric(df_gain_rank['Nombre de mouvements'], errors="coerce").fillna(0).sum()))
                 _tot_rank = _dash_if_empty(pd.DataFrame([_tot_rank])).iloc[0].to_dict()
                 _tot_rank["N°"] = ""
@@ -7274,32 +7382,7 @@ if _tab_open(tab_apports):
 
             with st.expander("🎯 Jauge de versements du PEA", expanded=True):
                 # Le plafond de 150 000 € porte sur les versements cumulés : un retrait ne libère pas de place.
-                _pct_pl = _total_verse / PLAFOND_APPORTS * 100.0
-                _reste_pl = max(PLAFOND_APPORTS - _total_verse, 0.0)
-                _col_g = "#d97706" if _pct_pl >= 90 else "#06b6d4"
-                fig_gauge = go.Figure(go.Indicator(
-                    mode="gauge", value=min(_total_verse, PLAFOND_APPORTS),
-                    gauge=dict(
-                        shape="angular",
-                        axis=dict(range=[0, PLAFOND_APPORTS], tickvals=[0, 50000, 100000, 150000],
-                                  ticktext=["0", "50 k€", "100 k€", "150 k€"], tickfont=dict(size=11)),
-                        bar=dict(color=_col_g, thickness=0.7),
-                        bgcolor="rgba(148,163,184,0.18)", borderwidth=0,
-                    ),
-                    domain=dict(x=[0, 1], y=[0, 1]),
-                ))
-                fig_gauge.add_annotation(
-                    x=0.5, y=0.12, xref="paper", yref="paper", showarrow=False,
-                    text=f"<b>{_pct_pl:.1f} %</b>".replace(".", ","), font=dict(size=26),
-                )
-                fig_gauge.update_layout(height=230, margin=dict(l=24, r=24, t=18, b=6))
-                apply_chart_theme(fig_gauge)
-                _plotly_chart(fig_gauge, use_container_width=True, theme=None, key="chart_jauge_plafond_pea")
-                st.markdown(
-                    f"<div style='text-align:center; font-size:0.9rem;'>{fmt_eur(_total_verse)} versés sur {fmt_eur(PLAFOND_APPORTS)} "
-                    f"· reste <b>{fmt_eur(_reste_pl)}</b></div>",
-                    unsafe_allow_html=True,
-                )
+                _render_jauge_pea(_total_verse, PLAFOND_APPORTS)
 
             with st.expander("📈 Évolution des apports cumulés", expanded=True):
                 fig_ap = go.Figure()
@@ -8622,38 +8705,6 @@ if _tab_open(tab_perf):
                     else:
                         st.warning("Aucune donnée disponible pour la période sélectionnée sur le graphique.")
 
-        with st.expander("🌊 Cascade : des apports à la valeur du portefeuille", expanded=True):
-            if apports_totaux > 0:
-                _wf_lbl = ["Apports nets", "Plus-values latentes", "Plus-values actées", "Dividendes", "Valeur totale"]
-                _wf_val = [float(apports_totaux), float(global_pnl), float(tot_realized_pnl), float(net_divs_total)]
-                _wf_tot = sum(_wf_val)
-                _wf_levels = [_wf_val[0], _wf_val[0] + _wf_val[1], _wf_val[0] + _wf_val[1] + _wf_val[2], _wf_tot]
-                _wf_sign = lambda v: ("+" if v > 0 else "") + fmt_eur(v)
-                _wf_txt = [fmt_eur(_wf_val[0])] + [_wf_sign(v) for v in _wf_val[1:]] + [fmt_eur(_wf_tot)]
-                fig_wf = go.Figure(go.Waterfall(
-                    x=_wf_lbl, y=_wf_val + [0.0],
-                    measure=["absolute", "relative", "relative", "relative", "total"],
-                    text=_wf_txt, textposition="outside", cliponaxis=False,
-                    customdata=_wf_txt, hovertemplate="<b>%{x}</b><br>%{customdata}<extra></extra>",
-                    connector=dict(line=dict(color="rgba(148,163,184,0.6)", width=1)),
-                    increasing=dict(marker=dict(color="#16a34a")),
-                    decreasing=dict(marker=dict(color="#dc2626")),
-                    totals=dict(marker=dict(color="#06b6d4")),
-                ))
-                # Axe resserré autour des niveaux atteints pour que les gains restent lisibles (la barre des apports
-                # est donc tronquée en bas).
-                _lo, _hi = min(_wf_levels), max(_wf_levels)
-                _span = max(_hi - _lo, 0.03 * max(_hi, 1.0))
-                fig_wf.update_layout(
-                    height=340, margin=dict(l=8, r=8, t=24, b=8), showlegend=False,
-                    yaxis=dict(range=[max(0.0, _lo - 2.5 * _span), _hi + 0.7 * _span], tickformat=",.0f", ticksuffix=" €", nticks=5, automargin=True),
-                    xaxis=dict(title="", automargin=True),
-                )
-                apply_chart_theme(fig_wf)
-                _plotly_chart(fig_wf, use_container_width=True, theme=None, key="chart_cascade_perf")
-            else:
-                st.info("Aucun apport enregistré pour le moment.")
-
         with st.expander("⚖️ Comparateur de performance du portefeuille par rapport aux indices", expanded=True):
             if not df_transactions.empty:
                 if history_df_global is not None and not history_df_global.empty:
@@ -8939,7 +8990,7 @@ if _tab_open(tab_dividends):
                     st.info("Aucun dividende ni rompu perçu pour le moment.")
 
                 # --- Nouvelle partie, directement sous la cartographie mensuelle des dividendes ---
-                st.markdown("<hr style='margin: 22px 0 18px 0;'>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin: 6px 0 18px 0;'>", unsafe_allow_html=True)
                 st.markdown("### 📅 Calendrier des dividendes à venir")
 
                 df_divs_only_cal = df_transactions[df_transactions["Type"] == "DIVIDENDE"].copy()
@@ -9527,6 +9578,91 @@ if _tab_open(tab_fees):
 # ------------------------------------------
 # ONGLET WATCHLIST : actions suivies, hors portefeuille, avec zone d'achat optionnelle
 # ------------------------------------------
+
+# ------------------------------------------
+# FONDAMENTAUX & ANALYSTES (Yahoo Finance) : PER / P/B / PEG, marge / ROE / dette, résultats, objectifs, recommandations
+# ------------------------------------------
+def _fnum(x):
+    try:
+        v = float(x)
+        return None if (v != v or v in (float("inf"), float("-inf"))) else v
+    except Exception:
+        return None
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _fetch_fondamentaux(ticker):
+    """Indicateurs fondamentaux et avis d'analystes d'une valeur (mis en cache 6 h). LÈVE une exception si Yahoo ne
+    répond pas, pour ne jamais mémoriser un échec passager."""
+    tk = yf.Ticker(ticker)
+    info = None
+    for _att in range(2):
+        try:
+            with _INFO_SEMAPHORE:
+                info = tk.info
+            if isinstance(info, dict) and len(info) >= 5:
+                break
+            info = None
+        except Exception:
+            info = None
+        time_module.sleep(0.6)
+    if info is None:
+        raise RuntimeError(f"fondamentaux indisponibles pour {ticker}")
+    ebitda = _fnum(info.get("ebitda"))
+    dette, cash = _fnum(info.get("totalDebt")), _fnum(info.get("totalCash"))
+    dn_ebitda = ((dette - (cash or 0.0)) / ebitda) if (dette is not None and ebitda and ebitda > 0) else None
+    today = _today_paris().date()
+    earn = None
+    try:
+        cal = tk.calendar
+        v = cal.get("Earnings Date") if isinstance(cal, dict) else None
+        if v:
+            ds = sorted(pd.Timestamp(x).date() for x in (v if isinstance(v, (list, tuple)) else [v]))
+            fut = [d for d in ds if d >= today]
+            earn = fut[0] if fut else None
+    except Exception:
+        earn = None
+    if earn is None:
+        try:
+            ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
+            if ts:
+                d = datetime.fromtimestamp(float(ts)).date()
+                earn = d if d >= today else None
+        except Exception:
+            earn = None
+    reco = None
+    try:
+        rs = tk.recommendations_summary
+        if rs is not None and len(rs) > 0:
+            r0 = rs.iloc[0]
+            reco = {k: int(_fnum(r0.get(k)) or 0) for k in ("strongBuy", "buy", "hold", "sell", "strongSell")}
+    except Exception:
+        reco = None
+    return {
+        "per": _fnum(info.get("trailingPE")), "pb": _fnum(info.get("priceToBook")),
+        "peg": _fnum(info.get("trailingPegRatio")) or _fnum(info.get("pegRatio")),
+        "marge": _fnum(info.get("profitMargins")), "roe": _fnum(info.get("returnOnEquity")),
+        "dn_ebitda": dn_ebitda,
+        "cible": _fnum(info.get("targetMeanPrice")), "cible_bas": _fnum(info.get("targetLowPrice")),
+        "cible_haut": _fnum(info.get("targetHighPrice")), "nb_analystes": _fnum(info.get("numberOfAnalystOpinions")),
+        "reco_key": str(info.get("recommendationKey") or ""), "reco_moy": _fnum(info.get("recommendationMean")),
+        "prix": _fnum(info.get("currentPrice")) or _fnum(info.get("regularMarketPrice")),
+        "earn": earn, "reco": reco,
+    }
+
+def _charger_fondamentaux(tickers):
+    def _one(t):
+        try:
+            return t, _fetch_fondamentaux(t)
+        except Exception:
+            return t, None
+    out = {}
+    if not tickers:
+        return out
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(tickers))) as ex:
+        for t, d in ex.map(_one, tickers):
+            out[t] = d
+    return out
+
 def _watchlist_get():
     """Renvoie la liste de la watchlist stockée dans la config (persistée dans config_pea.json,
     comme le reste des réglages de l'app)."""
@@ -9896,6 +10032,175 @@ if _tab_open(tab_watchlist):
             )
 
         _watchlist_tab_fragment()
+
+        # --- Fondamentaux & analystes : portefeuille (positions détenues) ou watchlist ---
+        @fragment_wrapper
+        def _fondamentaux_fragment():
+            _inject_metric_tips()
+            st.markdown("<hr style='margin: 18px 0 12px 0;'>", unsafe_allow_html=True)
+            st.markdown("### 📚 Fondamentaux & analystes")
+            _src = st.radio("Valeurs analysées", ["Portefeuille", "Watchlist"], horizontal=True,
+                            key="k_fond_src", label_visibility="collapsed")
+            _univers = []   # (nom, ticker, valeur actuelle ou None)
+            if _src == "Portefeuille":
+                if df_port is not None and not df_port.empty:
+                    for _, _r in df_port[df_port["Quantité"] > 0.0001].iterrows():
+                        if _r.get("Ticker"):
+                            _univers.append((str(_r["Nom"]), str(_r["Ticker"]), float(_r["Valeur Actuelle (€)"])))
+            else:
+                for _it in _watchlist_get():
+                    if _it.get("ticker"):
+                        _univers.append((str(_it.get("nom") or _it["ticker"]), str(_it["ticker"]), None))
+            if not _univers:
+                st.info("Aucune valeur à analyser pour le moment.")
+                return
+            with st.spinner("Chargement des données fondamentales..."):
+                _data = _charger_fondamentaux(sorted({u[1] for u in _univers}))
+            _ok = [(n, t, v, _data.get(t)) for (n, t, v) in _univers if _data.get(t)]
+            if not _ok:
+                st.warning("Données indisponibles pour le moment (Yahoo Finance ne répond pas). Réessayez dans quelques minutes.")
+                return
+            _fr = lambda x, d=1: f"{x:,.{d}f}".replace(",", " ").replace(".", ",")
+
+            # 24. PER / P/B / PEG pondérés (portefeuille uniquement)
+            if _src == "Portefeuille":
+                with st.expander("📐 Valorisation pondérée du portefeuille", expanded=True):
+                    _tot_val = sum(v for (_n, _t, v, _d) in _ok if v) or 0.0
+                    def _pond(cle):
+                        num = den = 0.0
+                        for (_n, _t, v, d) in _ok:
+                            x = d.get(cle)
+                            if v and x and x > 0:
+                                num += v
+                                den += v / x
+                        return (num / den if den > 0 else None), num
+                    _cols_v = st.columns(3)
+                    _cov = 0.0
+                    for _c, (lbl, cle) in zip(_cols_v, [("PER pondéré", "per"), ("P/B pondéré", "pb"), ("PEG pondéré", "peg")]):
+                        _val, _couv = _pond(cle)
+                        _cov = max(_cov, _couv)
+                        _c.metric(lbl, _fr(_val, 1) if _val is not None else "N/A")
+                    if _tot_val > 0:
+                        st.caption(f"Calculés sur {_cov / _tot_val * 100:.0f} % de la valeur du portefeuille (ETF et valeurs sans donnée exclus).")
+
+            # 26. Marge, ROE et dette nette / EBITDA par ligne
+            with st.expander("🏦 Qualité financière par ligne", expanded=True):
+                _rows_q = []
+                for (n, _t, _v, d) in _ok:
+                    if d.get("marge") is None and d.get("roe") is None and d.get("dn_ebitda") is None:
+                        continue
+                    _rows_q.append({
+                        "Nom": n,
+                        "Marge nette": f"{d['marge'] * 100:.1f} %".replace(".", ",") if d.get("marge") is not None else "—",
+                        "ROE": f"{d['roe'] * 100:.1f} %".replace(".", ",") if d.get("roe") is not None else "—",
+                        "Dette nette / EBITDA": f"{_fr(d['dn_ebitda'], 1)}x" if d.get("dn_ebitda") is not None else "—",
+                    })
+                if _rows_q:
+                    _NIV = ["background-color: rgba(239,68,68,0.14); color:#b91c1c; font-weight:700;",
+                            "background-color: rgba(245,158,11,0.16); color:#92400e; font-weight:700;",
+                            "background-color: rgba(34,197,94,0.16); color:#15803d; font-weight:700;"]
+                    def _q_style(c, v):
+                        t = str(v)
+                        if t in ("—", ""):
+                            return "color:#94a3b8;"
+                        try:
+                            x = float(t.replace("x", "").replace("%", "").replace(" ", "").replace(",", "."))
+                        except Exception:
+                            return ""
+                        if c == "Marge nette":
+                            return _NIV[2 if x >= 15 else (1 if x >= 5 else 0)]
+                        if c == "ROE":
+                            return _NIV[2 if x >= 15 else (1 if x >= 8 else 0)]
+                        if c.startswith("Dette"):
+                            return _NIV[2 if x <= 1.5 else (1 if x <= 3 else 0)]
+                        return ""
+                    _html_table(pd.DataFrame(_rows_q), cell_style=_q_style, sticky_col="Nom")
+                else:
+                    st.info("Aucune donnée de qualité financière disponible (ETF, ou Yahoo sans information).")
+
+            # 25 + 28. Objectifs et recommandations des analystes
+            with st.expander("🎯 Objectifs et recommandations des analystes", expanded=True):
+                _RECO_FR = {"strong_buy": ("Achat fort", 2), "buy": ("Achat", 2), "hold": ("Neutre", 1),
+                            "underperform": ("Vente", 0), "sell": ("Vente", 0), "strong_sell": ("Vente forte", 0)}
+                _rows_a, _tri = [], []
+                for (n, t, _v, d) in _ok:
+                    if not d.get("cible"):
+                        continue
+                    px = get_live_price(t) or d.get("prix")
+                    ecart = ((d["cible"] / px - 1.0) * 100.0) if px else None
+                    lbl_r = _RECO_FR.get(d.get("reco_key"), ("—", None))[0]
+                    nb = int(d["nb_analystes"]) if d.get("nb_analystes") else None
+                    _rows_a.append({
+                        "Nom": n, "Cours": fmt_eur(px) if px else "—", "Objectif moyen": fmt_eur(d["cible"]),
+                        "Écart à l'objectif": fmt_perf_simple(ecart) if ecart is not None else "—",
+                        "Avis": lbl_r, "Analystes": str(nb) if nb else "—",
+                    })
+                    _tri.append(ecart if ecart is not None else -1e9)
+                if _rows_a:
+                    _ord = sorted(range(len(_rows_a)), key=lambda i: -_tri[i])
+                    _df_a = pd.DataFrame([_rows_a[i] for i in _ord])
+                    _AV = {"Achat fort": "background-color: rgba(34,197,94,0.22); color:#15803d; font-weight:700;",
+                           "Achat": "background-color: rgba(34,197,94,0.14); color:#15803d; font-weight:700;",
+                           "Neutre": "background-color: rgba(148,163,184,0.20); color:#475569; font-weight:700;",
+                           "Vente": "background-color: rgba(239,68,68,0.14); color:#b91c1c; font-weight:700;",
+                           "Vente forte": "background-color: rgba(239,68,68,0.22); color:#b91c1c; font-weight:700;"}
+                    _html_table(
+                        _df_a,
+                        cell_style=lambda c, v: (_style_perf_cell(v) if c == "Écart à l'objectif" else (_AV.get(str(v), "") if c == "Avis" else "")),
+                        sticky_col="Nom",
+                    )
+                    # Détail d'une valeur : répartition des avis et fourchette d'objectifs.
+                    _noms_det = [r["Nom"] for r in _rows_a]
+                    _choix = st.selectbox("Détail des analystes pour une valeur", options=_noms_det, index=None,
+                                          placeholder="Choisir une action pour voir le détail...", key="k_fond_detail")
+                    if _choix:
+                        _dd = next((d for (n, _t, _v, d) in _ok if n == _choix), None)
+                        if _dd:
+                            _rc = _dd.get("reco")
+                            _segs = [("Achat fort", "strongBuy", "#15803d", "#ffffff"), ("Achat", "buy", "#4ade80", "#14532d"),
+                                     ("Neutre", "hold", "#cbd5e1", "#1e293b"), ("Vente", "sell", "#f87171", "#7f1d1d"),
+                                     ("Vente forte", "strongSell", "#b91c1c", "#ffffff")]
+                            _tot_rc = sum((_rc or {}).values())
+                            if _rc and _tot_rc > 0:
+                                _bar = "".join(
+                                    f"<div style='flex:{_rc[k]}; background:{bg}; color:{fgc}; text-align:center; padding:5px 0; font-weight:800; font-size:0.85rem;'>{_rc[k]}</div>"
+                                    for (lb, k, bg, fgc) in _segs if _rc.get(k))
+                                _leg = " · ".join(f"<span style='color:{bg if bg != '#cbd5e1' else '#64748b'}; font-weight:700;'>■</span> {lb}" for (lb, k, bg, fgc) in _segs if _rc.get(k))
+                                st.markdown(f"<div style='font-weight:700; margin:8px 0 4px;'>{_esc(_choix)} : avis des analystes</div>"
+                                            f"<div style='display:flex; border-radius:8px; overflow:hidden;'>{_bar}</div>"
+                                            f"<div style='font-size:0.8rem; margin-top:4px;'>{_leg}</div>", unsafe_allow_html=True)
+                            _bas, _moy, _haut = _dd.get("cible_bas"), _dd.get("cible"), _dd.get("cible_haut")
+                            st.markdown(
+                                "<div style='font-size:0.9rem; margin-top:8px;'>Objectif : "
+                                f"<b>{fmt_eur(_bas) if _bas else '—'}</b> (bas) · <b>{fmt_eur(_moy) if _moy else '—'}</b> (moyen) · "
+                                f"<b>{fmt_eur(_haut) if _haut else '—'}</b> (haut)</div>", unsafe_allow_html=True)
+                else:
+                    st.info("Pas d'objectif d'analystes disponible pour ces valeurs.")
+
+            # 27. Prochaines publications de résultats
+            with st.expander("📅 Prochaines publications de résultats", expanded=True):
+                _auj = _today_paris().date()
+                _rows_e = sorted([(d["earn"], n) for (n, _t, _v, d) in _ok if d.get("earn")])
+                if _rows_e:
+                    def _dans(dt):
+                        j = (dt - _auj).days
+                        return "Aujourd'hui" if j == 0 else ("Demain" if j == 1 else f"Dans {j} j")
+                    _df_e = pd.DataFrame([{"Nom": n, "Date": dt.strftime("%d/%m/%Y"), "Échéance": _dans(dt)} for (dt, n) in _rows_e])
+                    def _e_style(c, v):
+                        if c != "Échéance":
+                            return ""
+                        t = str(v)
+                        j = 0 if t == "Aujourd'hui" else (1 if t == "Demain" else int(t.split()[1]))
+                        if j <= 7:
+                            return "background-color: rgba(245,158,11,0.20); color:#92400e; font-weight:700;"
+                        if j <= 30:
+                            return "background-color: rgba(59,130,246,0.14); color:#1d4ed8; font-weight:700;"
+                        return ""
+                    _html_table(_df_e, cell_style=_e_style, sticky_col="Nom")
+                else:
+                    st.info("Aucune date de publication annoncée pour ces valeurs.")
+
+        _fondamentaux_fragment()
 
 # ------------------------------------------
 # ONGLET SIMULATEURS : projection de la valeur, revenu passif, retrait
