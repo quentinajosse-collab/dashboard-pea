@@ -2749,12 +2749,13 @@ _ALLOC4_HTML = r"""
   var st = { t: -1, i: -1 };
   var grid = document.getElementById('grid'), rootEl = document.getElementById('root');
 
-  function layout(items) {
-    var MIN = 2.2, raw = items.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
-    var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
+  function layoutP(p) {
+    var MIN = 2.2, raw = p.map(function (x) { return x > 0.0001 ? Math.max(x * 3.6, MIN) : 0; });
+    var sum = raw.reduce(function (a, b) { return a + b; }, 0) || 1, k = 360 / sum, ang = [], a0 = 0;
     raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
     return ang;
   }
+  function f2(x) { return x.toFixed(2).replace('.', ','); }
   function pt(rad, a) { var t = (a - 90) * Math.PI / 180; return [C + rad * Math.cos(t), C + rad * Math.sin(t)]; }
   function arc(s, e) {
     var gap = (e - s) > 4 ? 0.5 : 0.15; s += gap; e -= gap;
@@ -2777,7 +2778,7 @@ _ALLOC4_HTML = r"""
   }
 
   DON.forEach(function (D, t) {
-    D.ang = layout(D.items);
+    D.ang = layoutP(D.items.map(function (d) { return d.pct; }));
     var cell = document.createElement('div'); cell.className = 'cell';
     cell.innerHTML = '<div class="ttl"></div><svg viewBox="0 0 240 240"></svg><div class="leg"></div>';
     cell.querySelector('.ttl').textContent = D.title;
@@ -2820,21 +2821,43 @@ _ALLOC4_HTML = r"""
   function txt(c, a, b, d, e) { c[0].textContent = a; c[1].textContent = b; c[2].textContent = d; c[3].textContent = e; }
   function show(D, d) { txt(D.ct, cut(d.n, 20), d.v, d.pt + ' %', d.x ? cut(d.x, 22) : plural(d.m.length, DON[0].nouns)); }
 
+  // Redessine un anneau à partir de pourcentages (0 = part masquée, y compris dans la légende).
+  function setGeom(D, pcts, base) {
+    D.ang = layoutP(pcts);
+    D.sl.forEach(function (sl, j) {
+      sl.setAttribute('d', pcts[j] > 0.0001 ? arc(D.ang[j][0], D.ang[j][1]) : '');
+    });
+    D.rows.forEach(function (rw, j) {
+      rw.style.display = pcts[j] > 0.0001 ? '' : 'none';
+      rw.querySelector('.pc').textContent = (base ? D.items[j].pt : f2(pcts[j])) + ' %';
+    });
+  }
+
+  // Sélection d'une part (camembert t0, part i0) : « poids effectif » de chaque action dans cette part, puis les trois
+  // autres camemberts sont recalculés sur ce seul sous-ensemble (répartition DE la sélection, base 100 %).
+  //  - Vusion cliqué  -> continents = répartition du chiffre d'affaires de Vusion ; secteur / tranche = les siens.
+  //  - Technologie cliqué -> actions = poids relatif des valeurs technologiques ; continents = leur CA cumulé.
   function render() {
-    var on = st.t >= 0;
-    var sel = on ? DON[st.t].items[st.i] : null;
+    var on = st.t >= 0, W = DON[0].W;
+    var sel = on ? DON[st.t].items[st.i] : null, eff = [], tot = 0;
+    if (on) {
+      DON[st.t].f.forEach(function (fr, h) {
+        var q = 0; fr.forEach(function (p) { if (p[0] === st.i) q = p[1]; });
+        eff[h] = W[h] * q; tot += eff[h];
+      });
+    }
     DON.forEach(function (D, t) {
-      var act = {};
-      if (on) {
-        if (t === st.t) act[st.i] = 1;
-        else D.items.forEach(function (it, j) { if (inter(it.m, sel.m)) act[j] = 1; });
+      if (!on || t === st.t) {
+        setGeom(D, D.items.map(function (d) { return d.pct; }), true);
+        paint(D, function (j) { return on && j === st.i; }, on);
+        if (!on) txt(D.ct, D.rest[0], D.rest[1], D.rest[2], D.rest[3]); else show(D, sel);
+        return;
       }
-      paint(D, function (j) { return !!act[j]; }, on);
-      if (!on) { txt(D.ct, D.rest[0], D.rest[1], D.rest[2], D.rest[3]); return; }
-      if (t === st.t) { show(D, sel); return; }
-      var ids = Object.keys(act);
-      if (ids.length === 1) show(D, D.items[+ids[0]]);
-      else txt(D.ct, 'Lié à ' + cut(sel.n, 14), plural(ids.length, D.nouns), '', '');
+      var vals = D.items.map(function () { return 0; });
+      D.f.forEach(function (fr, h) { if (eff[h]) fr.forEach(function (p) { vals[p[0]] += eff[h] * p[1]; }); });
+      setGeom(D, vals.map(function (v) { return tot > 0 ? v / tot * 100 : 0; }), false);
+      paint(D, function () { return false; }, false);
+      txt(D.ct, 'Répartition de', cut(sel.n, 16), sel.v, sel.pt + ' % du portefeuille');
     });
   }
   document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t >= 0) { st = { t: -1, i: -1 }; render(); } });
@@ -2941,9 +2964,10 @@ def _render_allocation(df_active, cash):
     # 2) Secteurs
     S = _groupe([x[3] for x in rows])
     # 3) Revenus par continent : répartition connue si possible, sinon continent du siège social (100 %)
-    cont_val, cont_mem, siege = {}, {}, []
+    cont_val, cont_mem, siege, splits = {}, {}, [], {}
     for idx, (n, tk, v, _sc, p) in enumerate(rows):
         split, is_ref = _continent_split(n, _pays_siege(p, tk))
+        splits[idx] = split
         if not is_ref:
             siege.append(n)
         for cont, pc in split.items():
@@ -2961,6 +2985,14 @@ def _render_allocation(df_active, cash):
             n_cap += 1
     K = _groupe(caps, offset=3, ordre=[b[0] for b in _CAP_BUCKETS] + ["ETF / fonds", "Capitalisation inconnue"])
 
+    # Fraction de chaque action (ligne) rattachée à chaque part : sert au recalcul croisé côté navigateur.
+    _ix = lambda items: {it["n"]: i for i, it in enumerate(items)}
+    _iS, _iP, _iK = _ix(S), _ix(P), _ix(K)
+    A_f = [[[i, 1.0]] for i in range(len(rows))]
+    S_f = [[[_iS[x[3]], 1.0]] for x in rows]
+    P_f = [[[_iP[c], pc / 100.0] for c, pc in splits[i].items() if c in _iP] for i in range(len(rows))]
+    K_f = [[[_iK[c], 1.0]] for c in caps]
+
     plur = lambda n, a, b: f"{n} {a if n < 2 else b}"
     don = [
         {"title": "Par action", "items": A, "nouns": ["action", "actions"],
@@ -2972,6 +3004,9 @@ def _render_allocation(df_active, cash):
         {"title": "Par capitalisation", "items": K, "nouns": ["tranche", "tranches"],
          "rest": ["Capitalisation cumulée", _fmt_cap(cap_total) if n_cap else "N/A", plur(n_cap, "société", "sociétés"), "(hors ETF)"]},
     ]
+    for _d, _f in zip(don, (A_f, S_f, P_f, K_f)):
+        _d["f"] = _f
+    don[0]["W"] = [x[2] / total for x in rows]
     # Les noms au singulier/pluriel du « m » (nombre d'actions) viennent du 1er camembert.
     payload = json.dumps(don, ensure_ascii=False).replace("</", "<\\/")
     page = _ALLOC4_HTML.replace("__DON__", payload)
