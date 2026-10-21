@@ -6422,7 +6422,8 @@ if _tab_open(tab_overview):
                     + _obj_card("Actuel", fmt_eur(_v0), "#0284c7")
                     + _obj_card("Total à verser", fmt_eur(_pmt * _n), "#4f46e5")
                     + _obj_card("Sans nouvel apport", fmt_eur(_sans_apport), "#64748b")
-                    + '</div>',
+                    + '</div>'
+                    + '<div style="height:22px;"></div>',   # ligne vide avant le bas de la section
                     unsafe_allow_html=True,
                 )
 
@@ -10220,7 +10221,8 @@ def _render_sim_retrait():
             + _color_cards_row(
                 [_color_card(f"Prélèvements sociaux ({_fr(taux_ps_pct)} %)", fmt_eur(montant_ps), "#d97706")]
                 + ([] if age_plan_plus_5 else [_color_card("Impôt sur le revenu (12,8 %)", fmt_eur(montant_ir), "#dc2626")])
-            ),
+            )
+            + '<div style="height:22px;"></div>',   # ligne vide avant le bas de la section
             unsafe_allow_html=True,
         )
 
