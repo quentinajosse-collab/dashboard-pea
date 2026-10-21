@@ -6425,8 +6425,6 @@ if _tab_open(tab_overview):
                     + '</div>',
                     unsafe_allow_html=True,
                 )
-                st.caption(f"Sur {_n:.1f} mois".replace(".", ",") + f", à {float(_in_perf):.1f} % par an".replace(".", ",")
-                           + f", en partant de {fmt_eur(_v0)}. Estimation théorique, hors frais et fiscalité.")
 
 # ------------------------------------------
 # ONGLÊT 2 : POSITIONS & TRANSACTIONS
