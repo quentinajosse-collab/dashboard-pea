@@ -6199,7 +6199,7 @@ def _tab_open(_tab):
 # de conservation de l'état). Les clés ci-dessous sont extraites automatiquement du code de
 # chaque onglet (widgets ayant un key= littéral).
 _TAB_STATE_KEYS = {
-    "tab_overview": ("k_objectif_cible", "apport_prevision_input", "k_objectif_date_debut", "k_objectif_date_fin", "k_suivi_objectif_pas", "k_obj_calc_apport_mensuel", "k_obj_perf_attendue", ),
+    "tab_overview": ("k_objectif_cible", "k_objectif_date_fin", "k_objectif_perf", ),
     "tab_apports": (),
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
@@ -6335,208 +6335,41 @@ if _tab_open(tab_overview):
         # alerte de ce type. N'affiche rien si la watchlist est vide ou si aucune valeur suivie n'a de
         # zone d'achat définie, pour ne pas surcharger le haut du dashboard sans raison. ---
         with st.expander("🎯 Objectif", expanded=True):
-            # --- Valeurs ENREGISTRÉES de l'objectif (fixes tant que l'opérateur ne confirme pas un changement) ---
-            _auj_iso = _today_paris().strftime("%Y-%m-%d")
-            _cfg_dirty = False
-            if not str(app_config.get("objectif_date", "") or ""):
-                app_config["objectif_date"] = _auj_iso          # date de début par défaut = aujourd'hui
-                _cfg_dirty = True
-            if not str(app_config.get("objectif_fin", "") or ""):
-                app_config["objectif_fin"] = f"{_today_paris().year}-12-31"   # fin par défaut = 31/12 de l'année en cours
-                _cfg_dirty = True
-            if _cfg_dirty:
-                _ok_cfg, _err_cfg = save_config(app_config)
-                if not _ok_cfg:
-                    st.warning(_err_cfg)
-
-            def _to_date(v):
-                return pd.Timestamp(str(v)).date()
-
+            # Trois valeurs saisies par l'opérateur et enregistrées dans la config dès qu'elles changent :
+            # valeur totale visée, date de fin et performance annuelle attendue -> apport mensuel nécessaire.
             _cur_target = int(app_config.get("yearly_target", 10000))
-            _cur_apport = int(app_config.get("apport_previsionnel", 0))
-            _cur_debut = _to_date(app_config["objectif_date"])
-            _cur_fin = _to_date(app_config["objectif_fin"])
+            try:
+                _cur_fin = pd.Timestamp(str(app_config.get("objectif_fin") or "")).date()
+            except Exception:
+                _cur_fin = date(_today_paris().year, 12, 31)
+            try:
+                _cur_perf = float(app_config.get("objectif_perf", 7.0))
+            except Exception:
+                _cur_perf = 7.0
 
-            def _reset_objectif_inputs(t, a, d0, d1):
-                st.session_state["k_objectif_cible"] = t
-                st.session_state["apport_prevision_input"] = a
-                st.session_state["k_objectif_date_debut"] = d0
-                st.session_state["k_objectif_date_fin"] = d1
-
-            def _confirmer_objectif():
+            def _sauver_objectif():
                 _t = int(st.session_state.get("k_objectif_cible", _cur_target))
-                _a = int(st.session_state.get("apport_prevision_input", _cur_apport))
-                _d0 = st.session_state.get("k_objectif_date_debut", _cur_debut)
-                _d1 = st.session_state.get("k_objectif_date_fin", _cur_fin)
+                _f = st.session_state.get("k_objectif_date_fin", _cur_fin)
+                _p = float(st.session_state.get("k_objectif_perf", _cur_perf))
                 app_config["yearly_target"] = _t
-                app_config["apport_previsionnel"] = _a
-                app_config["objectif_date"] = _d0.strftime("%Y-%m-%d")
-                app_config["objectif_fin"] = _d1.strftime("%Y-%m-%d")
-                app_config.pop("objectif_v0", None)   # la valeur de départ est désormais déduite de l'historique
+                app_config["objectif_fin"] = _f.strftime("%Y-%m-%d")
+                app_config["objectif_perf"] = _p
                 _ok, _err = save_config(app_config)
                 if not _ok:
                     st.session_state["_objectif_save_err"] = _err
 
             with st.container(border=True):
-                st.markdown("**💰 Objectif & épargne prévue**")
+                st.markdown("**💰 Objectif**")
                 with st.container(key="compact_cols_objectif"):
-                    col_obj_cible, col_obj_epargne = st.columns(2)
-                    _in_target = col_obj_cible.number_input(
-                        "Valeur totale visée (€)",
-                        min_value=0, step=1, value=_cur_target, format="%d",
-                        key="k_objectif_cible",
-                    )
-                    _in_apport = col_obj_epargne.number_input(
-                        "Apport prévisionnel d'ici la date visée (€)",
-                        min_value=0, step=1, value=_cur_apport, format="%d",
-                        key="apport_prevision_input",
-                    )
-                    col_obj_d0, col_obj_d1 = st.columns(2)
-                    _in_debut = col_obj_d0.date_input(
-                        "Date de début", value=_cur_debut, min_value=date(2000, 1, 1), max_value=date(2100, 12, 31),
-                        format="DD/MM/YYYY", key="k_objectif_date_debut",
-                    )
-                    _in_fin = col_obj_d1.date_input(
-                        "Date de l'objectif (fin)", value=_cur_fin, min_value=date(2000, 1, 1), max_value=date(2100, 12, 31),
-                        format="DD/MM/YYYY", key="k_objectif_date_fin",
-                    )
-
-                _pending = (int(_in_target) != _cur_target or int(_in_apport) != _cur_apport
-                            or _in_debut != _cur_debut or _in_fin != _cur_fin)
-                if _pending:
-                    if _in_fin <= _in_debut:
-                        st.error("La date de fin doit être postérieure à la date de début.")
-                        st.button("↩️ Annuler", key="k_objectif_annuler_err", use_container_width=True,
-                                  on_click=_reset_objectif_inputs, args=(_cur_target, _cur_apport, _cur_debut, _cur_fin))
-                    else:
-                        st.warning(
-                            "⚠️ **Voulez-vous vraiment modifier votre objectif ?** Les calculs et le suivi de trajectoire "
-                            "seront recalculés avec ces nouvelles valeurs."
-                        )
-                        _col_oui, _col_non = st.columns(2)
-                        _col_oui.button("✅ Oui, modifier", key="k_objectif_confirmer", type="primary",
-                                        use_container_width=True, on_click=_confirmer_objectif)
-                        _col_non.button("↩️ Annuler", key="k_objectif_annuler", use_container_width=True,
-                                        on_click=_reset_objectif_inputs, args=(_cur_target, _cur_apport, _cur_debut, _cur_fin))
+                    _c1, _c2, _c3 = st.columns(3)
+                    _in_target = _c1.number_input("Valeur visée (€)", min_value=0, step=1, value=_cur_target, format="%d",
+                                                  key="k_objectif_cible", on_change=_sauver_objectif)
+                    _in_fin = _c2.date_input("Date de fin", value=_cur_fin, min_value=date(2000, 1, 1), max_value=date(2100, 12, 31),
+                                             format="DD/MM/YYYY", key="k_objectif_date_fin", on_change=_sauver_objectif)
+                    _in_perf = _c3.number_input("Performance / an (%)", min_value=-50.0, max_value=100.0, value=_cur_perf,
+                                                step=0.5, format="%.1f", key="k_objectif_perf", on_change=_sauver_objectif)
                 if st.session_state.get("_objectif_save_err"):
                     st.warning(st.session_state.pop("_objectif_save_err"))
-
-                # --- Apport mensuel nécessaire pour atteindre l'objectif (case à cocher) ---
-                if st.checkbox("📆 Calculer l'apport mensuel nécessaire", key="k_obj_calc_apport_mensuel",
-                               help="À partir de la valeur visée et de la date de fin saisies ci-dessus, et d'une performance annuelle "
-                                    "que vous renseignez : montant à verser chaque mois pour atteindre l'objectif."):
-                    _perf_att = st.number_input("Performance annuelle attendue (%)", min_value=-50.0, max_value=100.0,
-                                                value=7.0, step=0.5, format="%.1f", key="k_obj_perf_attendue")
-                    _jours_obj_m = (pd.Timestamp(_in_fin) - pd.Timestamp(_today_paris())).days
-                    if int(_in_target) <= 0:
-                        st.info("Renseignez une valeur totale visée supérieure à 0.")
-                    elif _jours_obj_m < 15:
-                        st.info("La date de l'objectif est trop proche (ou dépassée) pour calculer un apport mensuel.")
-                    else:
-                        _n_m = _jours_obj_m / 30.4375                       # nombre de mois restants
-                        _v0_m = float(tot_value_globale) + float(_in_apport)  # valeur actuelle + apport prévisionnel déjà saisi
-                        _r_m = (1.0 + _perf_att / 100.0) ** (1.0 / 12.0) - 1.0
-                        _g_m = (1.0 + _r_m) ** _n_m
-                        _manque_m = float(_in_target) - _v0_m * _g_m
-                        if _manque_m <= 0:
-                            _pmt_m = 0.0
-                        elif abs(_r_m) < 1e-9:
-                            _pmt_m = _manque_m / _n_m
-                        else:
-                            _pmt_m = _manque_m * _r_m / (_g_m - 1.0)
-                        if _pmt_m <= 0:
-                            st.success(f"Avec {_perf_att:.1f} % par an, votre portefeuille atteint déjà l'objectif sans nouvel apport "
-                                       f"(≈ {fmt_eur(_v0_m * _g_m)} à la date visée).")
-                        else:
-                            def _mini_card(label, value, color):
-                                return (f'<div style="background:{color}14; border:1px solid {color}55; border-radius:12px; padding:8px 4px; '
-                                        'text-align:center; min-width:0;">'
-                                        '<div style="font-size:min(0.68rem,2.6vw); color:#64748b; text-transform:uppercase; font-weight:700; '
-                                        f'letter-spacing:0.03em; line-height:1.25;">{label}</div>'
-                                        f'<div style="font-size:min(1.15rem,4.2vw); font-weight:800; color:{color}; margin-top:3px;">{value}</div></div>')
-                            st.markdown(
-                                '<div style="display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; margin-top:6px;">'
-                                + _mini_card("Apport mensuel", fmt_eur(_pmt_m), "#0284c7")
-                                + _mini_card("Total à verser", fmt_eur(_pmt_m * _n_m), "#4f46e5")
-                                + _mini_card("Sans nouvel apport", fmt_eur(_v0_m * _g_m), "#64748b")
-                                + '</div>', unsafe_allow_html=True)
-                            st.caption(f"Sur {_n_m:.1f} mois, à {_perf_att:.1f} % par an, en partant de {fmt_eur(_v0_m)} "
-                                       "(valeur actuelle + apport prévisionnel saisi). Estimation théorique, hors frais et fiscalité.")
-
-            # Le reste de la page n'utilise QUE les valeurs enregistrées (les dates de l'objectif sont fixes).
-            new_target = _cur_target
-            apport_prevision = _cur_apport
-
-            # Résultats sous les champs, sur toute la largeur.
-            # La barre de progression et "Restant à atteindre" intègrent l'épargne prévue :
-            # avant ce correctif, seul le texte "Performance requise" tout en bas en tenait
-            # compte, donc modifier ce champ ne faisait quasiment rien bouger visuellement,
-            # ce qui donnait l'impression qu'il ne servait à rien.
-            valeur_projetee = tot_value_globale + apport_prevision
-            prog_pct = (valeur_projetee / new_target * 100) if new_target > 0 else 0
-            prog_pct_clamped = max(0.0, min(prog_pct, 100.0))
-            montant_restant = max(0.0, new_target - valeur_projetee)
-
-            # Performance qu'il reste à réaliser sur les actions déjà en portefeuille pour
-            # combler l'écart à l'objectif, une fois déduit l'apport prévisionnel (qui, lui,
-            # comble l'écart en cash, sans nécessiter de performance boursière).
-            gain_necessaire = new_target - valeur_projetee
-            objectif_deja_couvert = gain_necessaire <= 0 or prog_pct >= 100
-
-            if objectif_deja_couvert:
-                perf_necessaire_pct = 0.0
-                perf_necessaire_str = "0,00 % (déjà couvert)"
-            elif tot_value_actions > 0:
-                perf_necessaire_pct = (gain_necessaire / tot_value_actions) * 100
-                perf_necessaire_str = f"{perf_necessaire_pct:,.2f} %".replace(",", " ").replace(".", ",")
-            else:
-                perf_necessaire_pct = None
-                perf_necessaire_str = "N/A"
-
-            # Repère : rendement moyen des marchés actions sur longue période (~8 %/an), ramené
-            # au temps qu'il reste réellement d'ici la fin de l'année pour rester comparable à
-            # une performance qui, elle, ne porte que sur les mois restants.
-            RENDEMENT_MARCHE_ANNUEL = 8.0
-            today_ts = _today_paris()
-            jours_restants_annee = max((pd.Timestamp(_cur_fin) - pd.Timestamp(today_ts)).days, 1)
-            repere_marche_periode = RENDEMENT_MARCHE_ANNUEL * (jours_restants_annee / 365.0)
-
-            # Le message reflète la difficulté de la PERFORMANCE BOURSIÈRE requise (comparée à
-            # ce repère de marché), pas le % du montant déjà atteint — un objectif rempli à 20 %
-            # peut être trivial à finir si le reste vient d'un apport, et inversement.
-            if objectif_deja_couvert:
-                grad_color = "linear-gradient(90deg, #15803d, #22c55e)"
-                badge = "🎉 Objectif déjà couvert"
-                badge_color = "#15803d"
-                badge_detail = "Votre épargne prévue suffit, sans performance boursière supplémentaire."
-            elif perf_necessaire_pct is None:
-                grad_color = "linear-gradient(90deg, #94a3b8, #cbd5e1)"
-                badge = "❓ Performance indéterminée"
-                badge_color = "#64748b"
-                badge_detail = "Pas encore de valeur en actions pour estimer une performance requise."
-            elif perf_necessaire_pct <= repere_marche_periode * 0.5:
-                grad_color = "linear-gradient(90deg, #16a34a, #4ade80)"
-                badge = "🌊 Objectif très accessible"
-                badge_color = "#16a34a"
-                badge_detail = f"Nettement sous la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
-            elif perf_necessaire_pct <= repere_marche_periode:
-                grad_color = "linear-gradient(90deg, #65a30d, #a3e635)"
-                badge = "🚀 Objectif réaliste"
-                badge_color = "#4d7c0f"
-                badge_detail = f"En ligne avec la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
-            elif perf_necessaire_pct <= repere_marche_periode * 2:
-                grad_color = "linear-gradient(90deg, #f59e0b, #fbbf24)"
-                badge = "⚡ Objectif ambitieux"
-                badge_color = "#d97706"
-                badge_detail = "Nécessite une performance nettement supérieure à la moyenne du marché."
-            else:
-                grad_color = "linear-gradient(90deg, #dc2626, #f87171)"
-                badge = "🔥 Objectif très ambitieux"
-                badge_color = "#dc2626"
-                badge_detail = "Nécessite une performance très supérieure à la moyenne du marché — peu probable en l'état."
-
-            pct_str = f"{prog_pct:,.1f}%".replace(".", ",")
-            pct_suffix = " du montant visé (épargne prévue incluse)" if apport_prevision > 0 else " du montant visé"
 
             def _obj_card(label, value, color, big=False):
                 return (f'<div style="background:{color}14; border:1px solid {color}55; border-radius:12px; padding:8px 4px; '
@@ -6545,137 +6378,55 @@ if _tab_open(tab_overview):
                         f'letter-spacing:0.03em; line-height:1.25;">{label}</div>'
                         f'<div style="font-size:min({"1.3rem" if big else "1.1rem"},{"5vw" if big else "4vw"}); font-weight:800; color:{color}; margin-top:3px; line-height:1.25;">{value}</div></div>')
             _grid = "display:grid; gap:6px; margin-top:8px;"
-            st.markdown(
-                _progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)
-                + f'<div style="{_grid} grid-template-columns:repeat(3,minmax(0,1fr));">'
-                + _obj_card("Actuel", fmt_eur(tot_value_globale), "#0284c7")
-                + _obj_card("Reste à atteindre", fmt_eur(montant_restant), badge_color)
-                + _obj_card("Cible", fmt_eur(new_target), "#4f46e5")
-                + '</div>'
-                + f'<div style="{_grid} grid-template-columns:repeat(2,minmax(0,1fr));">'
-                + _obj_card("Niveau de l'objectif", badge, badge_color, big=True)
-                + _obj_card("Performance requise", perf_necessaire_str, badge_color, big=True)
-                + '</div>',
-                unsafe_allow_html=True
-            )
 
-            # --- Suivi de la trajectoire vers l'objectif : valeur réelle du portefeuille vs valeur attendue sur une
-            # trajectoire linéaire (valeur de départ à la date de début -> cible à la date de fin), jour / semaine / mois / année. ---
-            if new_target > 0 and not df_transactions.empty:
-                # Ligne vide avant le suivi ; titre et sélecteur Jour/Semaine/Mois rapprochés.
+            _jours_obj = (pd.Timestamp(_in_fin) - pd.Timestamp(_today_paris())).days
+            _v0 = float(tot_value_globale)
+            _prog = max(0.0, min((_v0 / _in_target * 100) if _in_target > 0 else 0.0, 100.0))
+            if int(_in_target) <= 0:
+                st.info("Renseignez une valeur visée supérieure à 0.")
+            elif _jours_obj < 15:
+                st.info("La date de fin est trop proche (ou dépassée) pour calculer un apport mensuel.")
+            else:
+                _n = _jours_obj / 30.4375                                   # mois restants
+                _rm = (1.0 + float(_in_perf) / 100.0) ** (1.0 / 12.0) - 1.0   # taux mensuel équivalent
+                _g = (1.0 + _rm) ** _n
+                _sans_apport = _v0 * _g                                      # valeur à la date visée sans nouvel apport
+                _manque = float(_in_target) - _sans_apport
+                if _manque <= 0:
+                    _pmt = 0.0
+                elif abs(_rm) < 1e-9:
+                    _pmt = _manque / _n
+                else:
+                    _pmt = _manque * _rm / (_g - 1.0)
+                if _pmt <= 0:
+                    _coul, _bandeau = "#15803d", "🎉 Objectif atteint sans nouvel apport"
+                    _grad = "linear-gradient(90deg, #15803d, #22c55e)"
+                else:
+                    # Palette selon l'effort demandé : apport mensuel rapporté à la valeur visée (par mois).
+                    _effort = _pmt / float(_in_target) * 100
+                    if _effort <= 0.5:
+                        _coul, _bandeau, _grad = "#16a34a", "🌊 Effort léger", "linear-gradient(90deg, #16a34a, #4ade80)"
+                    elif _effort <= 1.5:
+                        _coul, _bandeau, _grad = "#4d7c0f", "🚀 Effort raisonnable", "linear-gradient(90deg, #65a30d, #a3e635)"
+                    elif _effort <= 3.0:
+                        _coul, _bandeau, _grad = "#d97706", "⚡ Effort soutenu", "linear-gradient(90deg, #f59e0b, #fbbf24)"
+                    else:
+                        _coul, _bandeau, _grad = "#dc2626", "🔥 Effort important", "linear-gradient(90deg, #dc2626, #f87171)"
                 st.markdown(
-                    "<div style='height:18px'></div>"
-                    "<style>.st-key-k_suivi_objectif_pas { margin-top: -0.75rem; }</style>",
+                    _progress_bar_html(_prog, _grad, _coul, f"{_prog:.1f} % de l'objectif".replace(".", ","))
+                    + f'<div style="{_grid} grid-template-columns:repeat(2,minmax(0,1fr));">'
+                    + _obj_card("Apport mensuel nécessaire", fmt_eur(_pmt), _coul, big=True)
+                    + _obj_card("Niveau d'effort", _bandeau, _coul, big=True)
+                    + '</div>'
+                    + f'<div style="{_grid} grid-template-columns:repeat(3,minmax(0,1fr));">'
+                    + _obj_card("Actuel", fmt_eur(_v0), "#0284c7")
+                    + _obj_card("Total à verser", fmt_eur(_pmt * _n), "#4f46e5")
+                    + _obj_card("Sans nouvel apport", fmt_eur(_sans_apport), "#64748b")
+                    + '</div>',
                     unsafe_allow_html=True,
                 )
-                st.markdown("**📅 Suivi de la trajectoire vers l'objectif**")
-                _pas_suivi = st.radio("Pas du suivi", ["Jour", "Semaine", "Mois", "Année"], index=2, horizontal=True,
-                                      key="k_suivi_objectif_pas", label_visibility="collapsed")
-                _h_obj = get_portfolio_history(df_transactions)
-                _serie = _h_obj["Valeur du Portefeuille (€)"].dropna() if "Valeur du Portefeuille (€)" in _h_obj.columns else pd.Series(dtype=float)
-                # Dates FIXES de l'objectif (saisies et confirmées par l'opérateur) : début -> fin.
-                _debut_obj = pd.Timestamp(_cur_debut)
-                _fin_obj = pd.Timestamp(_cur_fin)
-                _jours_obj = max((_fin_obj - _debut_obj).days, 1)
-                _auj = _today_paris()
-                _auj = pd.Timestamp(_auj.year, _auj.month, _auj.day)
-                # Valeur de DÉPART = valeur du portefeuille au DÉBUT de la journée de début, c'est-à-dire à la clôture
-                # de la veille. À défaut d'historique antérieur (premier jour du suivi, ou début dans le futur), on
-                # prend la valeur actuelle.
-                _v0 = float(tot_value_globale)
-                if len(_serie) and _debut_obj <= _auj:
-                    _avant = _serie[_serie.index < _debut_obj]
-                    if len(_avant):
-                        _v0 = float(_avant.iloc[-1])
-                    elif _debut_obj <= _serie.index[0]:
-                        _v0 = float(_serie.iloc[0])
-                _att_fn = lambda d: _v0 + (new_target - _v0) * float(np.clip((d - _debut_obj).days / _jours_obj, 0.0, 1.0))
-
-                # Échéancier COMPLET, de la date de saisie jusqu'au 31/12 : chaque ligne donne la valeur théorique
-                # attendue à la fin de la période. La valeur réelle, l'écart et le statut se remplissent au fil des
-                # jours (périodes terminées + période en cours, avec la valeur du jour).
-                _starts, _ends = [], []
-                if _pas_suivi == "Jour":
-                    _jr = pd.bdate_range(_debut_obj, _fin_obj)
-                    _starts, _ends = list(_jr), list(_jr)
-                elif _pas_suivi == "Semaine":
-                    _cur_d = _debut_obj
-                    while _cur_d <= _fin_obj:
-                        _e = min(_cur_d + pd.Timedelta(days=(6 - _cur_d.weekday())), _fin_obj)
-                        _starts.append(_cur_d); _ends.append(_e)
-                        _cur_d = _e + pd.Timedelta(days=1)
-                elif _pas_suivi == "Mois":
-                    _cur_d = _debut_obj
-                    while _cur_d <= _fin_obj:
-                        _e = min(_cur_d + pd.offsets.MonthEnd(0), _fin_obj)
-                        _starts.append(_cur_d); _ends.append(_e)
-                        _cur_d = _e + pd.Timedelta(days=1)
-                else:  # Année : une ligne par année civile, entre la date de début et la date de fin
-                    _cur_d = _debut_obj
-                    while _cur_d <= _fin_obj:
-                        _e = min(pd.Timestamp(_cur_d.year, 12, 31), _fin_obj)
-                        _starts.append(_cur_d); _ends.append(_e)
-                        _cur_d = _e + pd.Timedelta(days=1)
-
-                _rows_obj = []
-                for _d0, _d1 in zip(_starts, _ends):
-                    _att = _att_fn(_d1)
-                    _att_cmp = _att
-                    _termine = _d1 <= _auj and len(_serie) > 0 and _d1 >= _serie.index[0]
-                    if _d1 <= _auj and len(_serie):
-                        _vr = _serie[_serie.index <= _d1]
-                        _vr = float(_vr.iloc[-1]) if len(_vr) else np.nan
-                    else:
-                        _vr = np.nan
-                    _en_cours = (_d0 <= _auj <= _d1) and not (_d1 <= _auj)
-                    if _en_cours and len(_serie):
-                        # Période (semaine / mois / année) EN COURS : on n'attend pas sa fin. Valeur réelle = valeur
-                        # du jour, comparée à la valeur attendue AUJOURD'HUI sur la trajectoire (et non à celle
-                        # attendue en fin de période, ce qui donnerait un faux « en retard »).
-                        # La colonne « Valeur attendue » affiche, elle, la valeur attendue à la FIN de la période.
-                        _vr = float(_serie.iloc[-1])
-                        _att_cmp = _att_fn(_auj)
-                    _rows_obj.append((_d0, _d1, _att, _vr, _en_cours, _att_cmp))
-
-                def _lab_obj(d0, d1):
-                    if _pas_suivi == "Jour":
-                        return d1.strftime("%d/%m/%Y")
-                    if _pas_suivi == "Semaine":
-                        return f"Sem. {d1.isocalendar()[1]} (au {d1.strftime('%d/%m')})"
-                    if _pas_suivi == "Année":
-                        return str(d1.year) if (d1.month, d1.day) == (12, 31) else f"{d1.year} (au {d1.strftime('%d/%m/%Y')})"
-                    return f"{d1.month:02d}/{d1.year}"
-
-                _lab, _vr_t, _att_t, _ecm_t, _ecp_t, _stat_t, _styles_t = [], [], [], [], [], [], []
-                _focus = None
-                for _k, (_d0, _d1, _att, _vr, _enc, _att_cmp) in enumerate(_rows_obj):
-                    _lab.append(_lab_obj(_d0, _d1))
-                    _att_t.append(fmt_eur(_att))
-                    if not np.isnan(_vr):
-                        _ec = _vr - _att_cmp
-                        _vr_t.append(fmt_eur(_vr)); _ecm_t.append(fmt_eur_arrow(_ec))
-                        _ecp_t.append(fmt_perf_simple(_ec / _att_cmp * 100) if _att_cmp > 0 else "-")
-                        _stat_t.append(("✅ En avance" if _ec >= 0 else "❌ En retard") + (" · en cours" if _enc else ""))
-                    else:
-                        _vr_t.append("-"); _ecm_t.append("-"); _ecp_t.append("-")
-                        _stat_t.append("⏳ En cours" if _enc else "🕒 À venir")
-                    _styles_t.append("background:rgba(2,132,199,0.10);" if _enc else "")
-                    if _d0 <= _auj <= _d1 and _focus is None:
-                        _focus = _k
-                if _focus is None:
-                    # Aucune période en cours (ex. suivi par jour) : on se place sur la première ligne à venir.
-                    _focus = next((k for k, r in enumerate(_rows_obj) if np.isnan(r[3])), None)
-                _tbl_obj = pd.DataFrame({
-                    "Période": _lab, "Valeur réelle": _vr_t, "Valeur attendue": _att_t,
-                    "Écart (€)": _ecm_t, "Écart (%)": _ecp_t, "Statut": _stat_t,
-                })
-                _html_table(
-                    _tbl_obj,
-                    row_styles=_styles_t,
-                    cell_style=lambda c, v: _style_perf_cell(v) if c in ("Écart (€)", "Écart (%)") else "",
-                    max_height=350,   # 10 lignes visibles
-                    focus_row=_focus,
-                )
+                st.caption(f"Sur {_n:.1f} mois".replace(".", ",") + f", à {float(_in_perf):.1f} % par an".replace(".", ",")
+                           + f", en partant de {fmt_eur(_v0)}. Estimation théorique, hors frais et fiscalité.")
 
 # ------------------------------------------
 # ONGLÊT 2 : POSITIONS & TRANSACTIONS
@@ -10143,13 +9894,20 @@ if _tab_open(tab_watchlist):
 PLAFOND_PEA_VERSEMENTS = 150000.0
 
 
-def _sim_stat(label, value, color="#0f172a"):
-    return f'<div class="pea-stat"><div class="k">{label}</div><div class="v" style="color:{color};">{value}</div></div>'
+def _color_card(label, value, color, big=False):
+    """Case colorée (teinte + bordure + valeur de la couleur), utilisée côte à côte comme dans l'objectif."""
+    return (f'<div style="background:{color}14; border:1px solid {color}55; border-radius:12px; padding:8px 4px; '
+            'text-align:center; min-width:0; display:flex; flex-direction:column; justify-content:center;">'
+            f'<div style="font-size:min({"0.74rem" if big else "0.68rem"},{"2.9vw" if big else "2.6vw"}); color:#64748b; text-transform:uppercase; '
+            f'font-weight:700; letter-spacing:0.03em; line-height:1.25;">{label}</div>'
+            f'<div style="font-size:min({"1.3rem" if big else "1.1rem"},{"5vw" if big else "4vw"}); font-weight:800; color:{color}; '
+            f'margin-top:3px; line-height:1.25;">{value}</div></div>')
 
 
-def _sim_stats(*cards, small=False):
-    _n_cartes = max(len(cards), 1)
-    st.markdown(f'<div class="pea-stats{" sm" if small else ""}" style="--n:{_n_cartes};">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+def _color_cards_row(cards):
+    """Une rangée de cases colorées, toujours côte à côte (y compris sur téléphone)."""
+    return (f'<div style="display:grid; gap:6px; margin-top:8px; grid-template-columns:repeat({max(len(cards), 1)},minmax(0,1fr));">'
+            + "".join(cards) + "</div>")
 
 
 def _fr_num(v, d=2, signed=False):
@@ -10449,19 +10207,24 @@ def _render_sim_retrait():
             grad_color, net_color = "linear-gradient(90deg, #d97706, #fbbf24)", "#d97706"
 
         _fr = lambda v, d=1: _fr_num(v, d)
-        _sim_headline("💵 Montant net perçu", fmt_eur(net_recu), color=net_color)
-        st.markdown(_progress_bar_html(net_pct, grad_color, net_color, f"{_fr(net_pct)} % conservés après fiscalité"), unsafe_allow_html=True)
-        cards = [
-            _sim_stat("Montant demandé", fmt_eur(montant_retrait_souhaite)),
-            _sim_stat(f"Dont capital ({_fr(part_capital_pct, 2)} %)", fmt_eur(part_capital)),
-            _sim_stat(f"Dont plus-value ({_fr(part_pv_pct, 2)} %)", fmt_eur(part_pv)),
-            _sim_stat(f"Prélèvements sociaux ({_fr(taux_ps_pct)} %)", fmt_eur(montant_ps), "#d97706"),
-        ]
-        if not age_plan_plus_5:
-            cards.append(_sim_stat("Impôt sur le revenu (12,8 %)", fmt_eur(montant_ir), "#d97706"))
-        cards.append(_sim_stat("Total fiscalité", fmt_eur(total_taxes), "#d97706"))
-        _sim_stats(*cards)
-
+        st.markdown(
+            _color_cards_row([
+                _color_card("💵 Montant net perçu", fmt_eur(net_recu), net_color, big=True),
+                _color_card("Total fiscalité", fmt_eur(total_taxes), "#dc2626" if total_taxes > 0 else "#64748b", big=True),
+            ])
+            + '<div style="height:8px;"></div>'
+            + _progress_bar_html(net_pct, grad_color, net_color, f"{_fr(net_pct)} % conservés après fiscalité")
+            + _color_cards_row([
+                _color_card("Montant demandé", fmt_eur(montant_retrait_souhaite), "#0284c7"),
+                _color_card(f"Dont capital ({_fr(part_capital_pct, 2)} %)", fmt_eur(part_capital), "#4f46e5"),
+                _color_card(f"Dont plus-value ({_fr(part_pv_pct, 2)} %)", fmt_eur(part_pv), "#10b981"),
+            ])
+            + _color_cards_row(
+                [_color_card(f"Prélèvements sociaux ({_fr(taux_ps_pct)} %)", fmt_eur(montant_ps), "#d97706")]
+                + ([] if age_plan_plus_5 else [_color_card("Impôt sur le revenu (12,8 %)", fmt_eur(montant_ir), "#dc2626")])
+            ),
+            unsafe_allow_html=True,
+        )
 
 if _tab_open(tab_simulateur):
     with tab_simulateur:
