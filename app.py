@@ -2,7 +2,6 @@ from datetime import datetime, date, time
 from decimal import Decimal, ROUND_HALF_UP
 import os
 import json
-import uuid
 import time as time_module
 import contextlib
 import concurrent.futures
@@ -19,7 +18,6 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
 import yfinance as yf
 import plotly.graph_objects as go
-import plotly.colors as pcolors
 import locale
 from dateutil.relativedelta import relativedelta
 import hashlib
@@ -1919,20 +1917,6 @@ def fmt_perf_simple(val):
         return "▬ 0,00%"
 
 
-def fmt_pts(val):
-    """Contribution à la performance : ▲ +0,52 % / ▼ -0,12 % / ▬ 0,00 %."""
-    try:
-        if pd.isna(val):
-            return "N/A"
-    except Exception:
-        return "N/A"
-    if val > 0.005:
-        return f"▲ +{val:,.2f} %".replace(",", " ").replace(".", ",")
-    if val < -0.005:
-        return f"▼ {val:,.2f} %".replace(",", " ").replace(".", ",")
-    return "▬ 0,00 %"
-
-
 def _style_perf_cell(v):
     """Couleur du texte d'une cellule de performance déjà formatée (▲ vert, ▼ rouge, ▬ gris)."""
     s = str(v)
@@ -1973,15 +1957,6 @@ def _style_perf_bg_cell(v):
     if s.startswith("=") or s.startswith("▬"):
         return "color:#64748b; font-weight:700;"
     return ""
-
-
-def _zebra_rows(df_z):
-    """Gris léger une ligne sur deux (ligne 2, 4, 6...), semi-transparent pour rester lisible partout."""
-    return pd.DataFrame(
-        [["background-color: rgba(148,163,184,0.16);" if i % 2 == 1 else "" for _ in df_z.columns]
-         for i in range(len(df_z))],
-        index=df_z.index, columns=df_z.columns,
-    )
 
 
 def fmt_perf_text_only(val):
@@ -2259,36 +2234,6 @@ def _html_table(df, row_styles=None, cell_style=None, show_index=False, index_la
         st.markdown(f'<div class="pea-tbl-wrap"><table class="pea-tbl"><thead><tr>{head}</tr></thead>'
                     f'<tbody>{"".join(rows)}</tbody>{foot}</table></div>', unsafe_allow_html=True)
 
-def _lerp_hex(c1, c2, t):
-    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
-    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
-    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
-
-def get_smooth_gradient_styles(vals_arr):
-    """Dégradé continu (et non par paliers) : plus la valeur est forte dans son signe, plus le vert / rouge est
-    soutenu. L'intensité mêle l'amplitude (racine du ratio au maximum) et le rang, pour rester lisible même
-    avec une valeur extrême. Léger -> moyen -> soutenu, texte foncé toujours lisible."""
-    vals = np.asarray(vals_arr, dtype=float)
-    stops = {
-        1: ("#f0fdf4", "#bbf7d0", "#4ade80", "#14532d"),
-        -1: ("#fef2f2", "#fecaca", "#fca5a5", "#7f1d1d"),
-    }
-    out = [""] * len(vals)
-    for sign in (1, -1):
-        mask = (~np.isnan(vals)) & (vals * sign > 0)
-        if not mask.any():
-            continue
-        mags = np.abs(vals[mask])
-        vmax = float(mags.max())
-        order = mags.argsort().argsort()
-        n = len(mags)
-        light, mid, strong, txt = stops[sign]
-        for k, pos in enumerate(np.flatnonzero(mask)):
-            rank_t = (order[k] / (n - 1)) if n > 1 else 1.0
-            t = 0.5 * (mags[k] / vmax) ** 0.5 + 0.5 * rank_t
-            bg = _lerp_hex(light, mid, t * 2) if t < 0.5 else _lerp_hex(mid, strong, (t - 0.5) * 2)
-            out[pos] = f"background-color: {bg}; color: {txt}; font-weight: 600;"
-    return out
 
 def _make_get_h_val(history_df):
     """Équivalent rapide de la fonction get_h_val des tableaux mensuel/annuel : renvoie
@@ -2566,61 +2511,12 @@ def build_calendar_heatmap(df_source, date_col, value_col, colorscale, key_prefi
 
 _ALLOC_COLORS = ["#8fb0ff", "#f2c5e8", "#c8d9ff", "#c8b8f5", "#f2b6ae", "#dda899", "#f4d9b0", "#c5dfc5", "#6fb3ad"]
 
-# True : le montant au centre du camembert inclut aussi les liquidités (qui, elles, ne sont jamais
-# dessinées dans l'anneau). False : centre = total des positions affichées.
-_ALLOC_CENTER_INCLUDE_CASH = False
 
 def _alloc_color(i):
     if i < len(_ALLOC_COLORS):
         return _ALLOC_COLORS[i]
     return f"hsl({(i * 47) % 360}, 45%, 72%)"
 
-_SECTEURS_FR = {
-    "Technology": "Technologie", "Healthcare": "Santé", "Financial Services": "Services financiers",
-    "Consumer Cyclical": "Conso. cyclique", "Consumer Defensive": "Conso. défensive",
-    "Industrials": "Industrie", "Energy": "Énergie", "Utilities": "Services publics",
-    "Real Estate": "Immobilier", "Basic Materials": "Matériaux de base",
-    "Communication Services": "Communication",
-}
-
-def _secteur_fr(sect):
-    """Nom de secteur en français ('Autre' si inconnu, ex. ETF sans secteur)."""
-    if sect is None or (isinstance(sect, float) and np.isnan(sect)):
-        return "Autre"
-    t = str(sect).strip()
-    if not t or t.lower() in ("nan", "none"):
-        return "Autre"
-    return _SECTEURS_FR.get(t, t)
-
-# ------------------------------------------------------------------
-# Quatre camemberts liés : action / secteur / pays du siège / tranche de capitalisation
-# ------------------------------------------------------------------
-_PAYS_FR = {
-    "France": "France", "Germany": "Allemagne", "Netherlands": "Pays-Bas", "Belgium": "Belgique", "Italy": "Italie",
-    "Spain": "Espagne", "Portugal": "Portugal", "Ireland": "Irlande", "Luxembourg": "Luxembourg",
-    "Switzerland": "Suisse", "United Kingdom": "Royaume-Uni", "Sweden": "Suède", "Norway": "Norvège",
-    "Denmark": "Danemark", "Finland": "Finlande", "Austria": "Autriche", "Poland": "Pologne", "Greece": "Grèce",
-    "United States": "États-Unis", "Canada": "Canada", "Mexico": "Mexique", "Brazil": "Brésil", "China": "Chine",
-    "Japan": "Japon", "South Korea": "Corée du Sud", "Taiwan": "Taïwan", "Hong Kong": "Hong Kong", "India": "Inde",
-    "Singapore": "Singapour", "Israel": "Israël", "Australia": "Australie", "South Africa": "Afrique du Sud",
-}
-# Repli quand Yahoo ne donne pas le pays du siège (ETF, petites valeurs) : place de cotation (suffixe du ticker).
-_SUFFIXE_PAYS = {
-    ".PA": "France", ".AS": "Pays-Bas", ".DE": "Allemagne", ".F": "Allemagne", ".MI": "Italie", ".L": "Royaume-Uni",
-    ".BR": "Belgique", ".MC": "Espagne", ".LS": "Portugal", ".SW": "Suisse", ".ST": "Suède", ".CO": "Danemark",
-    ".OL": "Norvège", ".HE": "Finlande", ".VI": "Autriche", ".IR": "Irlande", ".TO": "Canada",
-}
-
-def _pays_siege(pays, ticker):
-    """Pays du siège social en français ; à défaut, pays de la place de cotation ; sinon « Non déterminé »."""
-    p = str(pays).strip() if pays is not None else ""
-    if p and p.lower() not in ("nan", "none", "inconnu"):
-        return _PAYS_FR.get(p, p)
-    t = str(ticker).upper()
-    for suf, nom in _SUFFIXE_PAYS.items():
-        if t.endswith(suf):
-            return nom
-    return "Non déterminé" if "." in t else "États-Unis"
 
 def _fmt_cap(v):
     if v is None or v <= 0:
@@ -2648,42 +2544,6 @@ def _cap_bucket(mc, qt):
             return label
     return "Capitalisation inconnue"
 
-# Yahoo Finance ne fournit PAS la ventilation géographique du chiffre d'affaires : pour les valeurs ci-dessous on
-# utilise des ORDRES DE GRANDEUR issus des rapports annuels (arrondis, à ajuster ici). Pour toute autre valeur,
-# repli sur le continent du siège social (100 %). Clé = fragment du nom, sans accent ni majuscule.
-_REVENUS_CONTINENT_REF = {
-    "air liquide": {"Europe": 34, "Amérique du Nord": 30, "Asie": 27, "Amérique du Sud": 4, "Afrique": 5},
-    "asml": {"Asie": 80, "Amérique du Nord": 12, "Europe": 8},
-    "schneider": {"Europe": 28, "Amérique du Nord": 32, "Asie": 28, "Amérique du Sud": 4, "Afrique": 8},
-    "credit agricole": {"Europe": 92, "Amérique du Nord": 4, "Asie": 4},
-    "vusion": {"Amérique du Nord": 55, "Europe": 35, "Asie": 10},
-    "msci world": {"Amérique du Nord": 75, "Europe": 16, "Asie": 6, "Océanie": 3},
-}
-_CONTINENT_PAYS_FR = {}
-for _cont, _pays in {
-    "Europe": ["France", "Allemagne", "Pays-Bas", "Belgique", "Italie", "Espagne", "Portugal", "Irlande", "Luxembourg",
-               "Suisse", "Royaume-Uni", "Suède", "Norvège", "Danemark", "Finlande", "Autriche", "Pologne", "Grèce"],
-    "Amérique du Nord": ["États-Unis", "Canada", "Mexique"],
-    "Amérique du Sud": ["Brésil"],
-    "Asie": ["Chine", "Japon", "Corée du Sud", "Taïwan", "Hong Kong", "Inde", "Singapour", "Israël"],
-    "Afrique": ["Afrique du Sud"],
-    "Océanie": ["Australie"],
-}.items():
-    for _p in _pays:
-        _CONTINENT_PAYS_FR[_p] = _cont
-
-def _norm_nom(s):
-    import unicodedata
-    return "".join(c for c in unicodedata.normalize("NFD", str(s).lower()) if unicodedata.category(c) != "Mn")
-
-def _continent_split(nom, pays_fr):
-    """({continent: %}, par_reference) : revenus d'une valeur par continent (référence si connue, sinon siège)."""
-    n = _norm_nom(nom)
-    for key, split in _REVENUS_CONTINENT_REF.items():
-        if key in n:
-            tot = float(sum(split.values())) or 1.0
-            return {k: v / tot * 100 for k, v in split.items()}, True
-    return {_CONTINENT_PAYS_FR.get(pays_fr, "Non déterminé"): 100.0}, False
 
 _ALLOC4_HTML = r"""
 <style>
@@ -2691,10 +2551,10 @@ _ALLOC4_HTML = r"""
   html, body { margin: 0; padding: 0; background: transparent; }
   #root { box-sizing: border-box; padding: 4px 2px; font-family: Manrope, Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
           color: var(--fg, #334155); }
-  #grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 14px; align-items: start; }
+  #grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 10px; align-items: start; }
   .cell { min-width: 0; }
   .ttl { text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; opacity: .6; margin-bottom: 2px; }
-  svg { width: 100%; max-width: 280px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
+  svg { width: 100%; max-width: 196px; height: auto; display: block; margin: 0 auto; -webkit-tap-highlight-color: transparent; }
   .slice { cursor: pointer; transition: opacity .18s ease, transform .18s ease; }
   .slice.dim { opacity: .28; }
   .leg { margin-top: 4px; }
@@ -2713,7 +2573,6 @@ _ALLOC4_HTML = r"""
   @media (max-width: 760px) {
     #grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 6px; }
     .ttl { font-size: 10px; margin-bottom: 0; }
-    svg { max-width: 210px; }
     .leg { margin-top: 0; }
     .nm { font-size: 11px; } .pc { font-size: 10.5px; }
     .row { padding: 1px 3px; gap: 5px; }
@@ -2734,12 +2593,13 @@ _ALLOC4_HTML = r"""
   var st = { t: -1, i: -1 };
   var grid = document.getElementById('grid'), rootEl = document.getElementById('root');
 
-  function layout(items) {
-    var MIN = 2.2, raw = items.map(function (d) { return Math.max(d.pct * 3.6, MIN); });
-    var sum = raw.reduce(function (a, b) { return a + b; }, 0), k = 360 / sum, ang = [], a0 = 0;
+  function layoutP(p) {
+    var MIN = 2.2, raw = p.map(function (x) { return x > 0.0001 ? Math.max(x * 3.6, MIN) : 0; });
+    var sum = raw.reduce(function (a, b) { return a + b; }, 0) || 1, k = 360 / sum, ang = [], a0 = 0;
     raw.forEach(function (v) { var a = v * k; ang.push([a0, a0 + a]); a0 += a; });
     return ang;
   }
+  function f2(x) { return x.toFixed(2).replace('.', ','); }
   function pt(rad, a) { var t = (a - 90) * Math.PI / 180; return [C + rad * Math.cos(t), C + rad * Math.sin(t)]; }
   function arc(s, e) {
     var gap = (e - s) > 4 ? 0.5 : 0.15; s += gap; e -= gap;
@@ -2762,7 +2622,7 @@ _ALLOC4_HTML = r"""
   }
 
   DON.forEach(function (D, t) {
-    D.ang = layout(D.items);
+    D.ang = layoutP(D.items.map(function (d) { return d.pct; }));
     var cell = document.createElement('div'); cell.className = 'cell';
     cell.innerHTML = '<div class="ttl"></div><svg viewBox="0 0 240 240"></svg><div class="leg"></div>';
     cell.querySelector('.ttl').textContent = D.title;
@@ -2805,21 +2665,43 @@ _ALLOC4_HTML = r"""
   function txt(c, a, b, d, e) { c[0].textContent = a; c[1].textContent = b; c[2].textContent = d; c[3].textContent = e; }
   function show(D, d) { txt(D.ct, cut(d.n, 20), d.v, d.pt + ' %', d.x ? cut(d.x, 22) : plural(d.m.length, DON[0].nouns)); }
 
+  // Redessine un anneau à partir de pourcentages (0 = part masquée, y compris dans la légende).
+  function setGeom(D, pcts, base) {
+    D.ang = layoutP(pcts);
+    D.sl.forEach(function (sl, j) {
+      sl.setAttribute('d', pcts[j] > 0.0001 ? arc(D.ang[j][0], D.ang[j][1]) : '');
+    });
+    D.rows.forEach(function (rw, j) {
+      rw.style.display = pcts[j] > 0.0001 ? '' : 'none';
+      rw.querySelector('.pc').textContent = (base ? D.items[j].pt : f2(pcts[j])) + ' %';
+    });
+  }
+
+  // Sélection d'une part (camembert t0, part i0) : « poids effectif » de chaque action dans cette part, puis les trois
+  // autres camemberts sont recalculés sur ce seul sous-ensemble (répartition DE la sélection, base 100 %).
+  //  - Vusion cliqué  -> continents = répartition du chiffre d'affaires de Vusion ; secteur / tranche = les siens.
+  //  - Technologie cliqué -> actions = poids relatif des valeurs technologiques ; continents = leur CA cumulé.
   function render() {
-    var on = st.t >= 0;
-    var sel = on ? DON[st.t].items[st.i] : null;
+    var on = st.t >= 0, W = DON[0].W;
+    var sel = on ? DON[st.t].items[st.i] : null, eff = [], tot = 0;
+    if (on) {
+      DON[st.t].f.forEach(function (fr, h) {
+        var q = 0; fr.forEach(function (p) { if (p[0] === st.i) q = p[1]; });
+        eff[h] = W[h] * q; tot += eff[h];
+      });
+    }
     DON.forEach(function (D, t) {
-      var act = {};
-      if (on) {
-        if (t === st.t) act[st.i] = 1;
-        else D.items.forEach(function (it, j) { if (inter(it.m, sel.m)) act[j] = 1; });
+      if (!on || t === st.t) {
+        setGeom(D, D.items.map(function (d) { return d.pct; }), true);
+        paint(D, function (j) { return on && j === st.i; }, on);
+        if (!on) txt(D.ct, D.rest[0], D.rest[1], D.rest[2], D.rest[3]); else show(D, sel);
+        return;
       }
-      paint(D, function (j) { return !!act[j]; }, on);
-      if (!on) { txt(D.ct, D.rest[0], D.rest[1], D.rest[2], D.rest[3]); return; }
-      if (t === st.t) { show(D, sel); return; }
-      var ids = Object.keys(act);
-      if (ids.length === 1) show(D, D.items[+ids[0]]);
-      else txt(D.ct, 'Lié à ' + cut(sel.n, 14), plural(ids.length, D.nouns), '', '');
+      var vals = D.items.map(function () { return 0; });
+      D.f.forEach(function (fr, h) { if (eff[h]) fr.forEach(function (p) { vals[p[0]] += eff[h] * p[1]; }); });
+      setGeom(D, vals.map(function (v) { return tot > 0 ? v / tot * 100 : 0; }), false);
+      paint(D, function () { return false; }, false);
+      txt(D.ct, 'Répartition de', cut(sel.n, 16), sel.v, sel.pt + ' % du portefeuille');
     });
   }
   document.body.addEventListener('click', function () { if (Date.now() < mute) return; if (st.t >= 0) { st = { t: -1, i: -1 }; render(); } });
@@ -2864,7 +2746,19 @@ _ALLOC4_HTML = r"""
   function fit() {
     try {
       var h = Math.ceil(rootEl.getBoundingClientRect().height) + 16;
-      try { window.frameElement.style.height = h + 'px'; }
+      try {
+        var fe = window.frameElement;
+        fe.style.height = h + 'px'; fe.setAttribute('height', h);
+        // Streamlit fixe aussi la hauteur du conteneur parent : on l'aligne, sinon la section suivante chevauche la légende
+        // (cadre trop court) ou laisse un grand vide (cadre trop haut).
+        var p = fe.parentElement, k = 0;
+        while (p && k < 4) {
+          var cls = String(p.className || '');
+          if ((p.style && p.style.height) || /stElementContainer|element-container/.test(cls)) { p.style.height = h + 'px'; }
+          if (/stElementContainer|element-container/.test(cls)) break;
+          p = p.parentElement; k++;
+        }
+      }
       catch (e2) { window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*'); }
     } catch (e) {}
   }
@@ -2877,18 +2771,16 @@ _ALLOC4_HTML = r"""
 """
 
 def _render_allocation(df_active, cash):
-    """Quatre camemberts (anneaux) tous liés : par ACTION, par SECTEUR, par PAYS du siège social et par TRANCHE
-    DE CAPITALISATION. Composant 100 % côté navigateur (aucun rechargement au clic). Au repos le centre affiche
-    un total ; au clic sur une part (ou sa ligne de légende) elle est mise en avant, et dans CHACUN des trois
-    autres camemberts les parts qui lui sont liées (mêmes actions) sont surlignées avec leur valeur au centre.
-    Un second clic (ou un clic à côté) désélectionne. Sur téléphone : 2 x 2 serrés, légende repliable."""
+    """Deux camemberts (anneaux) liés : par ACTION et par TRANCHE DE CAPITALISATION (Yahoo). Composant 100 % côté navigateur (aucun rechargement au clic). Au repos le centre affiche
+    un total ; au clic sur une part (ou sa ligne de légende), l'autre camembert est recalculé sur cette seule sélection
+    (base 100 %). Un second clic (ou un clic à côté) désélectionne."""
     import streamlit.components.v1 as components
     rows = []
     if df_active is not None and not df_active.empty:
         for _, r in df_active.iterrows():
             v = float(r["Valeur Actuelle (€)"])
             if v > 0:
-                rows.append((str(r["Nom"]), str(r["Ticker"]), v, _secteur_fr(r.get("Secteur")), r.get("Pays")))
+                rows.append((str(r["Nom"]), str(r["Ticker"]), v, "", None))
     if not rows:
         st.info("Aucune position à répartir pour le moment.")
         return
@@ -2905,23 +2797,7 @@ def _render_allocation(df_active, cash):
         return [{"n": k, "v": fmt_eur(val[k]), "pct": val[k] / total * 100, "pt": _pct(val[k] / total * 100),
                  "c": _alloc_color(i + offset), "m": mem[k]} for i, k in enumerate(ordre)]
 
-    # 1) Actions (une part par position ; le 4e texte du centre = le secteur)
-    A = [{"n": n, "v": fmt_eur(v), "pct": v / total * 100, "pt": _pct(v / total * 100),
-          "c": _alloc_color(i), "m": [i], "x": sc} for i, (n, _t, v, sc, _p) in enumerate(rows)]
-    # 2) Secteurs
-    S = _groupe([x[3] for x in rows])
-    # 3) Revenus par continent : répartition connue si possible, sinon continent du siège social (100 %)
-    cont_val, cont_mem, siege = {}, {}, []
-    for idx, (n, tk, v, _sc, p) in enumerate(rows):
-        split, is_ref = _continent_split(n, _pays_siege(p, tk))
-        if not is_ref:
-            siege.append(n)
-        for cont, pc in split.items():
-            cont_val[cont] = cont_val.get(cont, 0.0) + v * pc / 100.0
-            cont_mem.setdefault(cont, []).append(idx)
-    P = [{"n": k, "v": fmt_eur(cont_val[k]), "pct": cont_val[k] / total * 100, "pt": _pct(cont_val[k] / total * 100),
-          "c": _alloc_color(i + 2), "m": cont_mem[k]} for i, k in enumerate(sorted(cont_val, key=lambda k: -cont_val[k]))]
-    # 4) Tranches de capitalisation
+    # Tranche de capitalisation de chaque action (Yahoo : capitalisation de marché ; les ETF forment leur propre part)
     caps, cap_total, n_cap = [], 0.0, 0
     for (_n, tick, _v, _s, _p) in rows:
         mc, qt, _cur = get_ticker_marketcap(tick)
@@ -2929,24 +2805,31 @@ def _render_allocation(df_active, cash):
         if mc and qt not in _ETF_QUOTE_TYPES:
             cap_total += float(mc)
             n_cap += 1
+    # 1) Actions (une part par position ; le 4e texte du centre = la tranche de capitalisation)
+    A = [{"n": n, "v": fmt_eur(v), "pct": v / total * 100, "pt": _pct(v / total * 100),
+          "c": _alloc_color(i), "m": [i], "x": caps[i]} for i, (n, _t, v, _sc, _p) in enumerate(rows)]
+    # 2) Tranches de capitalisation
     K = _groupe(caps, offset=3, ordre=[b[0] for b in _CAP_BUCKETS] + ["ETF / fonds", "Capitalisation inconnue"])
+
+    # Fraction de chaque action (ligne) rattachée à chaque part : sert au recalcul croisé côté navigateur.
+    _iK = {it["n"]: i for i, it in enumerate(K)}
+    A_f = [[[i, 1.0]] for i in range(len(rows))]
+    K_f = [[[_iK[c], 1.0]] for c in caps]
 
     plur = lambda n, a, b: f"{n} {a if n < 2 else b}"
     don = [
         {"title": "Par action", "items": A, "nouns": ["action", "actions"],
          "rest": ["Total portefeuille", fmt_eur(total), plur(len(A), "position", "positions"), ""]},
-        {"title": "Par secteur", "items": S, "nouns": ["secteur", "secteurs"],
-         "rest": ["Total portefeuille", fmt_eur(total), plur(len(S), "secteur", "secteurs"), ""]},
-        {"title": "Revenus / continent", "items": P, "nouns": ["continent", "continents"],
-         "rest": ["Total portefeuille", fmt_eur(total), plur(len(P), "continent", "continents"), ""]},
         {"title": "Par capitalisation", "items": K, "nouns": ["tranche", "tranches"],
          "rest": ["Capitalisation cumulée", _fmt_cap(cap_total) if n_cap else "N/A", plur(n_cap, "société", "sociétés"), "(hors ETF)"]},
     ]
-    # Les noms au singulier/pluriel du « m » (nombre d'actions) viennent du 1er camembert.
+    for _d, _f in zip(don, (A_f, K_f)):
+        _d["f"] = _f
+    don[0]["W"] = [x[2] / total for x in rows]
     payload = json.dumps(don, ensure_ascii=False).replace("</", "<\\/")
     page = _ALLOC4_HTML.replace("__DON__", payload)
-    _r1, _r2 = max(len(A), len(S)), max(len(P), len(K))
-    components.html(page, height=int(2 * (16 + 172) + (_r1 + _r2) * 14 + 14 + 36))
+    # Un seul rang de deux camemberts : hauteur = titre + anneau (~196 px) + une ligne de légende par part.
+    components.html(page, height=int(205 + max(len(A), len(K)) * 16.5 + 14))
 
 
 def _progress_bar_html(pct, gradient, glow_color, texte):
@@ -2959,7 +2842,6 @@ def _progress_bar_html(pct, gradient, glow_color, texte):
         '<div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:0 8px; text-align:center; '
         f'font-size:0.88rem; font-weight:800; color:#0f172a; text-shadow: 0 1px 3px rgba(255,255,255,0.75);">{texte}</div></div>'
     )
-
 
 
 _JAUGE_HTML = r"""
@@ -3215,29 +3097,10 @@ def _fetch_info_full(ticker):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _fetch_info_fallback(ticker):
-    """Repli quand la page « info » de Yahoo ne répond pas (limitation de débit, blocage du serveur) : type de produit,
-    devise et capitalisation via d'autres points d'accès (fast_info / métadonnées de l'historique de cours)."""
-    mc = qt = cur = sector = None
+    """Repli quand la page « info » de Yahoo ne répond pas : type de produit, devise et capitalisation via d'autres
+    points d'accès (fast_info / métadonnées de l'historique de cours)."""
+    mc = qt = cur = None
     tk = yf.Ticker(ticker)
-    # Secteur : la recherche Yahoo renvoie « sector » / « industry » pour les actions, sans la fiche « info ».
-    try:
-        _quotes = None
-        try:
-            _quotes = yf.Search(ticker, max_results=6, news_count=0).quotes
-        except Exception:
-            _quotes = None
-        if not _quotes:
-            import requests as _rq
-            _r = _rq.get("https://query2.finance.yahoo.com/v1/finance/search",
-                         params={"q": ticker, "quotesCount": 6, "newsCount": 0},
-                         headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
-            _quotes = (_r.json() or {}).get("quotes") or []
-        for _q in _quotes:
-            if str(_q.get("symbol", "")).upper() == str(ticker).upper():
-                sector = _q.get("sector") or _q.get("sectorDisp") or None
-                break
-    except Exception:
-        sector = None
     try:
         fi = tk.fast_info
         try:
@@ -3257,23 +3120,14 @@ def _fetch_info_fallback(ticker):
         cur = cur or md.get("currency")
     except Exception:
         pass
-    return {"mc": mc, "qt": qt or "", "cur": cur, "sector": sector}
+    return {"mc": mc, "qt": qt or "", "cur": cur}
 
 def _info_fallback_safe(ticker):
     try:
         return _fetch_info_fallback(ticker)
     except Exception:
-        return {"mc": None, "qt": "", "cur": None, "sector": None}
+        return {"mc": None, "qt": "", "cur": None}
 
-def get_ticker_info(ticker):
-    if not ticker or ticker in _FAILED_TICKERS:
-        return "Autre", "Inconnu"
-    try:
-        d = _fetch_info_full(ticker)
-        return d["sector"], d["country"]
-    except Exception:
-        fb = _info_fallback_safe(ticker)
-        return (fb.get("sector") or ("ETF / Fonds" if fb.get("qt") in _ETF_QUOTE_TYPES else "Autre")), "Inconnu"
 
 def get_ticker_marketcap(ticker):
     """(capitalisation en €, type de produit, devise) ; capitalisation None pour un ETF / si inconnue."""
@@ -3309,7 +3163,7 @@ def _get_ticker_history_real(ticker, start_date_str):
     (au lieu de 5 min : le passé ne change pas, et le dernier point est de toute façon remplacé
     par le cours en direct, lui rafraîchi toutes les 10 min, dans get_portfolio_history_cached).
     Isolée dans sa propre fonction cachée pour pouvoir être préchargée EN MÊME TEMPS que
-    get_live_price / get_ticker_info dans _prefetch_market_data, au lieu d'une deuxième vague
+    get_live_price dans _prefetch_market_data, au lieu d'une deuxième vague
     de requêtes réseau séquentielle lancée plus tard par get_portfolio_history_cached (c'était
     la principale cause de lenteur au premier chargement : deux allers-retours Yahoo Finance
     l'un après l'autre au lieu d'un seul en parallèle)."""
@@ -3334,10 +3188,6 @@ def _get_ticker_history_real(ticker, start_date_str):
 # Mettre _SWR_ENABLED_SETTING à False pour revenir à l'attente au démarrage.
 # ------------------------------------------------------------------
 _SWR_ENABLED_SETTING = True
-# « Rafraîchir toutes les données » : True = la page reste utilisable et affiche les derniers cours
-# connus pendant l'actualisation (bandeau), puis se met à jour toute seule ; False = elle attend
-# les cours frais avant d'afficher quoi que ce soit.
-_MANUAL_REFRESH_IN_BACKGROUND = True
 _MARKET_SNAPSHOT_FILE = "market_snapshot.pkl"
 _MARKET_SNAPSHOT_MAX_AGE = 5 * 86400    # au-delà (ex. après des vacances), l'instantané est ignoré : attente classique plutôt que des chiffres trop anciens
 _MARKET_FRESH_WINDOW = 600              # s : en deçà de la dernière actualisation complète, les caches sont chauds
@@ -3607,7 +3457,7 @@ df_transactions = load_data()
 # ==========================================
 # PRÉCHARGEMENT PARALLÈLE DES DONNÉES DE MARCHÉ
 # ==========================================
-# Les fonctions get_live_price / get_ticker_info sont mises en cache par Streamlit
+# Les fonctions get_live_price sont mises en cache par Streamlit
 # (@st.cache_data), mais restent appelées ticker par ticker, en séquentiel, plus loin
 # dans le script. Sur un cache "froid" (premier chargement, ou après expiration du TTL),
 # cela se traduit par autant d'allers-retours réseau successifs qu'il y a de valeurs,
@@ -3630,14 +3480,14 @@ def _prefetch_market_data(tickers, start_date_str=None, extra_live_tickers=(), g
     results = {"live": {}, "hist": {}}
     if not tickers and not extra_live:
         return results
-    _g_live, _g_info, _g_hist = getters if getters else (get_live_price, get_ticker_info, get_ticker_history)
+    _g_live, _g_info, _g_hist = getters if getters else (get_live_price, None, get_ticker_history)
     # Les 3 types d'appels (prix live, infos secteur/pays, historique complet) sont soumis
     # d'un coup au même pool de threads via submit(), au lieu d'un executor.map() par type
     # exécuté l'un après l'autre : map() attend la fin de tous les tickers avant de rendre la
     # main, donc 3 map() successifs = 3 vagues séquentielles. Avec submit(), les ~3x plus
     # d'appels partent tous en même temps et se recouvrent, ce qui réduit le temps d'attente
     # total au démarrage à froid (cache expiré) au lieu de l'additionner.
-    n_calls = (len(tickers) * (3 if start_date_str else 2) + len(extra_live)) or 1
+    n_calls = (len(tickers) * (2 if start_date_str else 1) + len(extra_live)) or 1
     _n_workers = min(_PREFETCH_MAX_WORKERS, n_calls)
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=_n_workers)
     _jobs = []   # (catégorie, clé, future)
@@ -3646,8 +3496,6 @@ def _prefetch_market_data(tickers, start_date_str=None, extra_live_tickers=(), g
             _jobs.append(("live", t, executor.submit(_g_live, t)))
         for t in extra_live:
             _jobs.append(("live", t, executor.submit(_g_live, t)))
-        for t in tickers:
-            _jobs.append(("info", t, executor.submit(_g_info, t)))
         if start_date_str:
             for t in tickers:
                 _jobs.append(("hist", (t, start_date_str), executor.submit(_g_hist, t, start_date_str)))
@@ -3669,7 +3517,7 @@ _start_date_str_precharge = (
     df_transactions["Date_Heure"].min().normalize().strftime("%Y-%m-%d")
     if not df_transactions.empty else None
 )
-# get_live_price / get_ticker_info / get_ticker_history sont déjà mis en cache par Streamlit
+# get_live_price / get_ticker_history sont déjà mis en cache par Streamlit
 # (10 min / 24 h / 5 min de TTL) : une fois le cache chaud, les relire ne coûte quasiment rien.
 # Mais Streamlit relance TOUT le script à chaque interaction (y compris chaque frappe dans le
 # formulaire "Nouvelle opération", qui est une simple fenêtre @st.dialog et pas un st.form) : sans
@@ -3696,7 +3544,7 @@ if (_tickers_a_precharger or _wl_tickers_alertes) and (_now_ts - _last_prefetch_
             _bg_tickers, _bg_start, _bg_wl = list(_tickers_a_precharger), _start_date_str_precharge, list(_wl_tickers_alertes)
             _swr.begin_refresh(lambda: _prefetch_market_data(
                 _bg_tickers, _bg_start, _bg_wl,
-                getters=(_get_live_price_real, get_ticker_info, _get_ticker_history_real),
+                getters=(_get_live_price_real, None, _get_ticker_history_real),
                 timeout=_SWR_REFRESH_TIMEOUT))
             st.session_state["_last_market_prefetch_ts"] = _now_ts
         except Exception:
@@ -3884,7 +3732,6 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
                     total_achats_historiques = max(0.0, total_achats_historiques - remb_capital)
 
         total_realized_pnl += realized_pnl
-        sector, country = get_ticker_info(ticker)
 
         if total_shares > 0.0001 or abs(realized_pnl) > 0.001 or dividends > 0.001 or total_achats_historiques > 0:
             net_pru = total_invested / total_shares if total_shares > 0.0001 else 0
@@ -3921,8 +3768,6 @@ def compute_portfolio_metrics_cached(df_in, target_datetime=None):
             portfolio_summary.append({
                 "Nom": name_map.get(ticker, ticker),
                 "Ticker": ticker,
-                "Secteur": sector,
-                "Pays": country,
                 "Quantité": round(total_shares, 4),
                 "PRU Net (€)": net_pru,
                 "Prix Actuel (€)": current_price,
@@ -6354,12 +6199,12 @@ def _tab_open(_tab):
 # de conservation de l'état). Les clés ci-dessous sont extraites automatiquement du code de
 # chaque onglet (widgets ayant un key= littéral).
 _TAB_STATE_KEYS = {
-    "tab_overview": ("k_objectif_cible", "apport_prevision_input", "k_objectif_date_debut", "k_objectif_date_fin", "k_suivi_objectif_pas", ),
+    "tab_overview": ("k_objectif_cible", "k_objectif_date_fin", "k_objectif_perf", ),
     "tab_apports": (),
     "tab_positions": ("k_periode_tx", "tx_filter_start", "tx_filter_end", "tx_filter_actions", "tx_filter_types", "tx_filter_montant_min", "tx_filter_montant_max", "act_choice_radio", ),
     "tab_classements": ("k_periode_classements", ),
     "tab_perf": ("k_periode_perf", "k_perf_graph_date_debut", "k_perf_graph_date_fin", "multiselect_indices_benchmarks", ),
-    "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", "k_fond_src", "k_fond_detail", ),
+    "tab_watchlist": ("wl_mgmt_select", "k_wl_zone", "wl_mgmt_action", "k_wl_nom", "k_wl_nom_new", "k_wl_ticker_placeholder", "k_wl_ticker_new", ),
     "tab_simulateur": ("k_horizon_projection", "k_apport_mensuel_projection", "k_perf_annuelle_projection", "k_sim_retrait_montant", "k_sim_retrait_taux_ps", "k_sim_retrait_pea_5ans", "k_rp_depart", "k_rp_impot", "k_rp_retrait", "k_rp_infl", ),
 }
 _tab_objs_by_name = {
@@ -6490,166 +6335,41 @@ if _tab_open(tab_overview):
         # alerte de ce type. N'affiche rien si la watchlist est vide ou si aucune valeur suivie n'a de
         # zone d'achat définie, pour ne pas surcharger le haut du dashboard sans raison. ---
         with st.expander("🎯 Objectif", expanded=True):
-            # --- Valeurs ENREGISTRÉES de l'objectif (fixes tant que l'opérateur ne confirme pas un changement) ---
-            _auj_iso = _today_paris().strftime("%Y-%m-%d")
-            _cfg_dirty = False
-            if not str(app_config.get("objectif_date", "") or ""):
-                app_config["objectif_date"] = _auj_iso          # date de début par défaut = aujourd'hui
-                _cfg_dirty = True
-            if not str(app_config.get("objectif_fin", "") or ""):
-                app_config["objectif_fin"] = f"{_today_paris().year}-12-31"   # fin par défaut = 31/12 de l'année en cours
-                _cfg_dirty = True
-            if _cfg_dirty:
-                _ok_cfg, _err_cfg = save_config(app_config)
-                if not _ok_cfg:
-                    st.warning(_err_cfg)
-
-            def _to_date(v):
-                return pd.Timestamp(str(v)).date()
-
+            # Trois valeurs saisies par l'opérateur et enregistrées dans la config dès qu'elles changent :
+            # valeur totale visée, date de fin et performance annuelle attendue -> apport mensuel nécessaire.
             _cur_target = int(app_config.get("yearly_target", 10000))
-            _cur_apport = int(app_config.get("apport_previsionnel", 0))
-            _cur_debut = _to_date(app_config["objectif_date"])
-            _cur_fin = _to_date(app_config["objectif_fin"])
+            try:
+                _cur_fin = pd.Timestamp(str(app_config.get("objectif_fin") or "")).date()
+            except Exception:
+                _cur_fin = date(_today_paris().year, 12, 31)
+            try:
+                _cur_perf = float(app_config.get("objectif_perf", 7.0))
+            except Exception:
+                _cur_perf = 7.0
 
-            def _reset_objectif_inputs(t, a, d0, d1):
-                st.session_state["k_objectif_cible"] = t
-                st.session_state["apport_prevision_input"] = a
-                st.session_state["k_objectif_date_debut"] = d0
-                st.session_state["k_objectif_date_fin"] = d1
-
-            def _confirmer_objectif():
+            def _sauver_objectif():
                 _t = int(st.session_state.get("k_objectif_cible", _cur_target))
-                _a = int(st.session_state.get("apport_prevision_input", _cur_apport))
-                _d0 = st.session_state.get("k_objectif_date_debut", _cur_debut)
-                _d1 = st.session_state.get("k_objectif_date_fin", _cur_fin)
+                _f = st.session_state.get("k_objectif_date_fin", _cur_fin)
+                _p = float(st.session_state.get("k_objectif_perf", _cur_perf))
                 app_config["yearly_target"] = _t
-                app_config["apport_previsionnel"] = _a
-                app_config["objectif_date"] = _d0.strftime("%Y-%m-%d")
-                app_config["objectif_fin"] = _d1.strftime("%Y-%m-%d")
-                app_config.pop("objectif_v0", None)   # la valeur de départ est désormais déduite de l'historique
+                app_config["objectif_fin"] = _f.strftime("%Y-%m-%d")
+                app_config["objectif_perf"] = _p
                 _ok, _err = save_config(app_config)
                 if not _ok:
                     st.session_state["_objectif_save_err"] = _err
 
             with st.container(border=True):
-                st.markdown("**💰 Objectif & épargne prévue**")
+                st.markdown("**💰 Objectif**")
                 with st.container(key="compact_cols_objectif"):
-                    col_obj_cible, col_obj_epargne = st.columns(2)
-                    _in_target = col_obj_cible.number_input(
-                        "Valeur totale visée (€)",
-                        min_value=0, step=1, value=_cur_target, format="%d",
-                        key="k_objectif_cible",
-                    )
-                    _in_apport = col_obj_epargne.number_input(
-                        "Apport prévisionnel d'ici la date visée (€)",
-                        min_value=0, step=1, value=_cur_apport, format="%d",
-                        key="apport_prevision_input",
-                    )
-                    col_obj_d0, col_obj_d1 = st.columns(2)
-                    _in_debut = col_obj_d0.date_input(
-                        "Date de début", value=_cur_debut, min_value=date(2000, 1, 1), max_value=date(2100, 12, 31),
-                        format="DD/MM/YYYY", key="k_objectif_date_debut",
-                    )
-                    _in_fin = col_obj_d1.date_input(
-                        "Date de l'objectif (fin)", value=_cur_fin, min_value=date(2000, 1, 1), max_value=date(2100, 12, 31),
-                        format="DD/MM/YYYY", key="k_objectif_date_fin",
-                    )
-
-                _pending = (int(_in_target) != _cur_target or int(_in_apport) != _cur_apport
-                            or _in_debut != _cur_debut or _in_fin != _cur_fin)
-                if _pending:
-                    if _in_fin <= _in_debut:
-                        st.error("La date de fin doit être postérieure à la date de début.")
-                        st.button("↩️ Annuler", key="k_objectif_annuler_err", use_container_width=True,
-                                  on_click=_reset_objectif_inputs, args=(_cur_target, _cur_apport, _cur_debut, _cur_fin))
-                    else:
-                        st.warning(
-                            "⚠️ **Voulez-vous vraiment modifier votre objectif ?** Les calculs et le suivi de trajectoire "
-                            "seront recalculés avec ces nouvelles valeurs."
-                        )
-                        _col_oui, _col_non = st.columns(2)
-                        _col_oui.button("✅ Oui, modifier", key="k_objectif_confirmer", type="primary",
-                                        use_container_width=True, on_click=_confirmer_objectif)
-                        _col_non.button("↩️ Annuler", key="k_objectif_annuler", use_container_width=True,
-                                        on_click=_reset_objectif_inputs, args=(_cur_target, _cur_apport, _cur_debut, _cur_fin))
+                    _c1, _c2, _c3 = st.columns(3)
+                    _in_target = _c1.number_input("Valeur visée (€)", min_value=0, step=1, value=_cur_target, format="%d",
+                                                  key="k_objectif_cible", on_change=_sauver_objectif)
+                    _in_fin = _c2.date_input("Date de fin", value=_cur_fin, min_value=date(2000, 1, 1), max_value=date(2100, 12, 31),
+                                             format="DD/MM/YYYY", key="k_objectif_date_fin", on_change=_sauver_objectif)
+                    _in_perf = _c3.number_input("Performance / an (%)", min_value=-50.0, max_value=100.0, value=_cur_perf,
+                                                step=0.5, format="%.1f", key="k_objectif_perf", on_change=_sauver_objectif)
                 if st.session_state.get("_objectif_save_err"):
                     st.warning(st.session_state.pop("_objectif_save_err"))
-
-            # Le reste de la page n'utilise QUE les valeurs enregistrées (les dates de l'objectif sont fixes).
-            new_target = _cur_target
-            apport_prevision = _cur_apport
-
-            # Résultats sous les champs, sur toute la largeur.
-            # La barre de progression et "Restant à atteindre" intègrent l'épargne prévue :
-            # avant ce correctif, seul le texte "Performance requise" tout en bas en tenait
-            # compte, donc modifier ce champ ne faisait quasiment rien bouger visuellement,
-            # ce qui donnait l'impression qu'il ne servait à rien.
-            valeur_projetee = tot_value_globale + apport_prevision
-            prog_pct = (valeur_projetee / new_target * 100) if new_target > 0 else 0
-            prog_pct_clamped = max(0.0, min(prog_pct, 100.0))
-            montant_restant = max(0.0, new_target - valeur_projetee)
-
-            # Performance qu'il reste à réaliser sur les actions déjà en portefeuille pour
-            # combler l'écart à l'objectif, une fois déduit l'apport prévisionnel (qui, lui,
-            # comble l'écart en cash, sans nécessiter de performance boursière).
-            gain_necessaire = new_target - valeur_projetee
-            objectif_deja_couvert = gain_necessaire <= 0 or prog_pct >= 100
-
-            if objectif_deja_couvert:
-                perf_necessaire_pct = 0.0
-                perf_necessaire_str = "0,00 % (déjà couvert)"
-            elif tot_value_actions > 0:
-                perf_necessaire_pct = (gain_necessaire / tot_value_actions) * 100
-                perf_necessaire_str = f"{perf_necessaire_pct:,.2f} %".replace(",", " ").replace(".", ",")
-            else:
-                perf_necessaire_pct = None
-                perf_necessaire_str = "N/A"
-
-            # Repère : rendement moyen des marchés actions sur longue période (~8 %/an), ramené
-            # au temps qu'il reste réellement d'ici la fin de l'année pour rester comparable à
-            # une performance qui, elle, ne porte que sur les mois restants.
-            RENDEMENT_MARCHE_ANNUEL = 8.0
-            today_ts = _today_paris()
-            jours_restants_annee = max((pd.Timestamp(_cur_fin) - pd.Timestamp(today_ts)).days, 1)
-            repere_marche_periode = RENDEMENT_MARCHE_ANNUEL * (jours_restants_annee / 365.0)
-
-            # Le message reflète la difficulté de la PERFORMANCE BOURSIÈRE requise (comparée à
-            # ce repère de marché), pas le % du montant déjà atteint — un objectif rempli à 20 %
-            # peut être trivial à finir si le reste vient d'un apport, et inversement.
-            if objectif_deja_couvert:
-                grad_color = "linear-gradient(90deg, #15803d, #22c55e)"
-                badge = "🎉 Objectif déjà couvert"
-                badge_color = "#15803d"
-                badge_detail = "Votre épargne prévue suffit, sans performance boursière supplémentaire."
-            elif perf_necessaire_pct is None:
-                grad_color = "linear-gradient(90deg, #94a3b8, #cbd5e1)"
-                badge = "❓ Performance indéterminée"
-                badge_color = "#64748b"
-                badge_detail = "Pas encore de valeur en actions pour estimer une performance requise."
-            elif perf_necessaire_pct <= repere_marche_periode * 0.5:
-                grad_color = "linear-gradient(90deg, #16a34a, #4ade80)"
-                badge = "🌊 Objectif très accessible"
-                badge_color = "#16a34a"
-                badge_detail = f"Nettement sous la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
-            elif perf_necessaire_pct <= repere_marche_periode:
-                grad_color = "linear-gradient(90deg, #65a30d, #a3e635)"
-                badge = "🚀 Objectif réaliste"
-                badge_color = "#4d7c0f"
-                badge_detail = f"En ligne avec la moyenne du marché (~{repere_marche_periode:,.1f} % sur la période restante)".replace(",", " ").replace(".", ",")
-            elif perf_necessaire_pct <= repere_marche_periode * 2:
-                grad_color = "linear-gradient(90deg, #f59e0b, #fbbf24)"
-                badge = "⚡ Objectif ambitieux"
-                badge_color = "#d97706"
-                badge_detail = "Nécessite une performance nettement supérieure à la moyenne du marché."
-            else:
-                grad_color = "linear-gradient(90deg, #dc2626, #f87171)"
-                badge = "🔥 Objectif très ambitieux"
-                badge_color = "#dc2626"
-                badge_detail = "Nécessite une performance très supérieure à la moyenne du marché — peu probable en l'état."
-
-            pct_str = f"{prog_pct:,.1f}%".replace(".", ",")
-            pct_suffix = " du montant visé (épargne prévue incluse)" if apport_prevision > 0 else " du montant visé"
 
             def _obj_card(label, value, color, big=False):
                 return (f'<div style="background:{color}14; border:1px solid {color}55; border-radius:12px; padding:8px 4px; '
@@ -6658,137 +6378,55 @@ if _tab_open(tab_overview):
                         f'letter-spacing:0.03em; line-height:1.25;">{label}</div>'
                         f'<div style="font-size:min({"1.3rem" if big else "1.1rem"},{"5vw" if big else "4vw"}); font-weight:800; color:{color}; margin-top:3px; line-height:1.25;">{value}</div></div>')
             _grid = "display:grid; gap:6px; margin-top:8px;"
-            st.markdown(
-                _progress_bar_html(prog_pct, grad_color, badge_color, pct_str + pct_suffix)
-                + f'<div style="{_grid} grid-template-columns:repeat(3,minmax(0,1fr));">'
-                + _obj_card("Actuel", fmt_eur(tot_value_globale), "#0284c7")
-                + _obj_card("Reste à atteindre", fmt_eur(montant_restant), badge_color)
-                + _obj_card("Cible", fmt_eur(new_target), "#4f46e5")
-                + '</div>'
-                + f'<div style="{_grid} grid-template-columns:repeat(2,minmax(0,1fr));">'
-                + _obj_card("Niveau de l'objectif", badge, badge_color, big=True)
-                + _obj_card("Performance requise", perf_necessaire_str, badge_color, big=True)
-                + '</div>',
-                unsafe_allow_html=True
-            )
 
-            # --- Suivi de la trajectoire vers l'objectif : valeur réelle du portefeuille vs valeur attendue sur une
-            # trajectoire linéaire (valeur de départ à la date de début -> cible à la date de fin), jour / semaine / mois / année. ---
-            if new_target > 0 and not df_transactions.empty:
-                # Ligne vide avant le suivi ; titre et sélecteur Jour/Semaine/Mois rapprochés.
+            _jours_obj = (pd.Timestamp(_in_fin) - pd.Timestamp(_today_paris())).days
+            _v0 = float(tot_value_globale)
+            _prog = max(0.0, min((_v0 / _in_target * 100) if _in_target > 0 else 0.0, 100.0))
+            if int(_in_target) <= 0:
+                st.info("Renseignez une valeur visée supérieure à 0.")
+            elif _jours_obj < 15:
+                st.info("La date de fin est trop proche (ou dépassée) pour calculer un apport mensuel.")
+            else:
+                _n = _jours_obj / 30.4375                                   # mois restants
+                _rm = (1.0 + float(_in_perf) / 100.0) ** (1.0 / 12.0) - 1.0   # taux mensuel équivalent
+                _g = (1.0 + _rm) ** _n
+                _sans_apport = _v0 * _g                                      # valeur à la date visée sans nouvel apport
+                _manque = float(_in_target) - _sans_apport
+                if _manque <= 0:
+                    _pmt = 0.0
+                elif abs(_rm) < 1e-9:
+                    _pmt = _manque / _n
+                else:
+                    _pmt = _manque * _rm / (_g - 1.0)
+                if _pmt <= 0:
+                    _coul, _bandeau = "#15803d", "🎉 Objectif atteint sans nouvel apport"
+                    _grad = "linear-gradient(90deg, #15803d, #22c55e)"
+                else:
+                    # Palette selon l'effort demandé : apport mensuel rapporté à la valeur visée (par mois).
+                    _effort = _pmt / float(_in_target) * 100
+                    if _effort <= 0.5:
+                        _coul, _bandeau, _grad = "#16a34a", "🌊 Effort léger", "linear-gradient(90deg, #16a34a, #4ade80)"
+                    elif _effort <= 1.5:
+                        _coul, _bandeau, _grad = "#4d7c0f", "🚀 Effort raisonnable", "linear-gradient(90deg, #65a30d, #a3e635)"
+                    elif _effort <= 3.0:
+                        _coul, _bandeau, _grad = "#d97706", "⚡ Effort soutenu", "linear-gradient(90deg, #f59e0b, #fbbf24)"
+                    else:
+                        _coul, _bandeau, _grad = "#dc2626", "🔥 Effort important", "linear-gradient(90deg, #dc2626, #f87171)"
                 st.markdown(
-                    "<div style='height:18px'></div>"
-                    "<style>.st-key-k_suivi_objectif_pas { margin-top: -0.75rem; }</style>",
+                    _progress_bar_html(_prog, _grad, _coul, f"{_prog:.1f} % de l'objectif".replace(".", ","))
+                    + f'<div style="{_grid} grid-template-columns:repeat(2,minmax(0,1fr));">'
+                    + _obj_card("Apport mensuel nécessaire", fmt_eur(_pmt), _coul, big=True)
+                    + _obj_card("Niveau d'effort", _bandeau, _coul, big=True)
+                    + '</div>'
+                    + f'<div style="{_grid} grid-template-columns:repeat(3,minmax(0,1fr));">'
+                    + _obj_card("Actuel", fmt_eur(_v0), "#0284c7")
+                    + _obj_card("Total à verser", fmt_eur(_pmt * _n), "#4f46e5")
+                    + _obj_card("Sans nouvel apport", fmt_eur(_sans_apport), "#64748b")
+                    + '</div>',
                     unsafe_allow_html=True,
                 )
-                st.markdown("**📅 Suivi de la trajectoire vers l'objectif**")
-                _pas_suivi = st.radio("Pas du suivi", ["Jour", "Semaine", "Mois", "Année"], index=2, horizontal=True,
-                                      key="k_suivi_objectif_pas", label_visibility="collapsed")
-                _h_obj = get_portfolio_history(df_transactions)
-                _serie = _h_obj["Valeur du Portefeuille (€)"].dropna() if "Valeur du Portefeuille (€)" in _h_obj.columns else pd.Series(dtype=float)
-                # Dates FIXES de l'objectif (saisies et confirmées par l'opérateur) : début -> fin.
-                _debut_obj = pd.Timestamp(_cur_debut)
-                _fin_obj = pd.Timestamp(_cur_fin)
-                _jours_obj = max((_fin_obj - _debut_obj).days, 1)
-                _auj = _today_paris()
-                _auj = pd.Timestamp(_auj.year, _auj.month, _auj.day)
-                # Valeur de DÉPART = valeur du portefeuille au DÉBUT de la journée de début, c'est-à-dire à la clôture
-                # de la veille. À défaut d'historique antérieur (premier jour du suivi, ou début dans le futur), on
-                # prend la valeur actuelle.
-                _v0 = float(tot_value_globale)
-                if len(_serie) and _debut_obj <= _auj:
-                    _avant = _serie[_serie.index < _debut_obj]
-                    if len(_avant):
-                        _v0 = float(_avant.iloc[-1])
-                    elif _debut_obj <= _serie.index[0]:
-                        _v0 = float(_serie.iloc[0])
-                _att_fn = lambda d: _v0 + (new_target - _v0) * float(np.clip((d - _debut_obj).days / _jours_obj, 0.0, 1.0))
-
-                # Échéancier COMPLET, de la date de saisie jusqu'au 31/12 : chaque ligne donne la valeur théorique
-                # attendue à la fin de la période. La valeur réelle, l'écart et le statut se remplissent au fil des
-                # jours (périodes terminées + période en cours, avec la valeur du jour).
-                _starts, _ends = [], []
-                if _pas_suivi == "Jour":
-                    _jr = pd.bdate_range(_debut_obj, _fin_obj)
-                    _starts, _ends = list(_jr), list(_jr)
-                elif _pas_suivi == "Semaine":
-                    _cur_d = _debut_obj
-                    while _cur_d <= _fin_obj:
-                        _e = min(_cur_d + pd.Timedelta(days=(6 - _cur_d.weekday())), _fin_obj)
-                        _starts.append(_cur_d); _ends.append(_e)
-                        _cur_d = _e + pd.Timedelta(days=1)
-                elif _pas_suivi == "Mois":
-                    _cur_d = _debut_obj
-                    while _cur_d <= _fin_obj:
-                        _e = min(_cur_d + pd.offsets.MonthEnd(0), _fin_obj)
-                        _starts.append(_cur_d); _ends.append(_e)
-                        _cur_d = _e + pd.Timedelta(days=1)
-                else:  # Année : une ligne par année civile, entre la date de début et la date de fin
-                    _cur_d = _debut_obj
-                    while _cur_d <= _fin_obj:
-                        _e = min(pd.Timestamp(_cur_d.year, 12, 31), _fin_obj)
-                        _starts.append(_cur_d); _ends.append(_e)
-                        _cur_d = _e + pd.Timedelta(days=1)
-
-                _rows_obj = []
-                for _d0, _d1 in zip(_starts, _ends):
-                    _att = _att_fn(_d1)
-                    _att_cmp = _att
-                    _termine = _d1 <= _auj and len(_serie) > 0 and _d1 >= _serie.index[0]
-                    if _d1 <= _auj and len(_serie):
-                        _vr = _serie[_serie.index <= _d1]
-                        _vr = float(_vr.iloc[-1]) if len(_vr) else np.nan
-                    else:
-                        _vr = np.nan
-                    _en_cours = (_d0 <= _auj <= _d1) and not (_d1 <= _auj)
-                    if _en_cours and len(_serie):
-                        # Période (semaine / mois / année) EN COURS : on n'attend pas sa fin. Valeur réelle = valeur
-                        # du jour, comparée à la valeur attendue AUJOURD'HUI sur la trajectoire (et non à celle
-                        # attendue en fin de période, ce qui donnerait un faux « en retard »).
-                        # La colonne « Valeur attendue » affiche, elle, la valeur attendue à la FIN de la période.
-                        _vr = float(_serie.iloc[-1])
-                        _att_cmp = _att_fn(_auj)
-                    _rows_obj.append((_d0, _d1, _att, _vr, _en_cours, _att_cmp))
-
-                def _lab_obj(d0, d1):
-                    if _pas_suivi == "Jour":
-                        return d1.strftime("%d/%m/%Y")
-                    if _pas_suivi == "Semaine":
-                        return f"Sem. {d1.isocalendar()[1]} (au {d1.strftime('%d/%m')})"
-                    if _pas_suivi == "Année":
-                        return str(d1.year) if (d1.month, d1.day) == (12, 31) else f"{d1.year} (au {d1.strftime('%d/%m/%Y')})"
-                    return f"{d1.month:02d}/{d1.year}"
-
-                _lab, _vr_t, _att_t, _ecm_t, _ecp_t, _stat_t, _styles_t = [], [], [], [], [], [], []
-                _focus = None
-                for _k, (_d0, _d1, _att, _vr, _enc, _att_cmp) in enumerate(_rows_obj):
-                    _lab.append(_lab_obj(_d0, _d1))
-                    _att_t.append(fmt_eur(_att))
-                    if not np.isnan(_vr):
-                        _ec = _vr - _att_cmp
-                        _vr_t.append(fmt_eur(_vr)); _ecm_t.append(fmt_eur_arrow(_ec))
-                        _ecp_t.append(fmt_perf_simple(_ec / _att_cmp * 100) if _att_cmp > 0 else "-")
-                        _stat_t.append(("✅ En avance" if _ec >= 0 else "❌ En retard") + (" · en cours" if _enc else ""))
-                    else:
-                        _vr_t.append("-"); _ecm_t.append("-"); _ecp_t.append("-")
-                        _stat_t.append("⏳ En cours" if _enc else "🕒 À venir")
-                    _styles_t.append("background:rgba(2,132,199,0.10);" if _enc else "")
-                    if _d0 <= _auj <= _d1 and _focus is None:
-                        _focus = _k
-                if _focus is None:
-                    # Aucune période en cours (ex. suivi par jour) : on se place sur la première ligne à venir.
-                    _focus = next((k for k, r in enumerate(_rows_obj) if np.isnan(r[3])), None)
-                _tbl_obj = pd.DataFrame({
-                    "Période": _lab, "Valeur réelle": _vr_t, "Valeur attendue": _att_t,
-                    "Écart (€)": _ecm_t, "Écart (%)": _ecp_t, "Statut": _stat_t,
-                })
-                _html_table(
-                    _tbl_obj,
-                    row_styles=_styles_t,
-                    cell_style=lambda c, v: _style_perf_cell(v) if c in ("Écart (€)", "Écart (%)") else "",
-                    max_height=350,   # 10 lignes visibles
-                    focus_row=_focus,
-                )
+                st.caption(f"Sur {_n:.1f} mois".replace(".", ",") + f", à {float(_in_perf):.1f} % par an".replace(".", ",")
+                           + f", en partant de {fmt_eur(_v0)}. Estimation théorique, hors frais et fiscalité.")
 
 # ------------------------------------------
 # ONGLÊT 2 : POSITIONS & TRANSACTIONS
@@ -7419,7 +7057,6 @@ if _tab_open(tab_positions):
                 )
             else:
                 st.info("Aucune donnée disponible pour le classement des gains.")
-
 
 
 # ------------------------------------------
@@ -10257,42 +9894,25 @@ if _tab_open(tab_watchlist):
 PLAFOND_PEA_VERSEMENTS = 150000.0
 
 
-def _sim_stat(label, value, color="#0f172a"):
-    return f'<div class="pea-stat"><div class="k">{label}</div><div class="v" style="color:{color};">{value}</div></div>'
+def _color_card(label, value, color, big=False):
+    """Case colorée (teinte + bordure + valeur de la couleur), utilisée côte à côte comme dans l'objectif."""
+    return (f'<div style="background:{color}14; border:1px solid {color}55; border-radius:12px; padding:8px 4px; '
+            'text-align:center; min-width:0; display:flex; flex-direction:column; justify-content:center;">'
+            f'<div style="font-size:min({"0.74rem" if big else "0.68rem"},{"2.9vw" if big else "2.6vw"}); color:#64748b; text-transform:uppercase; '
+            f'font-weight:700; letter-spacing:0.03em; line-height:1.25;">{label}</div>'
+            f'<div style="font-size:min({"1.3rem" if big else "1.1rem"},{"5vw" if big else "4vw"}); font-weight:800; color:{color}; '
+            f'margin-top:3px; line-height:1.25;">{value}</div></div>')
 
 
-def _sim_stats(*cards, small=False):
-    _n_cartes = max(len(cards), 1)
-    st.markdown(f'<div class="pea-stats{" sm" if small else ""}" style="--n:{_n_cartes};">' + "".join(cards) + "</div>", unsafe_allow_html=True)
-
-
-def _sim_pills(rows):
-    """Lignes pleine largeur « ● libellé ........ valeur » ; rows = (libellé, valeur, point, fond, bordure, texte)."""
-    html = "".join(
-        f'<div class="pea-pill" style="background:{bg}; border:1px solid {bd}; color:{tx};">'
-        f'<span><span style="color:{dot};">●</span> {lab}</span><b>{val}</b></div>'
-        for lab, val, dot, bg, bd, tx in rows
-    )
-    st.markdown(f'<div class="pea-pills">{html}</div>', unsafe_allow_html=True)
-
-
-def _sim_info_box(titre, texte_html):
-    st.markdown(
-        '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:8px 12px 10px 12px; '
-        'margin-top:6px; text-align:center;">'
-        f'<div style="font-size:0.68rem; color:#64748b; text-transform:uppercase; font-weight:700; letter-spacing:0.04em;">{titre}</div>'
-        f'<div style="font-size:0.88rem; font-weight:800; color:#0f172a; margin-top:2px; line-height:1.5;">{texte_html}</div></div>',
-        unsafe_allow_html=True,
-    )
+def _color_cards_row(cards):
+    """Une rangée de cases colorées, toujours côte à côte (y compris sur téléphone)."""
+    return (f'<div style="display:grid; gap:6px; margin-top:8px; grid-template-columns:repeat({max(len(cards), 1)},minmax(0,1fr));">'
+            + "".join(cards) + "</div>")
 
 
 def _fr_num(v, d=2, signed=False):
     """Nombre au format français (espace pour les milliers, virgule décimale)."""
     return f"{v:{'+' if signed else ''},.{d}f}".replace(",", " ").replace(".", ",")
-
-
-def _plural(n, mot="an"):
-    return f"{mot}s" if n >= 2 else mot
 
 
 def _anciennete_et_perf_annualisee():
@@ -10587,19 +10207,24 @@ def _render_sim_retrait():
             grad_color, net_color = "linear-gradient(90deg, #d97706, #fbbf24)", "#d97706"
 
         _fr = lambda v, d=1: _fr_num(v, d)
-        _sim_headline("💵 Montant net perçu", fmt_eur(net_recu), color=net_color)
-        st.markdown(_progress_bar_html(net_pct, grad_color, net_color, f"{_fr(net_pct)} % conservés après fiscalité"), unsafe_allow_html=True)
-        cards = [
-            _sim_stat("Montant demandé", fmt_eur(montant_retrait_souhaite)),
-            _sim_stat(f"Dont capital ({_fr(part_capital_pct, 2)} %)", fmt_eur(part_capital)),
-            _sim_stat(f"Dont plus-value ({_fr(part_pv_pct, 2)} %)", fmt_eur(part_pv)),
-            _sim_stat(f"Prélèvements sociaux ({_fr(taux_ps_pct)} %)", fmt_eur(montant_ps), "#d97706"),
-        ]
-        if not age_plan_plus_5:
-            cards.append(_sim_stat("Impôt sur le revenu (12,8 %)", fmt_eur(montant_ir), "#d97706"))
-        cards.append(_sim_stat("Total fiscalité", fmt_eur(total_taxes), "#d97706"))
-        _sim_stats(*cards)
-
+        st.markdown(
+            _color_cards_row([
+                _color_card("💵 Montant net perçu", fmt_eur(net_recu), net_color, big=True),
+                _color_card("Total fiscalité", fmt_eur(total_taxes), "#dc2626" if total_taxes > 0 else "#64748b", big=True),
+            ])
+            + '<div style="height:8px;"></div>'
+            + _progress_bar_html(net_pct, grad_color, net_color, f"{_fr(net_pct)} % conservés après fiscalité")
+            + _color_cards_row([
+                _color_card("Montant demandé", fmt_eur(montant_retrait_souhaite), "#0284c7"),
+                _color_card(f"Dont capital ({_fr(part_capital_pct, 2)} %)", fmt_eur(part_capital), "#4f46e5"),
+                _color_card(f"Dont plus-value ({_fr(part_pv_pct, 2)} %)", fmt_eur(part_pv), "#10b981"),
+            ])
+            + _color_cards_row(
+                [_color_card(f"Prélèvements sociaux ({_fr(taux_ps_pct)} %)", fmt_eur(montant_ps), "#d97706")]
+                + ([] if age_plan_plus_5 else [_color_card("Impôt sur le revenu (12,8 %)", fmt_eur(montant_ir), "#dc2626")])
+            ),
+            unsafe_allow_html=True,
+        )
 
 if _tab_open(tab_simulateur):
     with tab_simulateur:
