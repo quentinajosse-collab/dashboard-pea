@@ -5831,6 +5831,12 @@ with col_toggles:
             st.markdown("---")
             st.markdown("**📥 Import (CSV)**")
             st.caption("Le fichier importé doit avoir exactement les mêmes colonnes que l'export CSV.")
+            st.warning(
+                "⚠️ **L'import peut écraser tes données.** Avec « Remplacer entièrement », toutes tes transactions "
+                "actuelles sont supprimées puis remplacées par le contenu du fichier. "
+                "Fais d'abord un export CSV si tu veux une sauvegarde."
+            )
+            st.caption("Une fois le fichier envoyé, choisis l'option ci-dessous puis appuie sur le bouton « OK » qui apparaît juste en dessous.")
             _csv_uploaded = st.file_uploader(
                 "Importer un CSV de transactions", type=["csv"], key="import_csv_uploader"
             )
@@ -5846,13 +5852,31 @@ with col_toggles:
                         df_csv_import["Date_Rompus"] = pd.to_datetime(
                             df_csv_import["Date_Rompus"], errors="coerce"
                         )
-                        st.write(f"{len(df_csv_import)} lignes détectées dans le fichier.")
+                        _n_new = len(df_csv_import)
+                        _n_old = len(df_transactions)
+                        st.write(f"📄 {_n_new} lignes détectées dans le fichier (tu as actuellement {_n_old} transactions enregistrées).")
                         _import_mode = st.radio(
                             "Que faire de ces lignes ?",
                             ["Ajouter à mes transactions existantes", "Remplacer entièrement mes transactions"],
                             key="import_csv_mode",
                         )
-                        if st.button("Confirmer l'import", key="import_csv_confirm", type="primary"):
+                        _is_add = _import_mode.startswith("Ajouter")
+                        if _is_add:
+                            st.info(
+                                f"Les {_n_new} lignes seront ajoutées à tes {_n_old} transactions. "
+                                "Si ce fichier vient de ton propre export, elles apparaîtront en double : "
+                                "choisis plutôt « Remplacer entièrement »."
+                            )
+                        else:
+                            st.error(
+                                f"⚠️ Cela va ÉCRASER tes {_n_old} transactions actuelles : elles seront supprimées et "
+                                f"remplacées par les {_n_new} lignes de ce fichier. Action définitive."
+                            )
+                        _btn_label = (
+                            f"✅ OK — ajouter ces {_n_new} lignes" if _is_add
+                            else f"✅ OK — écraser mes {_n_old} transactions"
+                        )
+                        if st.button(_btn_label, key="import_csv_confirm", type="primary", use_container_width=True):
                             if _import_mode.startswith("Ajouter"):
                                 df_transactions_new = pd.concat(
                                     [df_transactions, df_csv_import], ignore_index=True
