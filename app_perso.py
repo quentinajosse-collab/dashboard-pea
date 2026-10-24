@@ -5067,6 +5067,50 @@ def dialog_simulation_operation():
                 ("⚖️ Poids dans le portefeuille", f"{poids_avant:,.2f} %".replace(".", ","), f"{poids_apres:,.2f} %".replace(".", ","), d_poids, c_poids),
             ])
 
+            # --- Transfert de la simulation vers une VRAIE opération ---
+            # Si la simulation est cohérente, un clic ouvre « Nouvelle opération » déjà pré-remplie
+            # (type, valeur, quantité, prix, commission et, pour un achat, TTF) : il ne reste plus
+            # qu'à saisir la date et l'heure réelles de la transaction. Une vente supérieure au
+            # nombre de titres détenus n'est pas transférable (la simulation affiche déjà l'erreur).
+            _transfert_possible = (type_wi == "Achat") or (qte_wi <= qte_avant + 1e-9)
+            if _transfert_possible:
+                st.markdown("<hr style='margin:14px 0;'>", unsafe_allow_html=True)
+                st.caption(
+                    "La simulation vous semble cohérente ? Transférez-la vers une vraie "
+                    + ("opération d'achat" if type_wi == "Achat" else "opération de vente")
+                    + " : quantité, prix, commission"
+                    + (" et TTF" if type_wi == "Achat" else "")
+                    + " seront déjà renseignés, il ne restera qu'à saisir la date et l'heure."
+                )
+                if st.button(
+                    "➡️ Transférer vers une vraie " + ("opération d'achat" if type_wi == "Achat" else "opération de vente"),
+                    key="btn_whatif_transfer", type="primary", use_container_width=True,
+                ):
+                    _ss_tr = st.session_state
+                    _op_tr = "ACHAT" if type_wi == "Achat" else "VENTE"
+                    _pre_tr = "k_achat" if _op_tr == "ACHAT" else "k_vente"
+                    _noms_valides_tr = _all_actions_historique_precalc if _op_tr == "ACHAT" else _actions_possedees_precalc
+                    # Même principe que le pré-remplissage depuis un document du courtier : on remet
+                    # d'abord tous les champs du formulaire à zéro (dont date et heure, laissées vides
+                    # pour que l'opérateur les renseigne), puis on y met les valeurs de la simulation.
+                    for _k_tr in _IMPORT_TEXT_KEYS:
+                        _ss_tr[_k_tr] = ""
+                    for _k_tr in _IMPORT_OTHER_KEYS:
+                        _ss_tr[_k_tr] = None
+                    _ss_tr["k_op_type"] = _op_tr
+                    if pos_existante is not None and nom_wi in _noms_valides_tr:
+                        _ss_tr[f"{_pre_tr}_nom"] = nom_wi  # « Nouvelle valeur » : nom et ticker restent à saisir
+                    _ss_tr[f"{_pre_tr}_qty"] = float(qte_wi)
+                    _ss_tr[f"{_pre_tr}_prix"] = float(prix_wi)
+                    _ss_tr[f"{_pre_tr}_comm"] = float(commission_wi)
+                    if _op_tr == "ACHAT" and ttf_wi > 0:
+                        _ss_tr["k_achat_ttf"] = float(ttf_wi)
+                    if _DIALOG_SUPPORTS_DISMISS:
+                        _ss_tr["_op_dialog_open"] = True
+                        st.rerun()
+                    else:
+                        st.success("✅ Infos transférées : fermez cette fenêtre puis ouvrez « ➕ Nouvelle opération » (déjà pré-remplie).")
+
     elif type_wi == "Achat/Vente":
         # --- Simulation d'un ALLER-RETOUR achat puis revente ---
         # Autonome, sans lien avec une position déjà en portefeuille : on part d'un prix
@@ -5829,8 +5873,8 @@ with col_toggles:
             )
 
             st.markdown("---")
-            st.markdown("**📥 Import (CSV)**")
-            st.caption("Le fichier importé doit avoir exactement les mêmes colonnes que l'export CSV.")
+            st.markdown("**📥 Import (CSV ou Excel)**")
+            st.caption("Formats acceptés : CSV, Excel (.xlsx, .xls). Le fichier doit avoir exactement les mêmes colonnes que l'export CSV.")
             st.warning(
                 "⚠️ **L'import peut écraser tes données.** Avec « Remplacer entièrement », toutes tes transactions "
                 "actuelles sont supprimées puis remplacées par le contenu du fichier. "
@@ -5838,11 +5882,14 @@ with col_toggles:
             )
             st.caption("Une fois le fichier envoyé, choisis l'option ci-dessous puis appuie sur le bouton « OK » qui apparaît juste en dessous.")
             _csv_uploaded = st.file_uploader(
-                "Importer un CSV de transactions", type=["csv"], key="import_csv_uploader"
+                "Importer un fichier de transactions", type=["csv", "xlsx", "xls"], key="import_csv_uploader"
             )
             if _csv_uploaded is not None:
                 try:
-                    df_csv_import = pd.read_csv(_csv_uploaded)
+                    if _csv_uploaded.name.lower().endswith((".xlsx", ".xls")):
+                        df_csv_import = pd.read_excel(_csv_uploaded)
+                    else:
+                        df_csv_import = pd.read_csv(_csv_uploaded)
                     _missing_cols = [c for c in _TRANSAC_COLUMNS if c not in df_csv_import.columns]
                     if _missing_cols:
                         st.error(f"Colonnes manquantes dans le fichier : {', '.join(_missing_cols)}")
@@ -5890,6 +5937,12 @@ with col_toggles:
                                 st.rerun()
                             else:
                                 st.error(err_save)
+                except ImportError as e:
+                    st.error(
+                        "Lecture Excel impossible : il manque une bibliothèque sur le serveur "
+                        "(ajoute `openpyxl` pour .xlsx, et `xlrd` pour .xls, dans requirements.txt). "
+                        f"Détail : {e}"
+                    )
                 except Exception as e:
                     st.error(f"Erreur lors de la lecture du fichier : {e}")
 
