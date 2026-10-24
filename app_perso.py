@@ -7180,50 +7180,14 @@ if _tab_open(tab_apports):
                     customdata=[fmt_eur(v) for v in _cumul.values],
                     hovertemplate="<b>%{x|%d/%m/%Y}</b><br>Apports nets cumulés : %{customdata}<extra></extra>",
                 ))
-                # Droite de tendance : régression linéaire des apports nets cumulés (elle « moyenne » le
-                # rythme des versements), prolongée sur 5 ans pour estimer le cumul futur au même rythme.
-                _val_proj_5a = None
-                try:
-                    if len(_cumul) >= 30 and float(_cumul.values[-1]) > 0:
-                        _t0 = _cumul.index[0]
-                        _xj = np.asarray((_cumul.index - _t0).days, dtype=float)
-                        _pente, _ordo = np.polyfit(_xj, _cumul.values.astype(float), 1)
-                        _tend = lambda idx: np.maximum(0.0, _pente * np.asarray((idx - _t0).days, dtype=float) + _ordo)
-                        _d_fin = _cumul.index[-1]
-                        _d_proj = _d_fin + pd.DateOffset(years=5)
-                        _idx_fit = pd.date_range(_t0, _d_fin, periods=min(len(_cumul), 120))
-                        _idx_proj = pd.date_range(_d_fin, _d_proj, periods=61)
-                        _y_fit, _y_proj = _tend(_idx_fit), _tend(_idx_proj)
-                        _val_proj_5a = float(_y_proj[-1])
-                        _col_tend = "#0e7490"
-                        fig_ap.add_trace(go.Scatter(
-                            x=_idx_fit, y=_y_fit, mode="lines", name="Tendance",
-                            line=dict(color=_col_tend, width=2, shape="linear"),
-                            hoverinfo="skip", showlegend=False,
-                        ))
-                        fig_ap.add_trace(go.Scatter(
-                            x=_idx_proj, y=_y_proj, mode="lines", name="Estimation à 5 ans",
-                            line=dict(color=_col_tend, width=2.5, dash="dash", shape="linear"),
-                            customdata=[fmt_eur(v) for v in _y_proj], showlegend=False,
-                            hovertemplate="<b>%{x|%d/%m/%Y}</b><br>Estimation (tendance linéaire) : %{customdata}<extra></extra>",
-                        ))
-                        fig_ap.add_trace(go.Scatter(
-                            x=[_idx_proj[-1]], y=[_val_proj_5a], mode="markers+text", name="",
-                            marker=dict(color=_col_tend, size=9, line=dict(color="#ffffff", width=2)),
-                            text=[f"≈ {fmt_eur(_val_proj_5a)} en {_d_proj.year}"], textposition="top left",
-                            textfont=dict(color=_col_tend, size=12), cliponaxis=False,
-                            hoverinfo="skip", showlegend=False,
-                        ))
-                except Exception:
-                    _val_proj_5a = None  # pas assez de recul pour une tendance fiable : on garde la courbe seule
-                if max(_net_total, _val_proj_5a or 0.0) >= 0.6 * PLAFOND_APPORTS:
+                if _net_total >= 0.6 * PLAFOND_APPORTS:
                     fig_ap.add_hline(
                         y=PLAFOND_APPORTS, line_dash="dot", line_color="#d97706", line_width=1.5,
                         annotation_text="Plafond PEA", annotation_position="top left",
                         annotation_font_color="#d97706",
                     )
                 fig_ap.update_layout(
-                    height=340, margin=dict(l=8, r=16, t=20, b=8), hovermode="x", showlegend=False,
+                    height=340, margin=dict(l=8, r=16, t=20, b=8), hovermode="x",
                     yaxis=dict(title="", rangemode="tozero", tickformat=",.0f", ticksuffix=" €", automargin=True, nticks=6),
                     xaxis=dict(title="", tickformat="%m/%y", showgrid=False, nticks=5, automargin=True),
                 )
