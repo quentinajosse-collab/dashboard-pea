@@ -8,3 +8,5 @@ python-dateutil
 supabase
 pdfplumber
 anthropic
+openpyxl
+xlrd
