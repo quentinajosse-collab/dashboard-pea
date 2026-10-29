@@ -8360,6 +8360,8 @@ if _tab_open(tab_perf):
 
                         final_values = {}
                         bench_series = {}
+                        niveaux_deb = {}
+                        niveaux_fin = {}
 
                         # Récupère l'historique de TOUS les indices sélectionnés en parallèle
                         # (comme le préchargement des cours en tout début de script) plutôt qu'un
@@ -8386,6 +8388,8 @@ if _tab_open(tab_perf):
                                     b_aligned = b_hist.reindex(sub_history_graph.index).ffill().bfill()
                                     if not b_aligned.empty and b_aligned.iloc[0] > 0:
                                         b_perf = ((b_aligned - b_aligned.iloc[0]) / b_aligned.iloc[0]) * 100
+                                        niveaux_deb[name] = float(b_aligned.iloc[0])
+                                        niveaux_fin[name] = float(b_aligned.iloc[-1])
                                     else:
                                         b_perf = pd.Series(0.0, index=sub_history_graph.index)
                                 except Exception:
@@ -8404,6 +8408,8 @@ if _tab_open(tab_perf):
                             _val_fin_r = float(_val_c_s.iloc[-1])
                             _gain_r = float((_val_c_s.iloc[-1] - _app_c_s.iloc[-1]) - (0.0 if _periode_complete else (base_val - base_app)))
                             _apports_r = float(_app_c_s.iloc[-1] - base_app)
+                            niveaux_deb["Mon Portefeuille"] = _val_deb_r
+                            niveaux_fin["Mon Portefeuille"] = _val_fin_r
                             _col_r = "#16a34a" if perf_port_selection > 0.005 else ("#dc2626" if perf_port_selection < -0.005 else "#64748b")
 
                             def _perf_carte(_lbl, _val, _coul, _sous=""):
@@ -8426,8 +8432,6 @@ if _tab_open(tab_perf):
                                     + '</div>',
                                     unsafe_allow_html=True,
                                 )
-                                if abs(_apports_r) >= 0.5:
-                                    st.caption(f"ℹ️ Dont {fmt_eur(_apports_r)} d'apports nets versés pendant la période (exclus de la performance).")
 
                         # Longue période : on n'affiche qu'environ 600 points (un point sur N, dernier point toujours
                         # conservé) — la courbe reste fidèle mais n'est plus hachée/écrasée par des milliers de points.
@@ -8524,28 +8528,44 @@ if _tab_open(tab_perf):
                             apply_chart_theme(fig)
                             _plotly_chart(fig, use_container_width=True, theme=None)
 
-                        nb_curves = len(benchmarks)
-                        # Toujours en colonne (vertical) : l'ancien passage en "row" (horizontal) à
-                        # partir de 5 indices rendait la légende illisible en pratique. Au lieu de ça,
-                        # à partir de 5 indices sélectionnés, on garde la disposition verticale mais on
-                        # limite la hauteur du bloc avec une scrollbar plutôt que de tout compresser.
-                        item_margin = "margin-bottom: 6px;"
-                        legend_scroll_style = "max-height: 210px; overflow-y: auto; padding-right: 4px;" if nb_curves >= 5 else ""
+                        # Petit tableau compact (tient dans une largeur de téléphone) : indice (couleur du graphique),
+                        # niveau aux deux dates de la période, performance (vert / rouge).
+                        def _fmt_niv(_n, _v):
+                            if _v is None or pd.isna(_v):
+                                return "–"
+                            if _n == "Mon Portefeuille":
+                                return f"{_v:,.0f} €".replace(",", " ")
+                            return f"{_v:,.0f}".replace(",", " ")
 
-                        legend_html_items = []
+                        _th = "padding:6px 4px; font-size:min(0.68rem,2.7vw); font-weight:700; color:#64748b; text-align:right; white-space:nowrap;"
+                        _td = "padding:6px 4px; font-size:min(0.78rem,3.1vw); text-align:right; color:#334155; white-space:nowrap; border-top:1px solid #f1f5f9;"
+                        _rows_leg = []
                         for name, data in benchmarks.items():
                             c_col = data[1]
                             v_end = final_values.get(name, 0.0)
-                            v_end_txt = f"{_arrow_sym(v_end)} {v_end:+,.2f}".replace(",", " ").replace(".", ",")
-                            legend_html_items.append(f"<div style='display: flex; justify-content: space-between; align-items: center; {item_margin} font-size: 0.85rem;'><span style='display: inline-flex; align-items: center;'><span style='height: 10px; width: 10px; background-color: {c_col}; display: inline-block; border-radius: 50%; margin-right: 6px;'></span><b style='color: #1e293b;'>{name}</b></span><span style='color: {c_col}; font-weight: bold; margin-left: 10px;'>{v_end_txt} %</span></div>")
-                    
+                            _perf_col = "#16a34a" if v_end > 0.005 else ("#dc2626" if v_end < -0.005 else "#64748b")
+                            v_end_txt = f"{_arrow_sym(v_end)} {v_end:+,.2f} %".replace(",", " ").replace(".", ",")
+                            _rows_leg.append(
+                                "<tr>"
+                                f"<td style=\"{_td} text-align:left; white-space:normal; font-weight:700; color:{c_col};\">"
+                                f"<span style=\"display:inline-block; width:8px; height:8px; border-radius:50%; background:{c_col}; margin-right:5px;\"></span>{name}</td>"
+                                f"<td style=\"{_td}\">{_fmt_niv(name, niveaux_deb.get(name))}</td>"
+                                f"<td style=\"{_td}\">{_fmt_niv(name, niveaux_fin.get(name))}</td>"
+                                f"<td style=\"{_td} font-weight:800; color:{_perf_col};\">{v_end_txt}</td>"
+                                "</tr>"
+                            )
+
                         placeholder_legende.markdown(
-                            f"""
-                        <div style="font-size: 0.85rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;">Légende</div>
-                        <div style="background-color: #ffffff; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; display: flex; flex-direction: column; {legend_scroll_style}">
-                            {''.join(legend_html_items)}
-                        </div>
-                        """,
+                            "<div style=\"background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:6px 8px; margin-top:4px;\">"
+                            "<table style=\"width:100%; border-collapse:collapse; table-layout:auto;\">"
+                            "<thead><tr>"
+                            f"<th style=\"{_th} text-align:left;\">Indice</th>"
+                            f"<th style=\"{_th}\">{graph_date_debut:%d/%m/%y}</th>"
+                            f"<th style=\"{_th}\">{graph_date_fin:%d/%m/%y}</th>"
+                            f"<th style=\"{_th}\">Perf.</th>"
+                            "</tr></thead><tbody>"
+                            + "".join(_rows_leg)
+                            + "</tbody></table></div>",
                             unsafe_allow_html=True
                         )
                     else:
