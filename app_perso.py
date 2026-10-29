@@ -8149,6 +8149,10 @@ if _tab_open(tab_saisonnalite):
 # ------------------------------------------
 if _tab_open(tab_perf):
     with tab_perf:
+        # Renseignées par le graphique ci-dessous (période choisie) et réutilisées par le tableau comparatif.
+        perf_port_selection = None
+        _perf_sel_idx = None
+        _perf_sel_bornes = None
         with st.expander("📈 Graphique de Performance Comparée (%)", expanded=True):
             if not df_transactions.empty:
                 history_data = get_portfolio_history(df_transactions)
@@ -8185,49 +8189,70 @@ if _tab_open(tab_perf):
                     _default_perf_date_fin = min(max(_default_perf_date_fin, min_graph_date), max_graph_date)
 
                     st.markdown("##### 🗓️ Période affichée")
+                    # Le sélecteur sert de raccourci : il remplit les deux dates ci-dessous. Modifier une date à
+                    # la main bascule automatiquement le sélecteur sur « Période personnalisée ».
+                    _perf_max_picker = max(max_graph_date, _today_paris().date())
+
+                    def _perf_dates_preset(_lbl):
+                        _deb = periode_debut(_lbl)
+                        _d0 = _default_perf_date_debut if _deb is None else min(max(_deb.date(), min_graph_date), max_graph_date)
+                        return _d0, _default_perf_date_fin
+
+                    def _perf_vers_perso():
+                        st.session_state["k_periode_perf"] = "Période personnalisée"
+
                     periode_perf = st.selectbox(
                         "Période", _PERIODES_PRESETS + ["Période personnalisée"],
                         index=len(_PERIODES_PRESETS) - 1, key="k_periode_perf",
-                        help="Par défaut : du premier achat du PEA jusqu'à aujourd'hui. La performance est recalculée à partir de 0% au début de la période, pour votre portefeuille et pour les indices comparés."
+                        help="Par défaut : du premier achat du PEA jusqu'à aujourd'hui. Choisissez un raccourci ou saisissez directement les deux dates ci-dessous. La performance est recalculée à partir de 0% au début de la période, pour votre portefeuille et pour les indices comparés."
                     )
                     if periode_perf == "Période personnalisée":
-                        with st.container(key="compact_cols_perf_dates"):
-                            col_perf_date1, col_perf_date2 = st.columns(2)
-                            with col_perf_date1:
-                                graph_date_debut = st.date_input(
-                                    "Date de début",
-                                    value=_default_perf_date_debut,
-                                    min_value=min_graph_date,
-                                    max_value=max_graph_date,
-                                    format="DD-MM-YYYY",
-                                    key="k_perf_graph_date_debut",
-                                )
-                            with col_perf_date2:
-                                graph_date_fin = st.date_input(
-                                    "Date de fin",
-                                    value=_default_perf_date_fin,
-                                    min_value=min_graph_date,
-                                    max_value=max_graph_date,
-                                    format="DD-MM-YYYY",
-                                    key="k_perf_graph_date_fin",
-                                )
+                        for _k_pd, _dflt_pd in (("k_perf_graph_date_debut", _default_perf_date_debut),
+                                                ("k_perf_graph_date_fin", _default_perf_date_fin)):
+                            _v_pd = st.session_state.get(_k_pd, _dflt_pd)
+                            if isinstance(_v_pd, datetime):
+                                _v_pd = _v_pd.date()
+                            if not isinstance(_v_pd, date):
+                                _v_pd = _dflt_pd
+                            st.session_state[_k_pd] = min(max(_v_pd, min_graph_date), _perf_max_picker)
                     else:
-                        _deb_perf = periode_debut(periode_perf)
-                        if _deb_perf is None:
-                            graph_date_debut = _default_perf_date_debut
-                        else:
-                            graph_date_debut = min(max(_deb_perf.date(), min_graph_date), max_graph_date)
-                        graph_date_fin = _default_perf_date_fin
+                        (st.session_state["k_perf_graph_date_debut"],
+                         st.session_state["k_perf_graph_date_fin"]) = _perf_dates_preset(periode_perf)
+
+                    with st.container(key="compact_cols_perf_dates"):
+                        col_perf_date1, col_perf_date2 = st.columns(2)
+                        with col_perf_date1:
+                            graph_date_debut = st.date_input(
+                                "Date de début",
+                                min_value=min_graph_date,
+                                max_value=_perf_max_picker,
+                                format="DD-MM-YYYY",
+                                key="k_perf_graph_date_debut",
+                                on_change=_perf_vers_perso,
+                            )
+                        with col_perf_date2:
+                            graph_date_fin = st.date_input(
+                                "Date de fin",
+                                min_value=min_graph_date,
+                                max_value=_perf_max_picker,
+                                format="DD-MM-YYYY",
+                                key="k_perf_graph_date_fin",
+                                on_change=_perf_vers_perso,
+                            )
+                    # Pas de données au-delà du dernier jour de l'historique.
+                    graph_date_debut = min(graph_date_debut or _default_perf_date_debut, max_graph_date)
+                    graph_date_fin = min(graph_date_fin or _default_perf_date_fin, max_graph_date)
                     if graph_date_debut > graph_date_fin:
                         st.warning("⚠️ La date de début est postérieure à la date de fin : les deux bornes ont été inversées.")
                         graph_date_debut, graph_date_fin = graph_date_fin, graph_date_debut
+                    placeholder_resume_perf = st.empty()   # valeurs début / fin + performance (remplie plus bas)
 
                     dt_graph_start = pd.Timestamp(graph_date_debut)
                     dt_graph_end = pd.Timestamp(graph_date_fin)
                     sub_history_graph = history_data_clean.loc[(history_data_clean.index >= dt_graph_start) & (history_data_clean.index <= dt_graph_end)].copy()
 
                     if not sub_history_graph.empty:
-                        base_row_idx = history_data_clean.index.get_indexer([dt_graph_start], method='pad')[0]
+                        base_row_idx = max(int(history_data_clean.index.get_indexer([dt_graph_start], method='pad')[0]), 0)
                         base_val = history_data_clean.iloc[base_row_idx]["Valeur du Portefeuille (€)"]
                         base_app = history_data_clean.iloc[base_row_idx]["Apports Cumulés (€)"]
                     
@@ -8369,6 +8394,40 @@ if _tab_open(tab_perf):
                             bench_series[name] = b_perf
                             if not b_perf.empty:
                                 final_values[name] = b_perf.iloc[-1]
+
+                        # Résumé de la période : valeur du portefeuille aux deux dates + performance (même base que la courbe).
+                        perf_port_selection = final_values.get("Mon Portefeuille")
+                        _perf_sel_idx = sub_history_graph.index
+                        _perf_sel_bornes = (graph_date_debut, graph_date_fin)
+                        if perf_port_selection is not None and not pd.isna(perf_port_selection):
+                            _val_deb_r = float(base_val)
+                            _val_fin_r = float(_val_c_s.iloc[-1])
+                            _gain_r = float((_val_c_s.iloc[-1] - _app_c_s.iloc[-1]) - (0.0 if _periode_complete else (base_val - base_app)))
+                            _apports_r = float(_app_c_s.iloc[-1] - base_app)
+                            _col_r = "#16a34a" if perf_port_selection > 0.005 else ("#dc2626" if perf_port_selection < -0.005 else "#64748b")
+
+                            def _perf_carte(_lbl, _val, _coul, _sous=""):
+                                return (f'<div style="background:{_coul}14; border:1px solid {_coul}55; border-radius:12px; padding:8px 4px; '
+                                        'text-align:center; min-width:0;">'
+                                        f'<div style="font-size:min(0.68rem,2.6vw); color:#64748b; text-transform:uppercase; font-weight:700; '
+                                        f'letter-spacing:0.03em; line-height:1.25;">{_lbl}</div>'
+                                        f'<div style="font-size:min(1.1rem,4vw); font-weight:800; color:{_coul}; margin-top:3px; line-height:1.25;">{_val}</div>'
+                                        + (f'<div style="font-size:min(0.7rem,2.8vw); font-weight:600; color:{_coul};">{_sous}</div>' if _sous else '')
+                                        + '</div>')
+
+                            _perf_txt_r = f"{_arrow_sym(perf_port_selection)} {perf_port_selection:+,.2f} %".replace(",", " ").replace(".", ",")
+                            _gain_txt_r = ("+" if _gain_r > 0.005 else "") + fmt_eur(_gain_r)
+                            with placeholder_resume_perf.container():
+                                st.markdown(
+                                    '<div style="display:grid; gap:6px; margin-top:4px; grid-template-columns:repeat(3,minmax(0,1fr));">'
+                                    + _perf_carte(f"Valeur au {graph_date_debut:%d/%m/%Y}", fmt_eur(_val_deb_r), "#0284c7")
+                                    + _perf_carte(f"Valeur au {graph_date_fin:%d/%m/%Y}", fmt_eur(_val_fin_r), "#0284c7")
+                                    + _perf_carte("Performance", _perf_txt_r, _col_r, _gain_txt_r)
+                                    + '</div>',
+                                    unsafe_allow_html=True,
+                                )
+                                if abs(_apports_r) >= 0.5:
+                                    st.caption(f"ℹ️ Dont {fmt_eur(_apports_r)} d'apports nets versés pendant la période (exclus de la performance).")
 
                         # Longue période : on n'affiche qu'environ 600 points (un point sur N, dernier point toujours
                         # conservé) — la courbe reste fidèle mais n'est plus hachée/écrasée par des milliers de points.
@@ -8586,6 +8645,7 @@ if _tab_open(tab_perf):
                             gain_yr = (act_yr_f - inv_yr_f) - (act_yr_i - inv_yr_i) + (real_yr_f - real_yr_i) + (div_yr_f - div_yr_i)
                             perf_port_annee = (gain_yr / base_yr) * 100 if base_yr > 0 else 0.0
 
+                            _col_sel = (perf_port_selection is not None and _perf_sel_idx is not None and _perf_sel_bornes is not None)
                             comparison_data = []
                             comparison_data.append({
                                 "Indice / Actif": "Mon Portefeuille",
@@ -8593,7 +8653,8 @@ if _tab_open(tab_perf):
                                 "Performance de la semaine (%)": perf_port_semaine,
                                 "Performance du mois (%)": perf_port_mois,
                                 "Performance de l'année (%)": perf_port_annee,
-                                "Performance globale (%)": perf_port_comp
+                                "Performance globale (%)": perf_port_comp,
+                                "Performance période (%)": perf_port_selection if _col_sel else np.nan
                             })
 
                             # Même principe que pour le graphique : on récupère l'historique des 9
@@ -8605,6 +8666,7 @@ if _tab_open(tab_perf):
                                 list(_ex.map(lambda t: get_benchmark_history(t, _mh_start, _mh_end), tickers_benchmarks.values()))
 
                             for bench_name, ticker_sym in tickers_benchmarks.items():
+                                b_pers = np.nan
                                 try:
                                     b_hist = get_benchmark_history(
                                         ticker_sym,
@@ -8649,6 +8711,15 @@ if _tab_open(tab_perf):
                                     else:
                                         b_annee = 0.0
 
+                                    # Période sélectionnée : même méthode que la courbe du graphique (valeurs alignées sur
+                                    # les jours de l'historique du portefeuille, première et dernière valeur de la période).
+                                    if _col_sel:
+                                        _b_sel = b_clean[(b_clean.index >= pd.Timestamp(_perf_sel_bornes[0]))
+                                                         & (b_clean.index < pd.Timestamp(_perf_sel_bornes[1]) + pd.Timedelta(days=1))]
+                                        _b_al = _b_sel.reindex(_perf_sel_idx).ffill().bfill()
+                                        if not _b_al.empty and _b_al.iloc[0] > 0:
+                                            b_pers = (_b_al.iloc[-1] / _b_al.iloc[0] - 1) * 100
+
                                 except Exception:
                                     b_perf, b_jour, b_sem, b_mois, b_annee = 0.0, "N/A", 0.0, 0.0, 0.0
 
@@ -8658,7 +8729,8 @@ if _tab_open(tab_perf):
                                     "Performance de la semaine (%)": b_sem,
                                     "Performance du mois (%)": b_mois,
                                     "Performance de l'année (%)": b_annee,
-                                    "Performance globale (%)": b_perf
+                                    "Performance globale (%)": b_perf,
+                                    "Performance période (%)": b_pers
                                 })
 
                             df_comp_res = pd.DataFrame(comparison_data)
@@ -8668,9 +8740,11 @@ if _tab_open(tab_perf):
                             df_comp_res["Performance du mois"] = df_comp_res["Performance du mois (%)"].apply(lambda x: fmt_perf_simple(x))
                             df_comp_res["Performance de l'année"] = df_comp_res["Performance de l'année (%)"].apply(lambda x: fmt_perf_simple(x))
                             df_comp_res["Performance globale"] = df_comp_res["Performance globale (%)"].apply(lambda x: fmt_perf_simple(x))
+                            df_comp_res["Période sélectionnée"] = df_comp_res["Performance période (%)"].apply(lambda x: fmt_perf_simple(x))
                         
                             cols_final_comp = [
                                 "Indice / Actif", 
+                                *(["Période sélectionnée"] if _col_sel else []),
                                 "Performance du jour", 
                                 "Performance de la semaine", 
                                 "Performance du mois", 
@@ -8679,6 +8753,8 @@ if _tab_open(tab_perf):
                             ]
 
                             st.markdown("#### 📊 Résultats de la Comparaison")
+                            if _col_sel:
+                                st.caption(f"Période sélectionnée : du {_perf_sel_bornes[0]:%d/%m/%Y} au {_perf_sel_bornes[1]:%d/%m/%Y} (dates choisies dans le graphique ci-dessus).")
                             _html_table(
                                 _dash_if_empty(df_comp_res[cols_final_comp], eq_cols=tuple(cols_final_comp[1:])),
                                 cell_style=lambda c, v: _style_perf_bg_cell(v) if c in cols_final_comp[1:] else "",
